@@ -30,9 +30,24 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Search, Truck, Eye } from 'lucide-react'
+import { Plus, Search, Truck, Eye, FileText, TrendingUp } from 'lucide-react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
+import { generateDeliveryNotePDF } from '@/lib/pdf/invoice'
+
+interface DeliveryItem {
+  id: string
+  article_id: string
+  quantity_ordered: number
+  quantity_delivered: number
+  quantity_returned: number
+  unit_price: number
+  article?: {
+    code: string
+    name: string
+    description: string | null
+  }
+}
 
 interface Delivery {
   id: string
@@ -43,8 +58,16 @@ interface Delivery {
   delivery_date: string | null
   total_ht: number | null
   notes: string | null
-  client?: { name: string; code: string }
+  client?: {
+    code: string
+    name: string
+    contact_name: string | null
+    phone: string | null
+    address: string | null
+    city: string | null
+  }
   order?: { order_number: string }
+  delivery_items?: DeliveryItem[]
 }
 
 interface Order {
@@ -66,14 +89,16 @@ const statusColors: Record<string, string> = {
   pending: 'bg-gray-100 text-gray-800',
   in_progress: 'bg-yellow-100 text-yellow-800',
   delivered: 'bg-green-100 text-green-800',
+  partial: 'bg-orange-100 text-orange-800',
   returned: 'bg-red-100 text-red-800',
 }
 
 const statusLabels: Record<string, string> = {
   pending: 'En attente',
   in_progress: 'En cours',
-  delivered: 'Livrée',
-  returned: 'Retournée',
+  delivered: 'Livree',
+  partial: 'Partielle',
+  returned: 'Retournee',
 }
 
 export default function LivraisonsPage() {
@@ -82,7 +107,10 @@ export default function LivraisonsPage() {
   const [clients, setClients] = useState<Client[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
+  const [statusFilter, setStatusFilter] = useState<string>('all')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [viewDelivery, setViewDelivery] = useState<Delivery | null>(null)
+  const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const supabase = createClient()
 
   const [formData, setFormData] = useState({
@@ -98,10 +126,19 @@ export default function LivraisonsPage() {
       .from('deliveries')
       .select(`
         *,
-        client:clients(name, code),
-        order:orders(order_number)
+        client:clients(code, name, contact_name, phone, address, city),
+        order:orders(order_number),
+        delivery_items(
+          id,
+          article_id,
+          quantity_ordered,
+          quantity_delivered,
+          quantity_returned,
+          unit_price,
+          article:articles(code, name, description)
+        )
       `)
-      .order('created_at', { ascending: false })
+      .order('delivery_date', { ascending: false })
 
     if (error) {
       console.error('Error fetching deliveries:', error)
@@ -158,7 +195,7 @@ export default function LivraisonsPage() {
     e.preventDefault()
 
     if (!formData.client_id) {
-      alert('Veuillez sélectionner un client')
+      alert('Veuillez selectionner un client')
       return
     }
 
@@ -194,10 +231,70 @@ export default function LivraisonsPage() {
     })
   }
 
+  const handleViewDelivery = (delivery: Delivery) => {
+    setViewDelivery(delivery)
+    setIsViewDialogOpen(true)
+  }
+
+  const handleGeneratePDF = (delivery: Delivery) => {
+    if (!delivery.client || !delivery.delivery_items) return
+
+    // Transform delivery data for PDF generation
+    const orderData = {
+      id: delivery.id,
+      order_number: delivery.delivery_number,
+      order_date: delivery.delivery_date || new Date().toISOString(),
+      status: delivery.status,
+      total_ht: delivery.total_ht || 0,
+      total_tva: (delivery.total_ht || 0) * 0.2,
+      total_ttc: (delivery.total_ht || 0) * 1.2,
+      notes: delivery.notes,
+      client: {
+        code: delivery.client.code,
+        name: delivery.client.name,
+        contact_name: delivery.client.contact_name,
+        phone: delivery.client.phone,
+        email: null,
+        address: delivery.client.address,
+        city: delivery.client.city,
+      },
+      order_items: delivery.delivery_items.map(item => ({
+        article: {
+          code: item.article?.code || '',
+          name: item.article?.name || '',
+          description: item.article?.description || null,
+        },
+        quantity: item.quantity_delivered,
+        unit_price: item.unit_price,
+        total_ht: item.quantity_delivered * item.unit_price,
+      })),
+    }
+
+    generateDeliveryNotePDF(orderData)
+  }
+
+  const handleStatusChange = async (deliveryId: string, newStatus: string) => {
+    const { error } = await supabase
+      .from('deliveries')
+      .update({ status: newStatus, updated_at: new Date().toISOString() })
+      .eq('id', deliveryId)
+
+    if (error) {
+      console.error('Error updating status:', error)
+    } else {
+      fetchDeliveries()
+      setIsViewDialogOpen(false)
+    }
+  }
+
   const filteredDeliveries = deliveries.filter(
-    (delivery) =>
-      delivery.delivery_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      delivery.client?.name?.toLowerCase().includes(searchTerm.toLowerCase())
+    (delivery) => {
+      const matchesSearch = delivery.delivery_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        delivery.client?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        delivery.client?.code?.toLowerCase().includes(searchTerm.toLowerCase())
+      const matchesStatus = statusFilter === 'all' || delivery.status === statusFilter
+      return matchesSearch && matchesStatus
+    }
   )
 
   const formatPrice = (price: number | null) => {
@@ -208,13 +305,18 @@ export default function LivraisonsPage() {
     }).format(price)
   }
 
+  // Calculate statistics
+  const totalCA = deliveries.reduce((sum, d) => sum + (d.total_ht || 0), 0)
+  const deliveredCount = deliveries.filter(d => d.status === 'delivered').length
+  const pendingCount = deliveries.filter(d => d.status === 'pending' || d.status === 'in_progress').length
+
   return (
     <ProtectedModule module="livraisons">
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Livraisons</h1>
-            <p className="text-gray-500">Gérez vos bons de livraison</p>
+            <p className="text-gray-500">Gerez vos bons de livraison</p>
           </div>
 
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
@@ -244,7 +346,7 @@ export default function LivraisonsPage() {
                     onValueChange={handleOrderSelect}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Sélectionner une commande" />
+                      <SelectValue placeholder="Selectionner une commande" />
                     </SelectTrigger>
                     <SelectContent>
                       {orders.map((order) => (
@@ -263,7 +365,7 @@ export default function LivraisonsPage() {
                     onValueChange={(value) => setFormData({ ...formData, client_id: value })}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Sélectionner un client" />
+                      <SelectValue placeholder="Selectionner un client" />
                     </SelectTrigger>
                     <SelectContent>
                       {clients.map((client) => (
@@ -300,7 +402,7 @@ export default function LivraisonsPage() {
                     Annuler
                   </Button>
                   <Button type="submit" className="bg-green-600 hover:bg-green-700">
-                    Créer le BL
+                    Creer le BL
                   </Button>
                 </div>
               </form>
@@ -308,7 +410,7 @@ export default function LivraisonsPage() {
           </Dialog>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-gray-600">
@@ -330,20 +432,35 @@ export default function LivraisonsPage() {
             </CardHeader>
             <CardContent>
               <span className="text-2xl font-bold text-yellow-600">
-                {deliveries.filter((d) => d.status === 'pending' || d.status === 'in_progress').length}
+                {pendingCount}
               </span>
             </CardContent>
           </Card>
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-gray-600">
-                Livrées
+                Livrees
               </CardTitle>
             </CardHeader>
             <CardContent>
               <span className="text-2xl font-bold text-green-600">
-                {deliveries.filter((d) => d.status === 'delivered').length}
+                {deliveredCount}
               </span>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-gray-600">
+                CA Total
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-2">
+                <TrendingUp className="h-6 w-6 text-green-600" />
+                <span className="text-xl font-bold text-green-600">
+                  {formatPrice(totalCA)}
+                </span>
+              </div>
             </CardContent>
           </Card>
         </div>
@@ -354,12 +471,25 @@ export default function LivraisonsPage() {
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <Input
-                  placeholder="Rechercher un bon de livraison..."
+                  placeholder="Rechercher par N BL ou client..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-10"
                 />
               </div>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-48">
+                  <SelectValue placeholder="Filtrer par statut" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Tous les statuts</SelectItem>
+                  <SelectItem value="pending">En attente</SelectItem>
+                  <SelectItem value="in_progress">En cours</SelectItem>
+                  <SelectItem value="delivered">Livree</SelectItem>
+                  <SelectItem value="partial">Partielle</SelectItem>
+                  <SelectItem value="returned">Retournee</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </CardHeader>
           <CardContent>
@@ -373,10 +503,11 @@ export default function LivraisonsPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>N° BL</TableHead>
+                    <TableHead>N BL</TableHead>
                     <TableHead>Client</TableHead>
                     <TableHead>Commande</TableHead>
                     <TableHead>Date</TableHead>
+                    <TableHead>Articles</TableHead>
                     <TableHead>Statut</TableHead>
                     <TableHead className="text-right">Total HT</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
@@ -386,7 +517,12 @@ export default function LivraisonsPage() {
                   {filteredDeliveries.map((delivery) => (
                     <TableRow key={delivery.id}>
                       <TableCell className="font-medium">{delivery.delivery_number}</TableCell>
-                      <TableCell>{delivery.client?.name}</TableCell>
+                      <TableCell>
+                        <div>
+                          <span className="font-medium">{delivery.client?.code}</span>
+                          <span className="text-gray-500 ml-2">{delivery.client?.name}</span>
+                        </div>
+                      </TableCell>
                       <TableCell>{delivery.order?.order_number || '-'}</TableCell>
                       <TableCell>
                         {delivery.delivery_date
@@ -394,15 +530,37 @@ export default function LivraisonsPage() {
                           : '-'}
                       </TableCell>
                       <TableCell>
+                        <Badge variant="outline">
+                          {delivery.delivery_items?.length || 0} articles
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
                         <Badge className={statusColors[delivery.status]}>
                           {statusLabels[delivery.status]}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right">{formatPrice(delivery.total_ht)}</TableCell>
+                      <TableCell className="text-right font-semibold">
+                        {formatPrice(delivery.total_ht)}
+                      </TableCell>
                       <TableCell className="text-right">
-                        <Button variant="ghost" size="icon">
-                          <Eye className="h-4 w-4" />
-                        </Button>
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleViewDelivery(delivery)}
+                            title="Voir details"
+                          >
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleGeneratePDF(delivery)}
+                            title="Telecharger BL"
+                          >
+                            <FileText className="h-4 w-4 text-purple-600" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -411,6 +569,162 @@ export default function LivraisonsPage() {
             )}
           </CardContent>
         </Card>
+
+        {/* View Delivery Dialog */}
+        <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
+          <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Truck className="h-5 w-5 text-purple-600" />
+                Bon de Livraison {viewDelivery?.delivery_number}
+              </DialogTitle>
+            </DialogHeader>
+            {viewDelivery && (
+              <div className="space-y-6">
+                {/* Delivery Info */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <h3 className="font-semibold text-gray-700">Client</h3>
+                    <div className="bg-gray-50 p-3 rounded-lg">
+                      <p className="font-medium">{viewDelivery.client?.code} - {viewDelivery.client?.name}</p>
+                      {viewDelivery.client?.phone && (
+                        <p className="text-sm text-gray-600">Tel: {viewDelivery.client.phone}</p>
+                      )}
+                      {viewDelivery.client?.address && (
+                        <p className="text-sm text-gray-600">{viewDelivery.client.address}</p>
+                      )}
+                      {viewDelivery.client?.city && (
+                        <p className="text-sm text-gray-600">{viewDelivery.client.city}</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <h3 className="font-semibold text-gray-700">Details</h3>
+                    <div className="bg-gray-50 p-3 rounded-lg space-y-1">
+                      <p className="text-sm">
+                        <span className="text-gray-600">Date:</span>{' '}
+                        {viewDelivery.delivery_date
+                          ? format(new Date(viewDelivery.delivery_date), 'dd MMMM yyyy', { locale: fr })
+                          : '-'}
+                      </p>
+                      <p className="text-sm">
+                        <span className="text-gray-600">Commande:</span>{' '}
+                        {viewDelivery.order?.order_number || 'Directe'}
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-600 text-sm">Statut:</span>
+                        <Badge className={statusColors[viewDelivery.status]}>
+                          {statusLabels[viewDelivery.status]}
+                        </Badge>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Items Table */}
+                <div>
+                  <h3 className="font-semibold text-gray-700 mb-2">Articles livres</h3>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Code</TableHead>
+                        <TableHead>Designation</TableHead>
+                        <TableHead className="text-center">Qte</TableHead>
+                        <TableHead className="text-right">Prix Unit.</TableHead>
+                        <TableHead className="text-right">Total</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {viewDelivery.delivery_items?.map((item) => (
+                        <TableRow key={item.id}>
+                          <TableCell className="font-mono text-sm">
+                            {item.article?.code}
+                          </TableCell>
+                          <TableCell>
+                            {item.article?.description || item.article?.name}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {item.quantity_delivered}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {formatPrice(item.unit_price)}
+                          </TableCell>
+                          <TableCell className="text-right font-medium">
+                            {formatPrice(item.quantity_delivered * item.unit_price)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+
+                {/* Totals */}
+                <div className="flex justify-end">
+                  <div className="w-64 space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-600">Total HT:</span>
+                      <span className="font-medium">{formatPrice(viewDelivery.total_ht)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-600">TVA (20%):</span>
+                      <span className="font-medium">{formatPrice((viewDelivery.total_ht || 0) * 0.2)}</span>
+                    </div>
+                    <div className="flex justify-between text-lg font-bold border-t pt-2">
+                      <span>Total TTC:</span>
+                      <span className="text-green-600">{formatPrice((viewDelivery.total_ht || 0) * 1.2)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Notes */}
+                {viewDelivery.notes && (
+                  <div>
+                    <h3 className="font-semibold text-gray-700 mb-2">Notes</h3>
+                    <p className="text-gray-600 bg-gray-50 p-3 rounded-lg">{viewDelivery.notes}</p>
+                  </div>
+                )}
+
+                {/* Actions */}
+                <div className="flex justify-between items-center pt-4 border-t">
+                  <div className="flex gap-2">
+                    <Label className="text-sm text-gray-600">Changer le statut:</Label>
+                    <Select
+                      value={viewDelivery.status}
+                      onValueChange={(value) => handleStatusChange(viewDelivery.id, value)}
+                    >
+                      <SelectTrigger className="w-40">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="pending">En attente</SelectItem>
+                        <SelectItem value="in_progress">En cours</SelectItem>
+                        <SelectItem value="delivered">Livree</SelectItem>
+                        <SelectItem value="partial">Partielle</SelectItem>
+                        <SelectItem value="returned">Retournee</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={() => handleGeneratePDF(viewDelivery)}
+                      className="gap-2"
+                    >
+                      <FileText className="h-4 w-4" />
+                      Telecharger BL
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => setIsViewDialogOpen(false)}
+                    >
+                      Fermer
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
       </div>
     </ProtectedModule>
   )
