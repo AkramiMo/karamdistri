@@ -234,50 +234,9 @@ WHERE NOT EXISTS (
 );
 
 -- =====================================================
--- 5. ADD RLS POLICIES FOR NEW TABLES IF NOT EXISTS
+-- 5. VERIFICATION
 -- =====================================================
-
--- Categories policies
-DROP POLICY IF EXISTS "Allow authenticated read categories" ON categories;
-CREATE POLICY "Allow authenticated read categories" ON categories
-  FOR SELECT TO authenticated USING (true);
-
-DROP POLICY IF EXISTS "Allow authenticated insert categories" ON categories;
-CREATE POLICY "Allow authenticated insert categories" ON categories
-  FOR INSERT TO authenticated WITH CHECK (true);
-
-DROP POLICY IF EXISTS "Allow authenticated update categories" ON categories;
-CREATE POLICY "Allow authenticated update categories" ON categories
-  FOR UPDATE TO authenticated USING (true);
-
-DROP POLICY IF EXISTS "Allow authenticated delete categories" ON categories;
-CREATE POLICY "Allow authenticated delete categories" ON categories
-  FOR DELETE TO authenticated USING (true);
-
--- Packagings policies
-DROP POLICY IF EXISTS "Allow authenticated read packagings" ON packagings;
-CREATE POLICY "Allow authenticated read packagings" ON packagings
-  FOR SELECT TO authenticated USING (true);
-
-DROP POLICY IF EXISTS "Allow authenticated insert packagings" ON packagings;
-CREATE POLICY "Allow authenticated insert packagings" ON packagings
-  FOR INSERT TO authenticated WITH CHECK (true);
-
-DROP POLICY IF EXISTS "Allow authenticated update packagings" ON packagings;
-CREATE POLICY "Allow authenticated update packagings" ON packagings
-  FOR UPDATE TO authenticated USING (true);
-
-DROP POLICY IF EXISTS "Allow authenticated delete packagings" ON packagings;
-CREATE POLICY "Allow authenticated delete packagings" ON packagings
-  FOR DELETE TO authenticated USING (true);
-
--- Allow anon read for testing
-DROP POLICY IF EXISTS "Allow anon read categories" ON categories;
-CREATE POLICY "Allow anon read categories" ON categories
-  FOR SELECT TO anon USING (true);
-
-DROP POLICY IF EXISTS "Allow anon read packagings" ON packagings;
-CREATE POLICY "Allow anon read packagings" ON packagings
-  FOR SELECT TO anon USING (true);
+-- Note: RLS policies are managed in 003_fix_rls_policies.sql
+-- Run that script if you have permission issues
 
 SELECT 'Migration 004 completed: ' || COUNT(*) || ' articles inserted' FROM articles;

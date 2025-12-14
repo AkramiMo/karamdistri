@@ -1,28 +1,106 @@
 -- Fix RLS policies to allow authenticated users to read all data
 -- Execute this script if data is not showing up
 
--- Option 1: Create permissive policies for all tables (recommended for development)
+-- =====================================================
+-- DROP ALL EXISTING POLICIES FIRST
+-- =====================================================
 
--- Drop existing restrictive policies if they exist
+-- Clients
 DROP POLICY IF EXISTS "Users can view clients" ON clients;
 DROP POLICY IF EXISTS "Users can insert clients" ON clients;
 DROP POLICY IF EXISTS "Users can update clients" ON clients;
 DROP POLICY IF EXISTS "Users can delete clients" ON clients;
+DROP POLICY IF EXISTS "Allow authenticated read clients" ON clients;
+DROP POLICY IF EXISTS "Allow authenticated insert clients" ON clients;
+DROP POLICY IF EXISTS "Allow authenticated update clients" ON clients;
+DROP POLICY IF EXISTS "Allow authenticated delete clients" ON clients;
+DROP POLICY IF EXISTS "Allow anon read clients" ON clients;
 
+-- Articles
 DROP POLICY IF EXISTS "Users can view articles" ON articles;
 DROP POLICY IF EXISTS "Users can insert articles" ON articles;
 DROP POLICY IF EXISTS "Users can update articles" ON articles;
 DROP POLICY IF EXISTS "Users can delete articles" ON articles;
+DROP POLICY IF EXISTS "Allow authenticated read articles" ON articles;
+DROP POLICY IF EXISTS "Allow authenticated insert articles" ON articles;
+DROP POLICY IF EXISTS "Allow authenticated update articles" ON articles;
+DROP POLICY IF EXISTS "Allow authenticated delete articles" ON articles;
+DROP POLICY IF EXISTS "Allow anon read articles" ON articles;
 
+-- Orders
 DROP POLICY IF EXISTS "Users can view orders" ON orders;
-DROP POLICY IF EXISTS "Users can view deliveries" ON deliveries;
-DROP POLICY IF EXISTS "Users can view sales" ON sales;
-DROP POLICY IF EXISTS "Users can view stock" ON stock;
-DROP POLICY IF EXISTS "Users can view suppliers" ON suppliers;
-DROP POLICY IF EXISTS "Users can view purchase_orders" ON purchase_orders;
-DROP POLICY IF EXISTS "Users can view cash_register" ON cash_register;
+DROP POLICY IF EXISTS "Allow authenticated read orders" ON orders;
+DROP POLICY IF EXISTS "Allow authenticated insert orders" ON orders;
+DROP POLICY IF EXISTS "Allow authenticated update orders" ON orders;
 
--- Create permissive read policies for authenticated users
+-- Deliveries
+DROP POLICY IF EXISTS "Users can view deliveries" ON deliveries;
+DROP POLICY IF EXISTS "Allow authenticated read deliveries" ON deliveries;
+DROP POLICY IF EXISTS "Allow authenticated insert deliveries" ON deliveries;
+DROP POLICY IF EXISTS "Allow authenticated update deliveries" ON deliveries;
+
+-- Sales
+DROP POLICY IF EXISTS "Users can view sales" ON sales;
+DROP POLICY IF EXISTS "Allow authenticated read sales" ON sales;
+DROP POLICY IF EXISTS "Allow authenticated insert sales" ON sales;
+DROP POLICY IF EXISTS "Allow authenticated update sales" ON sales;
+
+-- Stock
+DROP POLICY IF EXISTS "Users can view stock" ON stock;
+DROP POLICY IF EXISTS "Allow authenticated read stock" ON stock;
+DROP POLICY IF EXISTS "Allow authenticated insert stock" ON stock;
+DROP POLICY IF EXISTS "Allow authenticated update stock" ON stock;
+
+-- Stock Movements
+DROP POLICY IF EXISTS "Allow authenticated read stock_movements" ON stock_movements;
+DROP POLICY IF EXISTS "Allow authenticated insert stock_movements" ON stock_movements;
+
+-- Suppliers
+DROP POLICY IF EXISTS "Users can view suppliers" ON suppliers;
+DROP POLICY IF EXISTS "Allow authenticated read suppliers" ON suppliers;
+DROP POLICY IF EXISTS "Allow authenticated insert suppliers" ON suppliers;
+DROP POLICY IF EXISTS "Allow authenticated update suppliers" ON suppliers;
+DROP POLICY IF EXISTS "Allow authenticated delete suppliers" ON suppliers;
+DROP POLICY IF EXISTS "Allow anon read suppliers" ON suppliers;
+
+-- Purchase Orders
+DROP POLICY IF EXISTS "Users can view purchase_orders" ON purchase_orders;
+DROP POLICY IF EXISTS "Allow authenticated read purchase_orders" ON purchase_orders;
+DROP POLICY IF EXISTS "Allow authenticated insert purchase_orders" ON purchase_orders;
+DROP POLICY IF EXISTS "Allow authenticated update purchase_orders" ON purchase_orders;
+
+-- Cash Register
+DROP POLICY IF EXISTS "Users can view cash_register" ON cash_register;
+DROP POLICY IF EXISTS "Allow authenticated read cash_register" ON cash_register;
+DROP POLICY IF EXISTS "Allow authenticated insert cash_register" ON cash_register;
+
+-- Order Items
+DROP POLICY IF EXISTS "Allow authenticated read order_items" ON order_items;
+DROP POLICY IF EXISTS "Allow authenticated insert order_items" ON order_items;
+
+-- Delivery Items
+DROP POLICY IF EXISTS "Allow authenticated read delivery_items" ON delivery_items;
+DROP POLICY IF EXISTS "Allow authenticated insert delivery_items" ON delivery_items;
+
+-- Categories
+DROP POLICY IF EXISTS "Allow authenticated read categories" ON categories;
+DROP POLICY IF EXISTS "Allow authenticated insert categories" ON categories;
+DROP POLICY IF EXISTS "Allow authenticated update categories" ON categories;
+DROP POLICY IF EXISTS "Allow authenticated delete categories" ON categories;
+DROP POLICY IF EXISTS "Allow anon read categories" ON categories;
+
+-- Packagings
+DROP POLICY IF EXISTS "Allow authenticated read packagings" ON packagings;
+DROP POLICY IF EXISTS "Allow authenticated insert packagings" ON packagings;
+DROP POLICY IF EXISTS "Allow authenticated update packagings" ON packagings;
+DROP POLICY IF EXISTS "Allow authenticated delete packagings" ON packagings;
+DROP POLICY IF EXISTS "Allow anon read packagings" ON packagings;
+
+-- =====================================================
+-- CREATE PERMISSIVE POLICIES FOR AUTHENTICATED USERS
+-- =====================================================
+
+-- Clients
 CREATE POLICY "Allow authenticated read clients" ON clients
   FOR SELECT TO authenticated USING (true);
 
@@ -146,7 +224,29 @@ CREATE POLICY "Allow authenticated read categories" ON categories
 CREATE POLICY "Allow authenticated insert categories" ON categories
   FOR INSERT TO authenticated WITH CHECK (true);
 
--- Also allow anon access for public data (optional, for testing)
+CREATE POLICY "Allow authenticated update categories" ON categories
+  FOR UPDATE TO authenticated USING (true);
+
+CREATE POLICY "Allow authenticated delete categories" ON categories
+  FOR DELETE TO authenticated USING (true);
+
+-- Packagings
+CREATE POLICY "Allow authenticated read packagings" ON packagings
+  FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "Allow authenticated insert packagings" ON packagings
+  FOR INSERT TO authenticated WITH CHECK (true);
+
+CREATE POLICY "Allow authenticated update packagings" ON packagings
+  FOR UPDATE TO authenticated USING (true);
+
+CREATE POLICY "Allow authenticated delete packagings" ON packagings
+  FOR DELETE TO authenticated USING (true);
+
+-- =====================================================
+-- ANON ACCESS FOR TESTING (Optional)
+-- =====================================================
+
 CREATE POLICY "Allow anon read clients" ON clients
   FOR SELECT TO anon USING (true);
 
@@ -155,3 +255,11 @@ CREATE POLICY "Allow anon read articles" ON articles
 
 CREATE POLICY "Allow anon read suppliers" ON suppliers
   FOR SELECT TO anon USING (true);
+
+CREATE POLICY "Allow anon read categories" ON categories
+  FOR SELECT TO anon USING (true);
+
+CREATE POLICY "Allow anon read packagings" ON packagings
+  FOR SELECT TO anon USING (true);
+
+SELECT 'RLS Policies updated successfully!' as status;
