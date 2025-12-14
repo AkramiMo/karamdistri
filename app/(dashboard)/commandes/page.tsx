@@ -30,9 +30,34 @@ import {
 } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Search, Eye, ShoppingCart, Trash2 } from 'lucide-react'
+import { Plus, Search, Eye, ShoppingCart, Trash2, FileText, Truck, Download } from 'lucide-react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
+import { generateInvoicePDF, generateDeliveryNotePDF } from '@/lib/pdf/invoice'
+
+interface OrderItemDB {
+  id: string
+  article_id: string
+  quantity: number
+  unit_price: number
+  total_ht: number
+  article: {
+    code: string
+    name: string
+    description: string | null
+  }
+}
+
+interface ClientDB {
+  id: string
+  code: string
+  name: string
+  contact_name: string | null
+  phone: string | null
+  email: string | null
+  address: string | null
+  city: string | null
+}
 
 interface Order {
   id: string
@@ -41,9 +66,12 @@ interface Order {
   status: string
   order_date: string
   total_ht: number
+  total_tva: number
   total_ttc: number
   notes: string | null
-  client?: { name: string; code: string }
+  created_at: string
+  client?: ClientDB
+  order_items?: OrderItemDB[]
 }
 
 interface Client {
@@ -56,13 +84,16 @@ interface Article {
   id: string
   code: string
   name: string
+  description: string | null
   price_ht: number
   tva_rate: number
 }
 
 interface OrderItem {
   article_id: string
+  article_code: string
   article_name: string
+  article_description: string | null
   quantity: number
   unit_price: number
   total_ht: number
@@ -78,10 +109,10 @@ const statusColors: Record<string, string> = {
 
 const statusLabels: Record<string, string> = {
   draft: 'Brouillon',
-  confirmed: 'Confirmée',
+  confirmed: 'Confirmee',
   in_progress: 'En cours',
-  delivered: 'Livrée',
-  cancelled: 'Annulée',
+  delivered: 'Livree',
+  cancelled: 'Annulee',
 }
 
 export default function CommandesPage() {
@@ -90,7 +121,10 @@ export default function CommandesPage() {
   const [articles, setArticles] = useState<Article[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
+  const [statusFilter, setStatusFilter] = useState<string>('all')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
+  const [viewingOrder, setViewingOrder] = useState<Order | null>(null)
   const supabase = createClient()
 
   const [formData, setFormData] = useState({
@@ -109,7 +143,11 @@ export default function CommandesPage() {
       .from('orders')
       .select(`
         *,
-        client:clients(name, code)
+        client:clients(*),
+        order_items(
+          *,
+          article:articles(code, name, description)
+        )
       `)
       .order('created_at', { ascending: false })
 
@@ -126,16 +164,16 @@ export default function CommandesPage() {
       .from('clients')
       .select('id, code, name')
       .eq('is_active', true)
-      .order('name')
+      .order('code')
     setClients(data || [])
   }
 
   const fetchArticles = async () => {
     const { data } = await supabase
       .from('articles')
-      .select('id, code, name, price_ht, tva_rate')
+      .select('id, code, name, description, price_ht, tva_rate')
       .eq('is_active', true)
-      .order('name')
+      .order('code')
     setArticles(data || [])
   }
 
@@ -146,11 +184,12 @@ export default function CommandesPage() {
   }, [])
 
   const generateOrderNumber = () => {
-    const date = new Date()
-    const year = date.getFullYear()
-    const month = String(date.getMonth() + 1).padStart(2, '0')
-    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0')
-    return `CMD-${year}${month}-${random}`
+    const lastOrder = orders[0]
+    if (lastOrder && lastOrder.order_number.startsWith('BCC')) {
+      const lastNum = parseInt(lastOrder.order_number.replace('BCC', ''))
+      return `BCC${lastNum + 1}`
+    }
+    return `BCC${401 + orders.length}`
   }
 
   const addItem = () => {
@@ -164,7 +203,9 @@ export default function CommandesPage() {
 
     setOrderItems([...orderItems, {
       article_id: article.id,
+      article_code: article.code,
       article_name: article.name,
+      article_description: article.description,
       quantity,
       unit_price: article.price_ht,
       total_ht,
@@ -182,7 +223,7 @@ export default function CommandesPage() {
     e.preventDefault()
 
     if (!formData.client_id || orderItems.length === 0) {
-      alert('Veuillez sélectionner un client et ajouter au moins un article')
+      alert('Veuillez selectionner un client et ajouter au moins un article')
       return
     }
 
@@ -229,6 +270,103 @@ export default function CommandesPage() {
     resetForm()
   }
 
+  const handleViewOrder = (order: Order) => {
+    setViewingOrder(order)
+    setIsViewDialogOpen(true)
+  }
+
+  const handleGenerateInvoice = (order: Order) => {
+    if (!order.client || !order.order_items) {
+      alert('Donnees de commande incompletes')
+      return
+    }
+
+    const pdfOrder = {
+      id: order.id,
+      order_number: order.order_number,
+      order_date: order.order_date,
+      status: order.status,
+      total_ht: order.total_ht || 0,
+      total_tva: order.total_tva || 0,
+      total_ttc: order.total_ttc || 0,
+      notes: order.notes,
+      client: {
+        code: order.client.code,
+        name: order.client.name,
+        contact_name: order.client.contact_name,
+        phone: order.client.phone,
+        email: order.client.email,
+        address: order.client.address,
+        city: order.client.city,
+      },
+      order_items: order.order_items.map(item => ({
+        article: {
+          code: item.article?.code || '',
+          name: item.article?.name || '',
+          description: item.article?.description || null,
+        },
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        total_ht: item.total_ht,
+      })),
+    }
+
+    generateInvoicePDF(pdfOrder)
+  }
+
+  const handleGenerateDeliveryNote = (order: Order) => {
+    if (!order.client || !order.order_items) {
+      alert('Donnees de commande incompletes')
+      return
+    }
+
+    const pdfOrder = {
+      id: order.id,
+      order_number: order.order_number,
+      order_date: order.order_date,
+      status: order.status,
+      total_ht: order.total_ht || 0,
+      total_tva: order.total_tva || 0,
+      total_ttc: order.total_ttc || 0,
+      notes: order.notes,
+      client: {
+        code: order.client.code,
+        name: order.client.name,
+        contact_name: order.client.contact_name,
+        phone: order.client.phone,
+        email: order.client.email,
+        address: order.client.address,
+        city: order.client.city,
+      },
+      order_items: order.order_items.map(item => ({
+        article: {
+          code: item.article?.code || '',
+          name: item.article?.name || '',
+          description: item.article?.description || null,
+        },
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        total_ht: item.total_ht,
+      })),
+    }
+
+    generateDeliveryNotePDF(pdfOrder)
+  }
+
+  const updateOrderStatus = async (orderId: string, newStatus: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('orders') as any)
+      .update({ status: newStatus })
+      .eq('id', orderId)
+
+    if (!error) {
+      fetchOrders()
+      if (viewingOrder?.id === orderId) {
+        setViewingOrder({ ...viewingOrder, status: newStatus })
+      }
+    }
+  }
+
   const resetForm = () => {
     setFormData({
       client_id: '',
@@ -240,18 +378,29 @@ export default function CommandesPage() {
     setSelectedQuantity('1')
   }
 
-  const filteredOrders = orders.filter(
-    (order) =>
+  const filteredOrders = orders.filter((order) => {
+    const matchesSearch =
       order.order_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      order.client?.name?.toLowerCase().includes(searchTerm.toLowerCase())
-  )
+      order.client?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      order.client?.code?.toLowerCase().includes(searchTerm.toLowerCase())
+
+    const matchesStatus = statusFilter === 'all' || order.status === statusFilter
+
+    return matchesSearch && matchesStatus
+  })
 
   const formatPrice = (price: number) => {
     return new Intl.NumberFormat('fr-MA', {
       style: 'currency',
       currency: 'MAD',
-    }).format(price)
+    }).format(price || 0)
   }
+
+  // Stats
+  const totalCA = orders.reduce((sum, o) => sum + (o.total_ttc || 0), 0)
+  const pendingOrders = orders.filter((o) => o.status === 'draft' || o.status === 'confirmed').length
+  const inProgressOrders = orders.filter((o) => o.status === 'in_progress').length
+  const deliveredOrders = orders.filter((o) => o.status === 'delivered').length
 
   return (
     <ProtectedModule module="commandes">
@@ -259,7 +408,7 @@ export default function CommandesPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Commandes</h1>
-            <p className="text-gray-500">Gérez vos commandes clients</p>
+            <p className="text-gray-500">Gerez vos commandes clients</p>
           </div>
 
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
@@ -290,7 +439,7 @@ export default function CommandesPage() {
                       onValueChange={(value) => setFormData({ ...formData, client_id: value })}
                     >
                       <SelectTrigger>
-                        <SelectValue placeholder="Sélectionner un client" />
+                        <SelectValue placeholder="Selectionner un client" />
                       </SelectTrigger>
                       <SelectContent>
                         {clients.map((client) => (
@@ -327,7 +476,7 @@ export default function CommandesPage() {
                   <div className="flex gap-2 mb-4">
                     <Select value={selectedArticle} onValueChange={setSelectedArticle}>
                       <SelectTrigger className="flex-1">
-                        <SelectValue placeholder="Sélectionner un article" />
+                        <SelectValue placeholder="Selectionner un article" />
                       </SelectTrigger>
                       <SelectContent>
                         {articles.map((article) => (
@@ -343,7 +492,7 @@ export default function CommandesPage() {
                       value={selectedQuantity}
                       onChange={(e) => setSelectedQuantity(e.target.value)}
                       className="w-24"
-                      placeholder="Qté"
+                      placeholder="Qte"
                     />
                     <Button type="button" onClick={addItem} variant="outline">
                       <Plus className="h-4 w-4" />
@@ -355,7 +504,7 @@ export default function CommandesPage() {
                       <TableHeader>
                         <TableRow>
                           <TableHead>Article</TableHead>
-                          <TableHead className="text-right">Qté</TableHead>
+                          <TableHead className="text-right">Qte</TableHead>
                           <TableHead className="text-right">Prix unit.</TableHead>
                           <TableHead className="text-right">Total HT</TableHead>
                           <TableHead></TableHead>
@@ -364,7 +513,12 @@ export default function CommandesPage() {
                       <TableBody>
                         {orderItems.map((item, index) => (
                           <TableRow key={index}>
-                            <TableCell>{item.article_name}</TableCell>
+                            <TableCell>
+                              <div>
+                                <span className="font-mono text-sm">{item.article_code}</span>
+                                <span className="ml-2">{item.article_name}</span>
+                              </div>
+                            </TableCell>
                             <TableCell className="text-right">{item.quantity}</TableCell>
                             <TableCell className="text-right">{formatPrice(item.unit_price)}</TableCell>
                             <TableCell className="text-right">{formatPrice(item.total_ht)}</TableCell>
@@ -399,7 +553,7 @@ export default function CommandesPage() {
                     Annuler
                   </Button>
                   <Button type="submit" className="bg-green-600 hover:bg-green-700">
-                    Créer la commande
+                    Creer la commande
                   </Button>
                 </div>
               </form>
@@ -408,7 +562,7 @@ export default function CommandesPage() {
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-gray-600">
@@ -425,12 +579,24 @@ export default function CommandesPage() {
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-gray-600">
+                CA Total
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <span className="text-xl font-bold text-green-600">
+                {formatPrice(totalCA)}
+              </span>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-gray-600">
                 En attente
               </CardTitle>
             </CardHeader>
             <CardContent>
               <span className="text-2xl font-bold text-yellow-600">
-                {orders.filter((o) => o.status === 'draft' || o.status === 'confirmed').length}
+                {pendingOrders}
               </span>
             </CardContent>
           </Card>
@@ -442,19 +608,19 @@ export default function CommandesPage() {
             </CardHeader>
             <CardContent>
               <span className="text-2xl font-bold text-blue-600">
-                {orders.filter((o) => o.status === 'in_progress').length}
+                {inProgressOrders}
               </span>
             </CardContent>
           </Card>
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-gray-600">
-                Livrées
+                Livrees
               </CardTitle>
             </CardHeader>
             <CardContent>
               <span className="text-2xl font-bold text-green-600">
-                {orders.filter((o) => o.status === 'delivered').length}
+                {deliveredOrders}
               </span>
             </CardContent>
           </Card>
@@ -463,16 +629,29 @@ export default function CommandesPage() {
         {/* Search & Table */}
         <Card>
           <CardHeader>
-            <div className="flex items-center gap-4">
+            <div className="flex flex-col md:flex-row gap-4">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <Input
-                  placeholder="Rechercher une commande..."
+                  placeholder="Rechercher par numero ou client..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-10"
                 />
               </div>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-full md:w-48">
+                  <SelectValue placeholder="Statut" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Tous les statuts</SelectItem>
+                  <SelectItem value="draft">Brouillon</SelectItem>
+                  <SelectItem value="confirmed">Confirmee</SelectItem>
+                  <SelectItem value="in_progress">En cours</SelectItem>
+                  <SelectItem value="delivered">Livree</SelectItem>
+                  <SelectItem value="cancelled">Annulee</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </CardHeader>
           <CardContent>
@@ -480,56 +659,231 @@ export default function CommandesPage() {
               <div className="text-center py-8 text-gray-500">Chargement...</div>
             ) : filteredOrders.length === 0 ? (
               <div className="text-center py-8 text-gray-500">
-                Aucune commande trouvée
+                Aucune commande trouvee
               </div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>N° Commande</TableHead>
-                    <TableHead>Client</TableHead>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Statut</TableHead>
-                    <TableHead className="text-right">Total HT</TableHead>
-                    <TableHead className="text-right">Total TTC</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredOrders.map((order) => (
-                    <TableRow key={order.id}>
-                      <TableCell className="font-medium">
-                        {order.order_number}
-                      </TableCell>
-                      <TableCell>{order.client?.name}</TableCell>
-                      <TableCell>
-                        {format(new Date(order.order_date), 'dd/MM/yyyy', {
-                          locale: fr,
-                        })}
-                      </TableCell>
-                      <TableCell>
-                        <Badge className={statusColors[order.status]}>
-                          {statusLabels[order.status]}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {formatPrice(order.total_ht)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {formatPrice(order.total_ttc)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button variant="ghost" size="icon">
-                          <Eye className="h-4 w-4" />
-                        </Button>
-                      </TableCell>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>N Commande</TableHead>
+                      <TableHead>Client</TableHead>
+                      <TableHead>Date</TableHead>
+                      <TableHead className="text-center">Articles</TableHead>
+                      <TableHead>Statut</TableHead>
+                      <TableHead className="text-right">Total TTC</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredOrders.map((order) => (
+                      <TableRow key={order.id}>
+                        <TableCell className="font-mono font-medium">
+                          {order.order_number}
+                        </TableCell>
+                        <TableCell>
+                          <div>
+                            <span className="font-medium">{order.client?.code}</span>
+                            <span className="text-gray-500 ml-2">{order.client?.name}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {format(new Date(order.order_date), 'dd/MM/yyyy', {
+                            locale: fr,
+                          })}
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Badge variant="outline">
+                            {order.order_items?.length || 0}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge className={statusColors[order.status]}>
+                            {statusLabels[order.status]}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right font-medium">
+                          {formatPrice(order.total_ttc)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title="Voir details"
+                              onClick={() => handleViewOrder(order)}
+                            >
+                              <Eye className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title="Telecharger facture"
+                              onClick={() => handleGenerateInvoice(order)}
+                            >
+                              <FileText className="h-4 w-4 text-blue-600" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title="Telecharger BL"
+                              onClick={() => handleGenerateDeliveryNote(order)}
+                            >
+                              <Truck className="h-4 w-4 text-green-600" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             )}
+            <div className="mt-4 text-sm text-gray-500 text-right">
+              {filteredOrders.length} commande(s) affichee(s)
+            </div>
           </CardContent>
         </Card>
+
+        {/* View Order Dialog */}
+        <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
+          <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Commande {viewingOrder?.order_number}</DialogTitle>
+            </DialogHeader>
+            {viewingOrder && (
+              <div className="space-y-6">
+                {/* Order Info */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div>
+                    <Label className="text-gray-500">Date</Label>
+                    <p className="font-medium">
+                      {format(new Date(viewingOrder.order_date), 'dd/MM/yyyy', { locale: fr })}
+                    </p>
+                  </div>
+                  <div>
+                    <Label className="text-gray-500">Statut</Label>
+                    <div className="mt-1">
+                      <Select
+                        value={viewingOrder.status}
+                        onValueChange={(value) => updateOrderStatus(viewingOrder.id, value)}
+                      >
+                        <SelectTrigger className="w-full">
+                          <Badge className={statusColors[viewingOrder.status]}>
+                            {statusLabels[viewingOrder.status]}
+                          </Badge>
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="draft">Brouillon</SelectItem>
+                          <SelectItem value="confirmed">Confirmee</SelectItem>
+                          <SelectItem value="in_progress">En cours</SelectItem>
+                          <SelectItem value="delivered">Livree</SelectItem>
+                          <SelectItem value="cancelled">Annulee</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-gray-500">Total HT</Label>
+                    <p className="font-medium">{formatPrice(viewingOrder.total_ht)}</p>
+                  </div>
+                  <div>
+                    <Label className="text-gray-500">Total TTC</Label>
+                    <p className="font-bold text-green-600 text-lg">{formatPrice(viewingOrder.total_ttc)}</p>
+                  </div>
+                </div>
+
+                {/* Client Info */}
+                <div className="border rounded-lg p-4 bg-gray-50">
+                  <Label className="text-gray-500">Client</Label>
+                  <div className="mt-2">
+                    <p className="font-bold">{viewingOrder.client?.code} - {viewingOrder.client?.name}</p>
+                    {viewingOrder.client?.contact_name && (
+                      <p className="text-sm text-gray-600">Contact: {viewingOrder.client.contact_name}</p>
+                    )}
+                    {viewingOrder.client?.phone && (
+                      <p className="text-sm text-gray-600">Tel: {viewingOrder.client.phone}</p>
+                    )}
+                    {viewingOrder.client?.address && (
+                      <p className="text-sm text-gray-600">{viewingOrder.client.address}, {viewingOrder.client.city}</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Order Items */}
+                <div>
+                  <Label className="text-gray-500">Articles ({viewingOrder.order_items?.length || 0})</Label>
+                  <Table className="mt-2">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Code</TableHead>
+                        <TableHead>Designation</TableHead>
+                        <TableHead className="text-center">Qte</TableHead>
+                        <TableHead className="text-right">Prix Unit.</TableHead>
+                        <TableHead className="text-right">Total HT</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {viewingOrder.order_items?.map((item, index) => (
+                        <TableRow key={index}>
+                          <TableCell className="font-mono">{item.article?.code}</TableCell>
+                          <TableCell>{item.article?.description || item.article?.name}</TableCell>
+                          <TableCell className="text-center">{item.quantity}</TableCell>
+                          <TableCell className="text-right">{formatPrice(item.unit_price)}</TableCell>
+                          <TableCell className="text-right font-medium">{formatPrice(item.total_ht)}</TableCell>
+                        </TableRow>
+                      ))}
+                      <TableRow className="bg-gray-50">
+                        <TableCell colSpan={4} className="text-right font-medium">Total HT:</TableCell>
+                        <TableCell className="text-right font-bold">{formatPrice(viewingOrder.total_ht)}</TableCell>
+                      </TableRow>
+                      <TableRow className="bg-gray-50">
+                        <TableCell colSpan={4} className="text-right font-medium">TVA (20%):</TableCell>
+                        <TableCell className="text-right">{formatPrice(viewingOrder.total_tva)}</TableCell>
+                      </TableRow>
+                      <TableRow className="bg-green-50">
+                        <TableCell colSpan={4} className="text-right font-bold text-green-700">Total TTC:</TableCell>
+                        <TableCell className="text-right font-bold text-green-700 text-lg">{formatPrice(viewingOrder.total_ttc)}</TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </div>
+
+                {/* Notes */}
+                {viewingOrder.notes && (
+                  <div>
+                    <Label className="text-gray-500">Notes</Label>
+                    <p className="mt-1 text-sm bg-yellow-50 p-2 rounded">{viewingOrder.notes}</p>
+                  </div>
+                )}
+
+                {/* Actions */}
+                <div className="flex justify-end gap-2 pt-4 border-t">
+                  <Button
+                    variant="outline"
+                    onClick={() => setIsViewDialogOpen(false)}
+                  >
+                    Fermer
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => handleGenerateDeliveryNote(viewingOrder)}
+                  >
+                    <Truck className="h-4 w-4 mr-2" />
+                    Bon de Livraison
+                  </Button>
+                  <Button
+                    className="bg-blue-600 hover:bg-blue-700"
+                    onClick={() => handleGenerateInvoice(viewingOrder)}
+                  >
+                    <Download className="h-4 w-4 mr-2" />
+                    Telecharger Facture
+                  </Button>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
       </div>
     </ProtectedModule>
   )
