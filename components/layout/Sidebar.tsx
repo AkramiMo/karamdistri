@@ -105,7 +105,7 @@ export function Sidebar() {
         {!collapsed && (
           <div className="flex items-center gap-2">
             <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center">
-              <span className="text-green-800 font-bold text-sm">AKKA</span>
+              <span className="text-green-800 font-bold text-sm">KARAM</span>
             </div>
             <span className="font-semibold">Gestion ERP</span>
           </div>
@@ -152,7 +152,7 @@ export function Sidebar() {
       {/* Footer */}
       {!collapsed && (
         <div className="p-4 border-t border-green-700 text-xs text-green-300">
-          AKKA Olives & Sauces
+          KARAM Olives & Sauces
         </div>
       )}
     </aside>

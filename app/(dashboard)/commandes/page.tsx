@@ -30,7 +30,7 @@ import {
 } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Search, Eye, ShoppingCart, Trash2, FileText, Truck, Download } from 'lucide-react'
+import { Plus, Search, Eye, ShoppingCart, Trash2, FileText, Truck, Download, Users, Package } from 'lucide-react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { generateInvoicePDF, generateDeliveryNotePDF } from '@/lib/pdf/invoice'
@@ -747,118 +747,158 @@ export default function CommandesPage() {
 
         {/* View Order Dialog */}
         <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
-          <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Commande {viewingOrder?.order_number}</DialogTitle>
+              <DialogTitle className="flex items-center gap-3 text-xl">
+                <ShoppingCart className="h-6 w-6 text-green-600" />
+                Commande {viewingOrder?.order_number}
+                {viewingOrder && (
+                  <Badge className={`ml-2 ${statusColors[viewingOrder.status]}`}>
+                    {statusLabels[viewingOrder.status]}
+                  </Badge>
+                )}
+              </DialogTitle>
             </DialogHeader>
             {viewingOrder && (
               <div className="space-y-6">
-                {/* Order Info */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div>
-                    <Label className="text-gray-500">Date</Label>
-                    <p className="font-medium">
-                      {format(new Date(viewingOrder.order_date), 'dd/MM/yyyy', { locale: fr })}
-                    </p>
-                  </div>
-                  <div>
-                    <Label className="text-gray-500">Statut</Label>
-                    <div className="mt-1">
-                      <Select
-                        value={viewingOrder.status}
-                        onValueChange={(value) => updateOrderStatus(viewingOrder.id, value)}
-                      >
-                        <SelectTrigger className="w-full">
-                          <Badge className={statusColors[viewingOrder.status]}>
-                            {statusLabels[viewingOrder.status]}
-                          </Badge>
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="draft">Brouillon</SelectItem>
-                          <SelectItem value="confirmed">Confirmee</SelectItem>
-                          <SelectItem value="in_progress">En cours</SelectItem>
-                          <SelectItem value="delivered">Livree</SelectItem>
-                          <SelectItem value="cancelled">Annulee</SelectItem>
-                        </SelectContent>
-                      </Select>
+                {/* Header with Client & Order Info */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Client Card */}
+                  <div className="bg-gradient-to-br from-green-50 to-green-100 border border-green-200 rounded-xl p-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Users className="h-5 w-5 text-green-600" />
+                      <h3 className="font-semibold text-green-800">Client</h3>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="font-bold text-lg text-gray-900">
+                        {viewingOrder.client?.code} - {viewingOrder.client?.name}
+                      </p>
+                      {viewingOrder.client?.contact_name && (
+                        <p className="text-sm text-gray-600 flex items-center gap-2">
+                          <span className="text-gray-400">Contact:</span> {viewingOrder.client.contact_name}
+                        </p>
+                      )}
+                      {viewingOrder.client?.phone && (
+                        <p className="text-sm text-gray-600 flex items-center gap-2">
+                          <span className="text-gray-400">Tel:</span> {viewingOrder.client.phone}
+                        </p>
+                      )}
+                      {viewingOrder.client?.address && (
+                        <p className="text-sm text-gray-600">
+                          {viewingOrder.client.address}
+                          {viewingOrder.client.city && `, ${viewingOrder.client.city}`}
+                        </p>
+                      )}
                     </div>
                   </div>
-                  <div>
-                    <Label className="text-gray-500">Total HT</Label>
-                    <p className="font-medium">{formatPrice(viewingOrder.total_ht)}</p>
-                  </div>
-                  <div>
-                    <Label className="text-gray-500">Total TTC</Label>
-                    <p className="font-bold text-green-600 text-lg">{formatPrice(viewingOrder.total_ttc)}</p>
+
+                  {/* Order Info Card */}
+                  <div className="bg-gradient-to-br from-blue-50 to-blue-100 border border-blue-200 rounded-xl p-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <FileText className="h-5 w-5 text-blue-600" />
+                      <h3 className="font-semibold text-blue-800">Details Commande</h3>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <p className="text-xs text-gray-500 uppercase">Date</p>
+                        <p className="font-medium">
+                          {format(new Date(viewingOrder.order_date), 'dd MMMM yyyy', { locale: fr })}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500 uppercase">Statut</p>
+                        <Select
+                          value={viewingOrder.status}
+                          onValueChange={(value) => updateOrderStatus(viewingOrder.id, value)}
+                        >
+                          <SelectTrigger className="h-8 w-full mt-1">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="draft">Brouillon</SelectItem>
+                            <SelectItem value="confirmed">Confirmee</SelectItem>
+                            <SelectItem value="in_progress">En cours</SelectItem>
+                            <SelectItem value="delivered">Livree</SelectItem>
+                            <SelectItem value="cancelled">Annulee</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500 uppercase">Articles</p>
+                        <p className="font-medium">{viewingOrder.order_items?.length || 0} produits</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500 uppercase">Total TTC</p>
+                        <p className="font-bold text-green-600 text-lg">{formatPrice(viewingOrder.total_ttc)}</p>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
-                {/* Client Info */}
-                <div className="border rounded-lg p-4 bg-gray-50">
-                  <Label className="text-gray-500">Client</Label>
-                  <div className="mt-2">
-                    <p className="font-bold">{viewingOrder.client?.code} - {viewingOrder.client?.name}</p>
-                    {viewingOrder.client?.contact_name && (
-                      <p className="text-sm text-gray-600">Contact: {viewingOrder.client.contact_name}</p>
-                    )}
-                    {viewingOrder.client?.phone && (
-                      <p className="text-sm text-gray-600">Tel: {viewingOrder.client.phone}</p>
-                    )}
-                    {viewingOrder.client?.address && (
-                      <p className="text-sm text-gray-600">{viewingOrder.client.address}, {viewingOrder.client.city}</p>
-                    )}
+                {/* Order Items Table */}
+                <div className="border rounded-xl overflow-hidden">
+                  <div className="bg-gray-50 px-4 py-3 border-b">
+                    <h3 className="font-semibold text-gray-700 flex items-center gap-2">
+                      <Package className="h-5 w-5" />
+                      Articles commandes ({viewingOrder.order_items?.length || 0})
+                    </h3>
                   </div>
-                </div>
-
-                {/* Order Items */}
-                <div>
-                  <Label className="text-gray-500">Articles ({viewingOrder.order_items?.length || 0})</Label>
-                  <Table className="mt-2">
+                  <Table>
                     <TableHeader>
-                      <TableRow>
-                        <TableHead>Code</TableHead>
-                        <TableHead>Designation</TableHead>
-                        <TableHead className="text-center">Qte</TableHead>
-                        <TableHead className="text-right">Prix Unit.</TableHead>
-                        <TableHead className="text-right">Total HT</TableHead>
+                      <TableRow className="bg-gray-50">
+                        <TableHead className="font-semibold">Code</TableHead>
+                        <TableHead className="font-semibold">Designation</TableHead>
+                        <TableHead className="text-center font-semibold">Qte</TableHead>
+                        <TableHead className="text-right font-semibold">Prix Unit.</TableHead>
+                        <TableHead className="text-right font-semibold">Total HT</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {viewingOrder.order_items?.map((item, index) => (
-                        <TableRow key={index}>
-                          <TableCell className="font-mono">{item.article?.code}</TableCell>
-                          <TableCell>{item.article?.description || item.article?.name}</TableCell>
-                          <TableCell className="text-center">{item.quantity}</TableCell>
+                        <TableRow key={index} className="hover:bg-gray-50">
+                          <TableCell className="font-mono text-sm text-blue-600">{item.article?.code}</TableCell>
+                          <TableCell className="font-medium">{item.article?.description || item.article?.name}</TableCell>
+                          <TableCell className="text-center">
+                            <Badge variant="outline" className="font-semibold">{item.quantity}</Badge>
+                          </TableCell>
                           <TableCell className="text-right">{formatPrice(item.unit_price)}</TableCell>
-                          <TableCell className="text-right font-medium">{formatPrice(item.total_ht)}</TableCell>
+                          <TableCell className="text-right font-semibold">{formatPrice(item.total_ht)}</TableCell>
                         </TableRow>
                       ))}
-                      <TableRow className="bg-gray-50">
-                        <TableCell colSpan={4} className="text-right font-medium">Total HT:</TableCell>
-                        <TableCell className="text-right font-bold">{formatPrice(viewingOrder.total_ht)}</TableCell>
-                      </TableRow>
-                      <TableRow className="bg-gray-50">
-                        <TableCell colSpan={4} className="text-right font-medium">TVA (20%):</TableCell>
-                        <TableCell className="text-right">{formatPrice(viewingOrder.total_tva)}</TableCell>
-                      </TableRow>
-                      <TableRow className="bg-green-50">
-                        <TableCell colSpan={4} className="text-right font-bold text-green-700">Total TTC:</TableCell>
-                        <TableCell className="text-right font-bold text-green-700 text-lg">{formatPrice(viewingOrder.total_ttc)}</TableCell>
-                      </TableRow>
                     </TableBody>
                   </Table>
+
+                  {/* Totals Section */}
+                  <div className="bg-gray-50 p-4 border-t">
+                    <div className="flex justify-end">
+                      <div className="w-72 space-y-2">
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-600">Total HT:</span>
+                          <span className="font-medium">{formatPrice(viewingOrder.total_ht)}</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-600">TVA (20%):</span>
+                          <span className="font-medium">{formatPrice(viewingOrder.total_tva)}</span>
+                        </div>
+                        <div className="flex justify-between text-lg font-bold border-t pt-2 mt-2">
+                          <span className="text-green-700">Total TTC:</span>
+                          <span className="text-green-700">{formatPrice(viewingOrder.total_ttc)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Notes */}
                 {viewingOrder.notes && (
-                  <div>
-                    <Label className="text-gray-500">Notes</Label>
-                    <p className="mt-1 text-sm bg-yellow-50 p-2 rounded">{viewingOrder.notes}</p>
+                  <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
+                    <h3 className="font-semibold text-yellow-800 mb-2">Notes</h3>
+                    <p className="text-sm text-gray-700">{viewingOrder.notes}</p>
                   </div>
                 )}
 
                 {/* Actions */}
-                <div className="flex justify-end gap-2 pt-4 border-t">
+                <div className="flex flex-wrap justify-end gap-3 pt-4 border-t">
                   <Button
                     variant="outline"
                     onClick={() => setIsViewDialogOpen(false)}
@@ -867,6 +907,7 @@ export default function CommandesPage() {
                   </Button>
                   <Button
                     variant="outline"
+                    className="border-green-600 text-green-600 hover:bg-green-50"
                     onClick={() => handleGenerateDeliveryNote(viewingOrder)}
                   >
                     <Truck className="h-4 w-4 mr-2" />

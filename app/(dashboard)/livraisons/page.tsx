@@ -237,40 +237,53 @@ export default function LivraisonsPage() {
   }
 
   const handleGeneratePDF = (delivery: Delivery) => {
-    if (!delivery.client || !delivery.delivery_items) return
-
-    // Transform delivery data for PDF generation
-    const orderData = {
-      id: delivery.id,
-      order_number: delivery.delivery_number,
-      order_date: delivery.delivery_date || new Date().toISOString(),
-      status: delivery.status,
-      total_ht: delivery.total_ht || 0,
-      total_tva: (delivery.total_ht || 0) * 0.2,
-      total_ttc: (delivery.total_ht || 0) * 1.2,
-      notes: delivery.notes,
-      client: {
-        code: delivery.client.code,
-        name: delivery.client.name,
-        contact_name: delivery.client.contact_name,
-        phone: delivery.client.phone,
-        email: null,
-        address: delivery.client.address,
-        city: delivery.client.city,
-      },
-      order_items: delivery.delivery_items.map(item => ({
-        article: {
-          code: item.article?.code || '',
-          name: item.article?.name || '',
-          description: item.article?.description || null,
-        },
-        quantity: item.quantity_delivered,
-        unit_price: item.unit_price,
-        total_ht: item.quantity_delivered * item.unit_price,
-      })),
+    if (!delivery.client) {
+      alert('Donnees client manquantes pour generer le PDF')
+      return
     }
 
-    generateDeliveryNotePDF(orderData)
+    if (!delivery.delivery_items || delivery.delivery_items.length === 0) {
+      alert('Aucun article dans cette livraison pour generer le PDF')
+      return
+    }
+
+    try {
+      // Transform delivery data for PDF generation
+      const orderData = {
+        id: delivery.id,
+        order_number: delivery.delivery_number,
+        order_date: delivery.delivery_date || new Date().toISOString(),
+        status: delivery.status,
+        total_ht: delivery.total_ht || 0,
+        total_tva: (delivery.total_ht || 0) * 0.2,
+        total_ttc: (delivery.total_ht || 0) * 1.2,
+        notes: delivery.notes,
+        client: {
+          code: delivery.client.code,
+          name: delivery.client.name,
+          contact_name: delivery.client.contact_name,
+          phone: delivery.client.phone,
+          email: null,
+          address: delivery.client.address,
+          city: delivery.client.city,
+        },
+        order_items: delivery.delivery_items.map(item => ({
+          article: {
+            code: item.article?.code || '',
+            name: item.article?.name || '',
+            description: item.article?.description || null,
+          },
+          quantity: item.quantity_delivered,
+          unit_price: item.unit_price,
+          total_ht: item.quantity_delivered * item.unit_price,
+        })),
+      }
+
+      generateDeliveryNotePDF(orderData)
+    } catch (error) {
+      console.error('Error generating PDF:', error)
+      alert('Erreur lors de la generation du PDF')
+    }
   }
 
   const handleStatusChange = async (deliveryId: string, newStatus: string) => {

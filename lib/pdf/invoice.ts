@@ -39,10 +39,10 @@ export function generateInvoicePDF(order: Order): void {
   const doc = new jsPDF()
 
   // Company info
-  const companyName = 'AKKA Olives & Sauces'
+  const companyName = 'KARAM Olives & Sauces'
   const companyAddress = 'Zone Industrielle, Marrakech'
   const companyPhone = '+212 5XX XX XX XX'
-  const companyEmail = 'contact@akka-olives.ma'
+  const companyEmail = 'contact@karam-olives.ma'
 
   // Header
   doc.setFontSize(24)
@@ -201,7 +201,7 @@ export function generateDeliveryNotePDF(order: Order): void {
   const doc = new jsPDF()
 
   // Company info
-  const companyName = 'AKKA Olives & Sauces'
+  const companyName = 'KARAM Olives & Sauces'
   const companyAddress = 'Zone Industrielle, Marrakech'
   const companyPhone = '+212 5XX XX XX XX'
 
