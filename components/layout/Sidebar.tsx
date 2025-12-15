@@ -20,6 +20,10 @@ import {
   ChevronRight,
   Building2,
   FileText,
+  ClipboardList,
+  PackageCheck,
+  Factory,
+  Leaf,
   LucideIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -37,6 +41,10 @@ const iconMap: Record<string, LucideIcon> = {
   Settings,
   Building2,
   FileText,
+  ClipboardList,
+  PackageCheck,
+  Factory,
+  Leaf,
 }
 
 interface Module {
@@ -81,6 +89,10 @@ export function Sidebar() {
     { id: '6', code: 'ventes', name: 'Ventes', icon: 'DollarSign', path: '/ventes', sort_order: 5 },
     { id: '7', code: 'stocks', name: 'Stocks', icon: 'Warehouse', path: '/stocks', sort_order: 6 },
     { id: '8', code: 'caisse', name: 'Caisse', icon: 'Wallet', path: '/caisse', sort_order: 7 },
+    { id: '10', code: 'fournisseurs', name: 'Fournisseurs', icon: 'Factory', path: '/fournisseurs', sort_order: 8 },
+    { id: '13', code: 'fournitures', name: 'Fournitures', icon: 'Leaf', path: '/fournitures', sort_order: 9 },
+    { id: '11', code: 'achats', name: 'Bons de Commande', icon: 'ClipboardList', path: '/achats', sort_order: 10 },
+    { id: '12', code: 'receptions', name: 'Réceptions', icon: 'PackageCheck', path: '/receptions', sort_order: 11 },
     { id: '9', code: 'admin', name: 'Administration', icon: 'Settings', path: '/admin', sort_order: 99 },
   ]
 

@@ -148,12 +148,32 @@ export default function VentesPage() {
     fetchClients()
   }, [])
 
-  const generateSaleNumber = () => {
-    const date = new Date()
-    const year = date.getFullYear()
-    const month = String(date.getMonth() + 1).padStart(2, '0')
-    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0')
-    return `VTE-${year}${month}-${random}`
+  // Generate unique sequential sale/invoice number from database
+  const generateSaleNumber = async (): Promise<string> => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase.rpc as any)('get_next_document_number', {
+        p_document_type: 'vente'
+      })
+
+      if (error) {
+        console.error('Error generating sale number:', error)
+        // Fallback to random if RPC fails
+        const date = new Date()
+        const year = date.getFullYear()
+        const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0')
+        return `VTE-${year}-${random}`
+      }
+
+      return data
+    } catch (err) {
+      console.error('Error calling RPC:', err)
+      // Fallback to random
+      const date = new Date()
+      const year = date.getFullYear()
+      const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0')
+      return `VTE-${year}-${random}`
+    }
   }
 
   const handleDeliverySelect = (deliveryId: string) => {
@@ -179,9 +199,12 @@ export default function VentesPage() {
     const total_ht = parseFloat(formData.total_ht)
     const total_ttc = total_ht * 1.2 // 20% TVA
 
+    // Generate sequential sale number
+    const saleNumber = await generateSaleNumber()
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error } = await (supabase.from('sales') as any).insert([{
-      sale_number: generateSaleNumber(),
+      sale_number: saleNumber,
       delivery_id: formData.delivery_id || null,
       client_id: formData.client_id,
       sale_date: formData.sale_date,

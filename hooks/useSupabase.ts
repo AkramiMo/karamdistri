@@ -24,7 +24,7 @@ export function useSupabase() {
 
 // Helper function for queries with timeout
 export async function queryWithTimeout<T>(
-  queryFn: () => Promise<{ data: T | null; error: Error | null }>,
+  queryFn: () => PromiseLike<{ data: T | null; error: Error | null }>,
   timeoutMs: number = 10000
 ): Promise<{ data: T | null; error: Error | null }> {
   const timeoutPromise = new Promise<{ data: null; error: Error }>((_, reject) => {
@@ -34,7 +34,7 @@ export async function queryWithTimeout<T>(
   })
 
   try {
-    const result = await Promise.race([queryFn(), timeoutPromise])
+    const result = await Promise.race([Promise.resolve(queryFn()), timeoutPromise])
     return result
   } catch (error) {
     return { data: null, error: error as Error }
@@ -43,7 +43,7 @@ export async function queryWithTimeout<T>(
 
 // Retry logic for failed queries
 export async function queryWithRetry<T>(
-  queryFn: () => Promise<{ data: T | null; error: Error | null }>,
+  queryFn: () => PromiseLike<{ data: T | null; error: Error | null }>,
   maxRetries: number = 3,
   delayMs: number = 1000
 ): Promise<{ data: T | null; error: Error | null }> {

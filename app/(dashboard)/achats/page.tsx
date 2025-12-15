@@ -29,9 +29,11 @@ import {
 } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Search, Eye, FileText, Trash2 } from 'lucide-react'
+import { Plus, Search, Eye, FileText, Trash2, FileDown, Package } from 'lucide-react'
+import { generatePurchaseOrderPDF } from '@/lib/pdf/purchaseOrder'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
+import Link from 'next/link'
 
 interface PurchaseOrder {
   id: string
@@ -40,7 +42,27 @@ interface PurchaseOrder {
   status: string
   order_date: string
   total_ht: number | null
-  supplier?: { name: string; code: string }
+  notes: string | null
+  supplier?: {
+    code: string
+    name: string
+    contact_name: string | null
+    phone: string | null
+    email: string | null
+    address: string | null
+  }
+  purchase_order_items?: {
+    id: string
+    supply_id: string
+    quantity: number
+    unit_price: number
+    total_ht: number
+    supply: {
+      code: string
+      name: string
+      description: string | null
+    }
+  }[]
 }
 
 interface Supplier {
@@ -49,16 +71,21 @@ interface Supplier {
   name: string
 }
 
-interface Article {
+interface Supply {
   id: string
   code: string
   name: string
   price_ht: number
+  unit: string
+  supply_categories?: {
+    name: string
+  }
 }
 
 interface POItem {
-  article_id: string
-  article_name: string
+  supply_id: string
+  supply_name: string
+  supply_code: string
   quantity: number
   unit_price: number
   total_ht: number
@@ -83,7 +110,7 @@ const statusLabels: Record<string, string> = {
 export default function AchatsPage() {
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([])
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
-  const [articles, setArticles] = useState<Article[]>([])
+  const [supplies, setSupplies] = useState<Supply[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
@@ -95,7 +122,7 @@ export default function AchatsPage() {
   })
 
   const [poItems, setPOItems] = useState<POItem[]>([])
-  const [selectedArticle, setSelectedArticle] = useState('')
+  const [selectedSupply, setSelectedSupply] = useState('')
   const [selectedQuantity, setSelectedQuantity] = useState('1')
   const [selectedPrice, setSelectedPrice] = useState('')
 
@@ -103,7 +130,18 @@ export default function AchatsPage() {
     setIsLoading(true)
     const { data, error } = await supabase
       .from('purchase_orders')
-      .select(`*, supplier:suppliers(name, code)`)
+      .select(`
+        *,
+        supplier:suppliers(code, name, contact_name, phone, email, address),
+        purchase_order_items(
+          id,
+          supply_id,
+          quantity,
+          unit_price,
+          total_ht,
+          supply:supplies(code, name, description)
+        )
+      `)
       .order('created_at', { ascending: false })
 
     if (error) {
@@ -112,6 +150,41 @@ export default function AchatsPage() {
       setPurchaseOrders(data || [])
     }
     setIsLoading(false)
+  }
+
+  // Handle PDF export
+  const handleExportPDF = (order: PurchaseOrder) => {
+    if (!order.supplier || !order.purchase_order_items) {
+      alert('Données incomplètes pour générer le PDF')
+      return
+    }
+
+    generatePurchaseOrderPDF({
+      id: order.id,
+      po_number: order.po_number,
+      order_date: order.order_date,
+      status: order.status,
+      total_ht: order.total_ht || 0,
+      notes: order.notes,
+      supplier: {
+        code: order.supplier.code,
+        name: order.supplier.name,
+        contact_name: order.supplier.contact_name,
+        phone: order.supplier.phone,
+        email: order.supplier.email,
+        address: order.supplier.address,
+      },
+      purchase_order_items: order.purchase_order_items.map(item => ({
+        article: {
+          code: item.supply?.code || '',
+          name: item.supply?.name || '',
+          description: item.supply?.description || null,
+        },
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        total_ht: item.total_ht,
+      })),
+    })
   }
 
   const fetchSuppliers = async () => {
@@ -123,19 +196,19 @@ export default function AchatsPage() {
     setSuppliers(data || [])
   }
 
-  const fetchArticles = async () => {
+  const fetchSupplies = async () => {
     const { data } = await supabase
-      .from('articles')
-      .select('id, code, name, price_ht')
+      .from('supplies')
+      .select('id, code, name, price_ht, unit, supply_categories(name)')
       .eq('is_active', true)
-      .order('name')
-    setArticles(data || [])
+      .order('code')
+    setSupplies(data || [])
   }
 
   useEffect(() => {
     fetchPurchaseOrders()
     fetchSuppliers()
-    fetchArticles()
+    fetchSupplies()
   }, [])
 
   const generatePONumber = () => {
@@ -147,24 +220,25 @@ export default function AchatsPage() {
   }
 
   const addItem = () => {
-    if (!selectedArticle || !selectedQuantity || !selectedPrice) return
+    if (!selectedSupply || !selectedQuantity || !selectedPrice) return
 
-    const article = articles.find(a => a.id === selectedArticle)
-    if (!article) return
+    const supply = supplies.find(s => s.id === selectedSupply)
+    if (!supply) return
 
     const quantity = parseInt(selectedQuantity)
     const unit_price = parseFloat(selectedPrice)
     const total_ht = unit_price * quantity
 
     setPOItems([...poItems, {
-      article_id: article.id,
-      article_name: article.name,
+      supply_id: supply.id,
+      supply_name: supply.name,
+      supply_code: supply.code,
       quantity,
       unit_price,
       total_ht,
     }])
 
-    setSelectedArticle('')
+    setSelectedSupply('')
     setSelectedQuantity('1')
     setSelectedPrice('')
   }
@@ -173,11 +247,11 @@ export default function AchatsPage() {
     setPOItems(poItems.filter((_, i) => i !== index))
   }
 
-  const handleArticleSelect = (articleId: string) => {
-    const article = articles.find(a => a.id === articleId)
-    if (article) {
-      setSelectedArticle(articleId)
-      setSelectedPrice(article.price_ht.toString())
+  const handleSupplySelect = (supplyId: string) => {
+    const supply = supplies.find(s => s.id === supplyId)
+    if (supply) {
+      setSelectedSupply(supplyId)
+      setSelectedPrice(supply.price_ht?.toString() || '0')
     }
   }
 
@@ -216,7 +290,7 @@ export default function AchatsPage() {
       order_date: new Date().toISOString().split('T')[0],
     })
     setPOItems([])
-    setSelectedArticle('')
+    setSelectedSupply('')
     setSelectedQuantity('1')
     setSelectedPrice('')
   }
@@ -292,16 +366,23 @@ export default function AchatsPage() {
               </div>
 
               <div className="border-t pt-4">
-                <h3 className="font-medium mb-3">Articles</h3>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-medium">Fournitures</h3>
+                  <Link href="/fournitures" className="text-sm text-green-600 hover:underline flex items-center gap-1">
+                    <Package className="h-4 w-4" />
+                    Gérer les fournitures
+                  </Link>
+                </div>
                 <div className="flex gap-2 mb-4">
-                  <Select value={selectedArticle} onValueChange={handleArticleSelect}>
+                  <Select value={selectedSupply} onValueChange={handleSupplySelect}>
                     <SelectTrigger className="flex-1">
-                      <SelectValue placeholder="Sélectionner un article" />
+                      <SelectValue placeholder="Sélectionner une fourniture" />
                     </SelectTrigger>
                     <SelectContent>
-                      {articles.map((article) => (
-                        <SelectItem key={article.id} value={article.id}>
-                          {article.code} - {article.name}
+                      {supplies.map((supply) => (
+                        <SelectItem key={supply.id} value={supply.id}>
+                          {supply.code} - {supply.name}
+                          {supply.supply_categories?.name && ` (${supply.supply_categories.name})`}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -331,7 +412,8 @@ export default function AchatsPage() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Article</TableHead>
+                        <TableHead>Code</TableHead>
+                        <TableHead>Fourniture</TableHead>
                         <TableHead className="text-right">Qté</TableHead>
                         <TableHead className="text-right">Prix unit.</TableHead>
                         <TableHead className="text-right">Total HT</TableHead>
@@ -341,7 +423,8 @@ export default function AchatsPage() {
                     <TableBody>
                       {poItems.map((item, index) => (
                         <TableRow key={index}>
-                          <TableCell>{item.article_name}</TableCell>
+                          <TableCell className="font-mono">{item.supply_code}</TableCell>
+                          <TableCell>{item.supply_name}</TableCell>
                           <TableCell className="text-right">{item.quantity}</TableCell>
                           <TableCell className="text-right">{formatPrice(item.unit_price)}</TableCell>
                           <TableCell className="text-right">{formatPrice(item.total_ht)}</TableCell>
@@ -358,7 +441,7 @@ export default function AchatsPage() {
                         </TableRow>
                       ))}
                       <TableRow>
-                        <TableCell colSpan={3} className="text-right font-medium">
+                        <TableCell colSpan={4} className="text-right font-medium">
                           Total HT:
                         </TableCell>
                         <TableCell className="text-right font-bold">
@@ -484,9 +567,19 @@ export default function AchatsPage() {
                     </TableCell>
                     <TableCell className="text-right">{formatPrice(order.total_ht)}</TableCell>
                     <TableCell className="text-right">
-                      <Button variant="ghost" size="icon">
-                        <Eye className="h-4 w-4" />
-                      </Button>
+                      <div className="flex justify-end gap-1">
+                        <Button variant="ghost" size="icon">
+                          <Eye className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleExportPDF(order)}
+                          title="Exporter PDF"
+                        >
+                          <FileDown className="h-4 w-4 text-blue-600" />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}

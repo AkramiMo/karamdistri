@@ -30,7 +30,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Search, Edit, Trash2, Users, MapPin, Store, Utensils, ShoppingBag, Package, Eye, DollarSign } from 'lucide-react'
+import { Plus, Search, Edit, Trash2, Users, MapPin, Store, Utensils, ShoppingBag, Package, Eye, DollarSign, Upload, Image, X, Building2 } from 'lucide-react'
 import Link from 'next/link'
 
 interface Client {
@@ -45,6 +45,9 @@ interface Client {
   category: string | null
   gps_lat: number | null
   gps_lng: number | null
+  logo_url: string | null
+  local_image_url: string | null
+  ice: string | null
   is_active: boolean
   created_at: string
 }
@@ -87,7 +90,78 @@ export default function ClientsPage() {
     category: '',
     gps_lat: '',
     gps_lng: '',
+    ice: '',
   })
+
+  // Image upload states
+  const [logoFile, setLogoFile] = useState<File | null>(null)
+  const [logoPreview, setLogoPreview] = useState<string | null>(null)
+  const [localImageFile, setLocalImageFile] = useState<File | null>(null)
+  const [localImagePreview, setLocalImagePreview] = useState<string | null>(null)
+  const [isUploading, setIsUploading] = useState(false)
+
+  // Handle image file selection
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>, type: 'logo' | 'local') => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      alert('Veuillez sélectionner une image valide')
+      return
+    }
+
+    // Validate file size (max 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      alert('L\'image ne doit pas dépasser 5 Mo')
+      return
+    }
+
+    // Create preview
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      if (type === 'logo') {
+        setLogoFile(file)
+        setLogoPreview(reader.result as string)
+      } else {
+        setLocalImageFile(file)
+        setLocalImagePreview(reader.result as string)
+      }
+    }
+    reader.readAsDataURL(file)
+  }
+
+  // Upload image to Supabase Storage
+  const uploadImage = async (file: File, clientId: string, type: 'logo' | 'local'): Promise<string | null> => {
+    const fileExt = file.name.split('.').pop()
+    const fileName = `${clientId}/${type}-${Date.now()}.${fileExt}`
+
+    const { data, error } = await supabase.storage
+      .from('client-images')
+      .upload(fileName, file, { upsert: true })
+
+    if (error) {
+      console.error('Error uploading image:', error)
+      return null
+    }
+
+    const { data: { publicUrl } } = supabase.storage
+      .from('client-images')
+      .getPublicUrl(data.path)
+
+    return publicUrl
+  }
+
+  // Remove image
+  const handleRemoveImage = (type: 'logo' | 'local') => {
+    if (type === 'logo') {
+      setLogoFile(null)
+      setLogoPreview(null)
+    } else {
+      setLocalImageFile(null)
+      setLocalImagePreview(null)
+    }
+  }
 
   const fetchClients = async () => {
     setIsLoading(true)
@@ -110,40 +184,86 @@ export default function ClientsPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    setIsUploading(true)
 
-    const clientData = {
-      code: formData.code,
-      name: formData.name,
-      contact_name: formData.contact_name || null,
-      phone: formData.phone || null,
-      email: formData.email || null,
-      address: formData.address || null,
-      city: formData.city || null,
-      category: formData.category || null,
-      gps_lat: formData.gps_lat ? parseFloat(formData.gps_lat) : null,
-      gps_lng: formData.gps_lng ? parseFloat(formData.gps_lng) : null,
-    }
+    try {
+      const clientData: Record<string, unknown> = {
+        code: formData.code,
+        name: formData.name,
+        contact_name: formData.contact_name || null,
+        phone: formData.phone || null,
+        email: formData.email || null,
+        address: formData.address || null,
+        city: formData.city || null,
+        category: formData.category || null,
+        gps_lat: formData.gps_lat ? parseFloat(formData.gps_lat) : null,
+        gps_lng: formData.gps_lng ? parseFloat(formData.gps_lng) : null,
+        ice: formData.ice || null,
+      }
 
-    if (editingClient) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { error } = await (supabase.from('clients') as any)
-        .update(clientData)
-        .eq('id', editingClient.id)
+      if (editingClient) {
+        // Upload new images if selected
+        if (logoFile) {
+          const logoUrl = await uploadImage(logoFile, editingClient.id, 'logo')
+          if (logoUrl) clientData.logo_url = logoUrl
+        }
+        if (localImageFile) {
+          const localUrl = await uploadImage(localImageFile, editingClient.id, 'local')
+          if (localUrl) clientData.local_image_url = localUrl
+        }
 
-      if (!error) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { error } = await (supabase.from('clients') as any)
+          .update(clientData)
+          .eq('id', editingClient.id)
+
+        if (!error) {
+          fetchClients()
+          setIsDialogOpen(false)
+          resetForm()
+        }
+      } else {
+        // Create client first to get ID
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: newClient, error } = await (supabase.from('clients') as any)
+          .insert([clientData])
+          .select()
+          .single()
+
+        if (error) {
+          console.error('Error creating client:', error)
+          return
+        }
+
+        // Upload images with the new client ID
+        let logoUrl = null
+        let localUrl = null
+
+        if (logoFile) {
+          logoUrl = await uploadImage(logoFile, newClient.id, 'logo')
+        }
+        if (localImageFile) {
+          localUrl = await uploadImage(localImageFile, newClient.id, 'local')
+        }
+
+        // Update client with image URLs if uploaded
+        if (logoUrl || localUrl) {
+          const updateData: Record<string, string> = {}
+          if (logoUrl) updateData.logo_url = logoUrl
+          if (localUrl) updateData.local_image_url = localUrl
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await (supabase.from('clients') as any)
+            .update(updateData)
+            .eq('id', newClient.id)
+        }
+
         fetchClients()
         setIsDialogOpen(false)
         resetForm()
       }
-    } else {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { error } = await (supabase.from('clients') as any).insert([clientData])
-
-      if (!error) {
-        fetchClients()
-        setIsDialogOpen(false)
-        resetForm()
-      }
+    } finally {
+      setIsUploading(false)
     }
   }
 
@@ -160,7 +280,13 @@ export default function ClientsPage() {
       category: client.category || '',
       gps_lat: client.gps_lat?.toString() || '',
       gps_lng: client.gps_lng?.toString() || '',
+      ice: client.ice || '',
     })
+    // Set existing images for preview
+    setLogoPreview(client.logo_url || null)
+    setLocalImagePreview(client.local_image_url || null)
+    setLogoFile(null)
+    setLocalImageFile(null)
     setIsDialogOpen(true)
   }
 
@@ -192,7 +318,13 @@ export default function ClientsPage() {
       category: '',
       gps_lat: '',
       gps_lng: '',
+      ice: '',
     })
+    // Clear image states
+    setLogoFile(null)
+    setLogoPreview(null)
+    setLocalImageFile(null)
+    setLocalImagePreview(null)
   }
 
   const openGoogleMaps = (lat: number | null, lng: number | null) => {
@@ -202,11 +334,16 @@ export default function ClientsPage() {
   }
 
   const filteredClients = clients.filter((client) => {
-    const matchesSearch =
-      client.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      client.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      client.city?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      client.contact_name?.toLowerCase().includes(searchTerm.toLowerCase())
+    const search = searchTerm.toLowerCase().trim()
+
+    // Enhanced search: name, code, city, contact, phone (partial match)
+    const matchesSearch = !search ||
+      client.name.toLowerCase().includes(search) ||
+      client.code.toLowerCase().includes(search) ||
+      client.city?.toLowerCase().includes(search) ||
+      client.contact_name?.toLowerCase().includes(search) ||
+      client.phone?.replace(/\s+/g, '').includes(search.replace(/\s+/g, '')) ||
+      client.email?.toLowerCase().includes(search)
 
     const matchesCategory = categoryFilter === 'all' || client.category === categoryFilter
 
@@ -340,6 +477,16 @@ export default function ClientsPage() {
                       </SelectContent>
                     </Select>
                   </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="ice">ICE (Identifiant Commun de l'Entreprise)</Label>
+                    <Input
+                      id="ice"
+                      value={formData.ice}
+                      onChange={(e) => setFormData({ ...formData, ice: e.target.value })}
+                      placeholder="15 chiffres"
+                      maxLength={15}
+                    />
+                  </div>
                 </div>
 
                 <div className="border-t pt-4">
@@ -373,12 +520,96 @@ export default function ClientsPage() {
                   </div>
                 </div>
 
+                {/* Image Upload Section */}
+                <div className="border-t pt-4">
+                  <h3 className="font-medium mb-3 flex items-center gap-2">
+                    <Image className="h-4 w-4" />
+                    Images du client
+                  </h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* Logo Upload */}
+                    <div className="space-y-2">
+                      <Label>Logo du client</Label>
+                      <div className="border-2 border-dashed border-gray-300 rounded-lg p-4">
+                        {logoPreview ? (
+                          <div className="relative">
+                            <img
+                              src={logoPreview}
+                              alt="Logo preview"
+                              className="w-full h-32 object-contain rounded"
+                            />
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="absolute top-0 right-0 bg-red-100 hover:bg-red-200 text-red-600"
+                              onClick={() => handleRemoveImage('logo')}
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        ) : (
+                          <label className="flex flex-col items-center justify-center cursor-pointer h-32">
+                            <Building2 className="h-8 w-8 text-gray-400 mb-2" />
+                            <span className="text-sm text-gray-500">Cliquer pour ajouter</span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={(e) => handleImageChange(e, 'logo')}
+                            />
+                          </label>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Local Photo Upload */}
+                    <div className="space-y-2">
+                      <Label>Photo du local</Label>
+                      <div className="border-2 border-dashed border-gray-300 rounded-lg p-4">
+                        {localImagePreview ? (
+                          <div className="relative">
+                            <img
+                              src={localImagePreview}
+                              alt="Local preview"
+                              className="w-full h-32 object-contain rounded"
+                            />
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="absolute top-0 right-0 bg-red-100 hover:bg-red-200 text-red-600"
+                              onClick={() => handleRemoveImage('local')}
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        ) : (
+                          <label className="flex flex-col items-center justify-center cursor-pointer h-32">
+                            <Store className="h-8 w-8 text-gray-400 mb-2" />
+                            <span className="text-sm text-gray-500">Cliquer pour ajouter</span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={(e) => handleImageChange(e, 'local')}
+                            />
+                          </label>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">
+                    Formats acceptés: JPG, PNG, GIF. Taille max: 5 Mo
+                  </p>
+                </div>
+
                 <div className="flex justify-end gap-2 pt-4">
                   <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                     Annuler
                   </Button>
-                  <Button type="submit" className="bg-green-600 hover:bg-green-700">
-                    {editingClient ? 'Modifier' : 'Créer'}
+                  <Button type="submit" className="bg-green-600 hover:bg-green-700" disabled={isUploading}>
+                    {isUploading ? 'Enregistrement...' : editingClient ? 'Modifier' : 'Créer'}
                   </Button>
                 </div>
               </form>
@@ -461,7 +692,7 @@ export default function ClientsPage() {
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <Input
-                  placeholder="Rechercher un client..."
+                  placeholder="Rechercher par nom, code, téléphone, ville..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-10"
@@ -622,7 +853,47 @@ export default function ClientsPage() {
                     <span className="text-gray-500">Ville:</span>
                     <p className="font-medium">{viewingClient.city || '-'}</p>
                   </div>
+                  <div>
+                    <span className="text-gray-500">ICE:</span>
+                    <p className="font-medium">{viewingClient.ice || '-'}</p>
+                  </div>
                 </div>
+
+                {/* Client Images */}
+                {(viewingClient.logo_url || viewingClient.local_image_url) && (
+                  <div className="border-t pt-4">
+                    <h4 className="font-medium mb-3 flex items-center gap-2">
+                      <Image className="h-4 w-4" />
+                      Images
+                    </h4>
+                    <div className="grid grid-cols-2 gap-4">
+                      {viewingClient.logo_url && (
+                        <div className="space-y-2">
+                          <span className="text-sm text-gray-500">Logo</span>
+                          <div className="border rounded-lg overflow-hidden">
+                            <img
+                              src={viewingClient.logo_url}
+                              alt="Logo du client"
+                              className="w-full h-40 object-contain bg-gray-50"
+                            />
+                          </div>
+                        </div>
+                      )}
+                      {viewingClient.local_image_url && (
+                        <div className="space-y-2">
+                          <span className="text-sm text-gray-500">Photo du local</span>
+                          <div className="border rounded-lg overflow-hidden">
+                            <img
+                              src={viewingClient.local_image_url}
+                              alt="Photo du local"
+                              className="w-full h-40 object-contain bg-gray-50"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {viewingClient.gps_lat && viewingClient.gps_lng && (
                   <div className="border-t pt-4">

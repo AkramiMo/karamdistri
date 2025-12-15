@@ -344,8 +344,8 @@ export default function LivraisonsPage() {
   }
 
   const handleStatusChange = async (deliveryId: string, newStatus: string) => {
-    const { error } = await supabase
-      .from('deliveries')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('deliveries') as any)
       .update({ status: newStatus, updated_at: new Date().toISOString() })
       .eq('id', deliveryId)
 
@@ -816,6 +816,7 @@ export default function LivraisonsPage() {
                     </TableHead>
                     <TableHead>N BL</TableHead>
                     <TableHead>Client</TableHead>
+                    <TableHead>Ville</TableHead>
                     <TableHead>Date</TableHead>
                     <TableHead>Articles</TableHead>
                     <TableHead>Statut</TableHead>
@@ -841,9 +842,12 @@ export default function LivraisonsPage() {
                           <span className="font-medium">{delivery.client?.code}</span>
                           <span className="text-gray-500 ml-2">{delivery.client?.name}</span>
                           {delivery.client?.gps_lat && (
-                            <MapPin className="inline h-3 w-3 text-green-500 ml-1" title="GPS disponible" />
+                            <span title="GPS disponible"><MapPin className="inline h-3 w-3 text-green-500 ml-1" /></span>
                           )}
                         </div>
+                      </TableCell>
+                      <TableCell className="text-gray-600">
+                        {delivery.client?.city || '-'}
                       </TableCell>
                       <TableCell>
                         {delivery.delivery_date
