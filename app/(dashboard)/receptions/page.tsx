@@ -57,10 +57,9 @@ interface Reception {
   reception_items?: {
     id: string
     article_id: string
-    quantity_ordered: number
+    quantity_expected: number
     quantity_received: number
     unit_price: number
-    total_ht: number
     article: {
       code: string
       name: string
@@ -136,28 +135,46 @@ export default function ReceptionsPage() {
 
   const fetchReceptions = async () => {
     setIsLoading(true)
-    const { data, error } = await supabase
-      .from('receptions')
-      .select(`
-        *,
-        supplier:suppliers(code, name, contact_name, phone, email, address),
-        purchase_order:purchase_orders(po_number),
-        reception_items(
-          id,
-          article_id,
-          quantity_ordered,
-          quantity_received,
-          unit_price,
-          total_ht,
-          article:articles(code, name, description)
-        )
-      `)
-      .order('created_at', { ascending: false })
+    try {
+      // First try a simple query to test access
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: testData, error: testError } = await (supabase.from('receptions') as any)
+        .select('id')
+        .limit(1)
 
-    if (error) {
-      console.error('Error fetching receptions:', error)
-    } else {
-      setReceptions(data || [])
+      if (testError) {
+        console.error('Test query error:', testError.message || testError.code || JSON.stringify(testError))
+      }
+
+      // Full query with relations
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase.from('receptions') as any)
+        .select(`
+          *,
+          supplier:suppliers(code, name, contact_name, phone, email, address),
+          purchase_order:purchase_orders(po_number),
+          reception_items(
+            id,
+            article_id,
+            quantity_expected,
+            quantity_received,
+            unit_price,
+            article:articles(code, name, description)
+          )
+        `)
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        console.error('Error fetching receptions:', error.message || error.code || JSON.stringify(error))
+        // Still try to show data if available
+        if (data) {
+          setReceptions(data)
+        }
+      } else {
+        setReceptions(data || [])
+      }
+    } catch (err) {
+      console.error('Exception fetching receptions:', err)
     }
     setIsLoading(false)
   }
@@ -254,10 +271,9 @@ export default function ReceptionsPage() {
           name: item.article.name,
           description: item.article.description,
         },
-        quantity_ordered: item.quantity_ordered,
+        quantity_expected: item.quantity_expected,
         quantity_received: item.quantity_received,
         unit_price: item.unit_price,
-        total_ht: item.total_ht,
       })),
     })
   }
@@ -368,10 +384,9 @@ export default function ReceptionsPage() {
     const itemsToInsert = receptionItems.map(item => ({
       reception_id: newReception.id,
       article_id: item.article_id,
-      quantity_ordered: item.quantity_ordered,
+      quantity_expected: item.quantity_ordered,
       quantity_received: item.quantity_received,
       unit_price: item.unit_price,
-      total_ht: item.total_ht,
     }))
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -876,10 +891,10 @@ export default function ReceptionsPage() {
                         <TableRow key={item.id}>
                           <TableCell>{item.article.code}</TableCell>
                           <TableCell>{item.article.name}</TableCell>
-                          <TableCell className="text-right">{item.quantity_ordered}</TableCell>
+                          <TableCell className="text-right">{item.quantity_expected}</TableCell>
                           <TableCell className="text-right">{item.quantity_received}</TableCell>
                           <TableCell className="text-right">{formatPrice(item.unit_price)}</TableCell>
-                          <TableCell className="text-right">{formatPrice(item.total_ht)}</TableCell>
+                          <TableCell className="text-right">{formatPrice(item.quantity_received * item.unit_price)}</TableCell>
                         </TableRow>
                       ))}
                       <TableRow>

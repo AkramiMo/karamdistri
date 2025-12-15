@@ -7,10 +7,9 @@ interface ReceptionItem {
     name: string
     description: string | null
   }
-  quantity_ordered: number
+  quantity_expected: number
   quantity_received: number
   unit_price: number
-  total_ht: number
 }
 
 interface Supplier {
@@ -109,10 +108,10 @@ export function generateReceptionPDF(reception: Reception): void {
     (index + 1).toString(),
     item.article.code,
     item.article.description || item.article.name,
-    item.quantity_ordered.toString(),
+    item.quantity_expected.toString(),
     item.quantity_received.toString(),
     formatPrice(item.unit_price),
-    formatPrice(item.total_ht),
+    formatPrice(item.quantity_received * item.unit_price),
   ])
 
   autoTable(doc, {

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { useSupabase, queryWithRetry } from '@/hooks/useSupabase'
+import { useSupabase, querySimple } from '@/hooks/useSupabase'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -171,47 +171,43 @@ export default function LivraisonsPage() {
     setLoadError(null)
 
     try {
-      // Fetch deliveries first (simplified query)
-      const deliveriesResult = await queryWithRetry(() =>
-        supabase
-          .from('deliveries')
-          .select(`
-            *,
-            client:clients(code, name, contact_name, phone, address, city, gps_lat, gps_lng),
-            order:orders(order_number)
-          `)
-          .order('delivery_date', { ascending: false })
-          .limit(50)
-      )
+      // Fetch all data in parallel for faster loading
+      const [deliveriesResult, ordersResult, clientsResult] = await Promise.all([
+        querySimple(() =>
+          supabase
+            .from('deliveries')
+            .select(`
+              id, delivery_number, order_id, client_id, status, delivery_date, total_ht, notes,
+              client:clients(code, name, contact_name, phone, address, city, gps_lat, gps_lng),
+              order:orders(order_number)
+            `)
+            .order('delivery_date', { ascending: false })
+            .limit(30)
+        ),
+        querySimple(() =>
+          supabase
+            .from('orders')
+            .select('id, order_number, client_id, status, total_ht, client:clients(name)')
+            .in('status', ['confirmed', 'in_progress'])
+            .order('order_date', { ascending: false })
+            .limit(30)
+        ),
+        querySimple(() =>
+          supabase
+            .from('clients')
+            .select('id, code, name')
+            .eq('is_active', true)
+            .order('name')
+            .limit(100)
+        ),
+      ])
 
       if (deliveriesResult.error) {
         console.error('Deliveries query error:', deliveriesResult.error)
         throw new Error(`Erreur livraisons: ${deliveriesResult.error.message || 'Erreur inconnue'}`)
       }
 
-      // Set deliveries immediately for faster UI
       setDeliveries((deliveriesResult.data as Delivery[]) || [])
-
-      // Fetch orders and clients in parallel (secondary data)
-      const [ordersResult, clientsResult] = await Promise.all([
-        queryWithRetry(() =>
-          supabase
-            .from('orders')
-            .select('id, order_number, client_id, status, total_ht, client:clients(name)')
-            .in('status', ['confirmed', 'in_progress'])
-            .order('order_date', { ascending: false })
-            .limit(50)
-        ),
-        queryWithRetry(() =>
-          supabase
-            .from('clients')
-            .select('id, code, name')
-            .eq('is_active', true)
-            .order('name')
-            .limit(200)
-        ),
-      ])
-
       setOrders((ordersResult.data as Order[]) || [])
       setClients((clientsResult.data as ClientSimple[]) || [])
     } catch (error) {
