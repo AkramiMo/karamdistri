@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { useEffect, useState, useCallback } from 'react'
+import { useSupabase, queryWithRetry } from '@/hooks/useSupabase'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -30,7 +30,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Search, Edit, Trash2, Package, Eye, Leaf, Droplets, Carrot, Box } from 'lucide-react'
+import { Plus, Search, Edit, Trash2, Package, Eye, Leaf, Droplets, Carrot, Box, AlertCircle, RefreshCw } from 'lucide-react'
 
 interface Category {
   id: string
@@ -71,6 +71,7 @@ export default function ArticlesPage() {
   const [categories, setCategories] = useState<Category[]>([])
   const [packagings, setPackagings] = useState<Packaging[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
   const [packagingFilter, setPackagingFilter] = useState<string>('all')
@@ -78,7 +79,7 @@ export default function ArticlesPage() {
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [viewingArticle, setViewingArticle] = useState<Article | null>(null)
   const [editingArticle, setEditingArticle] = useState<Article | null>(null)
-  const supabase = createClient()
+  const supabase = useSupabase()
 
   const [formData, setFormData] = useState({
     code: '',
@@ -95,51 +96,54 @@ export default function ArticlesPage() {
     min_stock: '0',
   })
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setIsLoading(true)
+    setLoadError(null)
 
-    // Fetch articles with relations
-    const { data: articlesData, error: articlesError } = await supabase
-      .from('articles')
-      .select(`
-        *,
-        category:categories(*),
-        packaging:packagings(*)
-      `)
-      .order('code', { ascending: true })
+    try {
+      // Fetch articles with relations
+      const articlesResult = await queryWithRetry(() =>
+        supabase
+          .from('articles')
+          .select(`
+            *,
+            category:categories(*),
+            packaging:packagings(*)
+          `)
+          .order('code', { ascending: true })
+          .limit(200)
+      )
 
-    if (articlesError) {
-      console.error('Error fetching articles:', articlesError)
-    } else {
-      setArticles(articlesData || [])
+      if (articlesResult.error) {
+        console.error('Error fetching articles:', articlesResult.error)
+        throw new Error(`Erreur articles: ${articlesResult.error.message || 'Erreur inconnue'}`)
+      }
+
+      setArticles((articlesResult.data as Article[]) || [])
+
+      // Fetch categories and packagings in parallel
+      const [categoriesResult, packagingsResult] = await Promise.all([
+        queryWithRetry(() =>
+          supabase.from('categories').select('*').order('name')
+        ),
+        queryWithRetry(() =>
+          supabase.from('packagings').select('*').order('name')
+        ),
+      ])
+
+      setCategories((categoriesResult.data as Category[]) || [])
+      setPackagings((packagingsResult.data as Packaging[]) || [])
+    } catch (error) {
+      console.error('Error fetching data:', error)
+      setLoadError(error instanceof Error ? error.message : 'Erreur de chargement')
+    } finally {
+      setIsLoading(false)
     }
-
-    // Fetch categories
-    const { data: categoriesData } = await supabase
-      .from('categories')
-      .select('*')
-      .order('name')
-
-    if (categoriesData) {
-      setCategories(categoriesData)
-    }
-
-    // Fetch packagings
-    const { data: packagingsData } = await supabase
-      .from('packagings')
-      .select('*')
-      .order('name')
-
-    if (packagingsData) {
-      setPackagings(packagingsData)
-    }
-
-    setIsLoading(false)
-  }
+  }, [supabase])
 
   useEffect(() => {
     fetchData()
-  }, [])
+  }, [fetchData])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -604,8 +608,20 @@ export default function ArticlesPage() {
             </div>
           </CardHeader>
           <CardContent>
-            {isLoading ? (
-              <div className="text-center py-8 text-gray-500">Chargement...</div>
+            {loadError ? (
+              <div className="text-center py-8">
+                <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
+                <p className="text-red-600 mb-4">{loadError}</p>
+                <Button onClick={fetchData} variant="outline">
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Réessayer
+                </Button>
+              </div>
+            ) : isLoading ? (
+              <div className="text-center py-8 text-gray-500">
+                <RefreshCw className="h-8 w-8 animate-spin mx-auto mb-2" />
+                Chargement des articles...
+              </div>
             ) : filteredArticles.length === 0 ? (
               <div className="text-center py-8 text-gray-500">
                 Aucun article trouvé

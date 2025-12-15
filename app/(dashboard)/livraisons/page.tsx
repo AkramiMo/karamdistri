@@ -171,28 +171,29 @@ export default function LivraisonsPage() {
     setLoadError(null)
 
     try {
-      // Parallel fetching with retry logic
-      const [deliveriesResult, ordersResult, clientsResult] = await Promise.all([
-        queryWithRetry(() =>
-          supabase
-            .from('deliveries')
-            .select(`
-              *,
-              client:clients(code, name, contact_name, phone, address, city, gps_lat, gps_lng),
-              order:orders(order_number),
-              delivery_items(
-                id,
-                article_id,
-                quantity_ordered,
-                quantity_delivered,
-                quantity_returned,
-                unit_price,
-                article:articles(code, name, description)
-              )
-            `)
-            .order('delivery_date', { ascending: false })
-            .limit(100)
-        ),
+      // Fetch deliveries first (simplified query)
+      const deliveriesResult = await queryWithRetry(() =>
+        supabase
+          .from('deliveries')
+          .select(`
+            *,
+            client:clients(code, name, contact_name, phone, address, city, gps_lat, gps_lng),
+            order:orders(order_number)
+          `)
+          .order('delivery_date', { ascending: false })
+          .limit(50)
+      )
+
+      if (deliveriesResult.error) {
+        console.error('Deliveries query error:', deliveriesResult.error)
+        throw new Error(`Erreur livraisons: ${deliveriesResult.error.message || 'Erreur inconnue'}`)
+      }
+
+      // Set deliveries immediately for faster UI
+      setDeliveries((deliveriesResult.data as Delivery[]) || [])
+
+      // Fetch orders and clients in parallel (secondary data)
+      const [ordersResult, clientsResult] = await Promise.all([
         queryWithRetry(() =>
           supabase
             .from('orders')
@@ -211,11 +212,6 @@ export default function LivraisonsPage() {
         ),
       ])
 
-      if (deliveriesResult.error) {
-        throw new Error('Erreur lors du chargement des livraisons')
-      }
-
-      setDeliveries((deliveriesResult.data as Delivery[]) || [])
       setOrders((ordersResult.data as Order[]) || [])
       setClients((clientsResult.data as ClientSimple[]) || [])
     } catch (error) {
