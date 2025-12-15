@@ -30,7 +30,8 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Search, Edit, Trash2, Users, MapPin, Store, Utensils, ShoppingBag, Package, Eye } from 'lucide-react'
+import { Plus, Search, Edit, Trash2, Users, MapPin, Store, Utensils, ShoppingBag, Package, Eye, DollarSign } from 'lucide-react'
+import Link from 'next/link'
 
 interface Client {
   id: string
@@ -231,21 +232,29 @@ export default function ClientsPage() {
             <p className="text-gray-500">Gérez vos clients ({clients.length} total)</p>
           </div>
 
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <ProtectedModule module="clients" action="create">
-                <Button
-                  className="bg-green-600 hover:bg-green-700"
-                  onClick={() => {
-                    resetForm()
-                    setIsDialogOpen(true)
-                  }}
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Nouveau client
-                </Button>
-              </ProtectedModule>
-            </DialogTrigger>
+          <div className="flex gap-2">
+            <Link href="/clients/prix">
+              <Button variant="outline" className="border-green-600 text-green-600 hover:bg-green-50">
+                <DollarSign className="mr-2 h-4 w-4" />
+                Prix par Client
+              </Button>
+            </Link>
+
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <DialogTrigger asChild>
+                <ProtectedModule module="clients" action="create">
+                  <Button
+                    className="bg-green-600 hover:bg-green-700"
+                    onClick={() => {
+                      resetForm()
+                      setIsDialogOpen(true)
+                    }}
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    Nouveau client
+                  </Button>
+                </ProtectedModule>
+              </DialogTrigger>
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>

@@ -45,6 +45,7 @@ import {
   AlertCircle,
   CheckCircle2,
   Printer,
+  Trash2,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
@@ -353,6 +354,30 @@ export default function LivraisonsPage() {
     } else {
       fetchData()
       setIsViewDialogOpen(false)
+    }
+  }
+
+  const handleDeleteDelivery = async (deliveryId: string, deliveryNumber: string) => {
+    if (!confirm(`Êtes-vous sûr de vouloir supprimer la livraison ${deliveryNumber} ?`)) {
+      return
+    }
+
+    // First delete delivery items
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase.from('delivery_items') as any).delete().eq('delivery_id', deliveryId)
+
+    // Then delete the delivery
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('deliveries') as any).delete().eq('id', deliveryId)
+
+    if (error) {
+      console.error('Error deleting delivery:', error)
+      alert('Erreur lors de la suppression de la livraison')
+    } else {
+      fetchData()
+      if (viewDelivery?.id === deliveryId) {
+        setIsViewDialogOpen(false)
+      }
     }
   }
 
@@ -855,6 +880,14 @@ export default function LivraisonsPage() {
                             title="Telecharger BL"
                           >
                             <FileText className="h-4 w-4 text-purple-600" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDeleteDelivery(delivery.id, delivery.delivery_number)}
+                            title="Supprimer"
+                          >
+                            <Trash2 className="h-4 w-4 text-red-600" />
                           </Button>
                         </div>
                       </TableCell>

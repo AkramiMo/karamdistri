@@ -115,10 +115,16 @@ const statusLabels: Record<string, string> = {
   cancelled: 'Annulee',
 }
 
+interface ClientPrice {
+  article_id: string
+  custom_price: number
+}
+
 export default function CommandesPage() {
   const [orders, setOrders] = useState<Order[]>([])
   const [clients, setClients] = useState<Client[]>([])
   const [articles, setArticles] = useState<Article[]>([])
+  const [clientPrices, setClientPrices] = useState<ClientPrice[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
@@ -177,11 +183,40 @@ export default function CommandesPage() {
     setArticles(data || [])
   }
 
+  const fetchClientPrices = async (clientId: string) => {
+    if (!clientId) {
+      setClientPrices([])
+      return
+    }
+    const { data } = await supabase
+      .from('client_prices')
+      .select('article_id, custom_price')
+      .eq('client_id', clientId)
+    setClientPrices(data || [])
+  }
+
+  // Get price for an article (client price if exists, otherwise default)
+  const getArticlePrice = (articleId: string): number => {
+    const clientPrice = clientPrices.find(cp => cp.article_id === articleId)
+    if (clientPrice) return clientPrice.custom_price
+    const article = articles.find(a => a.id === articleId)
+    return article?.price_ht || 0
+  }
+
   useEffect(() => {
     fetchOrders()
     fetchClients()
     fetchArticles()
   }, [])
+
+  // Fetch client prices when client changes
+  useEffect(() => {
+    if (formData.client_id) {
+      fetchClientPrices(formData.client_id)
+    } else {
+      setClientPrices([])
+    }
+  }, [formData.client_id])
 
   const generateOrderNumber = () => {
     const lastOrder = orders[0]
@@ -199,7 +234,8 @@ export default function CommandesPage() {
     if (!article) return
 
     const quantity = parseInt(selectedQuantity)
-    const total_ht = article.price_ht * quantity
+    const unitPrice = getArticlePrice(selectedArticle)
+    const total_ht = unitPrice * quantity
 
     setOrderItems([...orderItems, {
       article_id: article.id,
@@ -207,7 +243,7 @@ export default function CommandesPage() {
       article_name: article.name,
       article_description: article.description,
       quantity,
-      unit_price: article.price_ht,
+      unit_price: unitPrice,
       total_ht,
     }])
 
@@ -367,6 +403,30 @@ export default function CommandesPage() {
     }
   }
 
+  const handleDeleteOrder = async (orderId: string, orderNumber: string) => {
+    if (!confirm(`Êtes-vous sûr de vouloir supprimer la commande ${orderNumber} ?`)) {
+      return
+    }
+
+    // First delete order items
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase.from('order_items') as any).delete().eq('order_id', orderId)
+
+    // Then delete the order
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('orders') as any).delete().eq('id', orderId)
+
+    if (error) {
+      console.error('Error deleting order:', error)
+      alert('Erreur lors de la suppression de la commande')
+    } else {
+      fetchOrders()
+      if (viewingOrder?.id === orderId) {
+        setIsViewDialogOpen(false)
+      }
+    }
+  }
+
   const resetForm = () => {
     setFormData({
       client_id: '',
@@ -472,18 +532,30 @@ export default function CommandesPage() {
                 </div>
 
                 <div className="border-t pt-4">
-                  <h3 className="font-medium mb-3">Articles</h3>
+                  <h3 className="font-medium mb-3">
+                    Articles
+                    {clientPrices.length > 0 && (
+                      <Badge className="ml-2 bg-green-100 text-green-800">
+                        {clientPrices.length} prix personnalises
+                      </Badge>
+                    )}
+                  </h3>
                   <div className="flex gap-2 mb-4">
                     <Select value={selectedArticle} onValueChange={setSelectedArticle}>
                       <SelectTrigger className="flex-1">
                         <SelectValue placeholder="Selectionner un article" />
                       </SelectTrigger>
                       <SelectContent>
-                        {articles.map((article) => (
-                          <SelectItem key={article.id} value={article.id}>
-                            {article.code} - {article.name} ({formatPrice(article.price_ht)})
-                          </SelectItem>
-                        ))}
+                        {articles.map((article) => {
+                          const clientPrice = clientPrices.find(cp => cp.article_id === article.id)
+                          const displayPrice = clientPrice ? clientPrice.custom_price : article.price_ht
+                          return (
+                            <SelectItem key={article.id} value={article.id}>
+                              {article.code} - {article.name} ({formatPrice(displayPrice)})
+                              {clientPrice && ' *'}
+                            </SelectItem>
+                          )
+                        })}
                       </SelectContent>
                     </Select>
                     <Input
@@ -730,6 +802,14 @@ export default function CommandesPage() {
                               onClick={() => handleGenerateDeliveryNote(order)}
                             >
                               <Truck className="h-4 w-4 text-green-600" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title="Supprimer"
+                              onClick={() => handleDeleteOrder(order.id, order.order_number)}
+                            >
+                              <Trash2 className="h-4 w-4 text-red-600" />
                             </Button>
                           </div>
                         </TableCell>
