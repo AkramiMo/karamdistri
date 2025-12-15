@@ -384,6 +384,7 @@ export default function ClientsPage() {
               </form>
             </DialogContent>
           </Dialog>
+          </div>
         </div>
 
         {/* Stats by category */}
