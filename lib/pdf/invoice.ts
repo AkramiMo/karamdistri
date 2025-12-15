@@ -1,5 +1,6 @@
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
+import { CompanySettings, defaultCompanySettings, formatCompanyAddress, formatCompanyIdentifiers } from '../company'
 
 interface OrderItem {
   article: {
@@ -20,6 +21,7 @@ interface Client {
   email: string | null
   address: string | null
   city: string | null
+  ice?: string | null
 }
 
 interface Order {
@@ -35,27 +37,41 @@ interface Order {
   order_items: OrderItem[]
 }
 
-export function generateInvoicePDF(order: Order): void {
+export function generateInvoicePDF(order: Order, company?: CompanySettings): void {
   const doc = new jsPDF()
+  const settings = company || defaultCompanySettings
 
-  // Company info
-  const companyName = 'KARAM Olives & Sauces'
-  const companyAddress = 'Zone Industrielle, Marrakech'
-  const companyPhone = '+212 5XX XX XX XX'
-  const companyEmail = 'contact@karam-olives.ma'
-
-  // Header
+  // Header - Company info
   doc.setFontSize(24)
   doc.setFont('helvetica', 'bold')
   doc.setTextColor(34, 139, 34) // Green color
-  doc.text(companyName, 20, 25)
+  doc.text(settings.company_name, 20, 25)
 
   doc.setFontSize(10)
   doc.setFont('helvetica', 'normal')
   doc.setTextColor(100, 100, 100)
-  doc.text(companyAddress, 20, 32)
-  doc.text(`Tel: ${companyPhone}`, 20, 37)
-  doc.text(`Email: ${companyEmail}`, 20, 42)
+
+  let headerY = 32
+  const companyAddress = formatCompanyAddress(settings)
+  if (companyAddress) {
+    doc.text(companyAddress, 20, headerY)
+    headerY += 5
+  }
+  if (settings.phone) {
+    doc.text(`Tel: ${settings.phone}`, 20, headerY)
+    headerY += 5
+  }
+  if (settings.fax) {
+    doc.text(`Fax: ${settings.fax}`, 20, headerY)
+    headerY += 5
+  }
+  if (settings.email) {
+    doc.text(`Email: ${settings.email}`, 20, headerY)
+    headerY += 5
+  }
+  if (settings.website) {
+    doc.text(`Web: ${settings.website}`, 20, headerY)
+  }
 
   // Invoice title
   doc.setFontSize(20)
@@ -83,7 +99,7 @@ export function generateInvoicePDF(order: Order): void {
   doc.setFont('helvetica', 'normal')
   doc.setDrawColor(34, 139, 34)
   doc.setFillColor(255, 255, 255)
-  doc.roundedRect(20, 63, 80, 35, 2, 2, 'D')
+  doc.roundedRect(20, 63, 80, 40, 2, 2, 'D')
 
   doc.setFont('helvetica', 'bold')
   doc.text(`${order.client.code} - ${order.client.name}`, 25, 72)
@@ -104,6 +120,10 @@ export function generateInvoicePDF(order: Order): void {
   }
   if (order.client.city) {
     doc.text(`${order.client.city}`, 25, yPos)
+    yPos += 5
+  }
+  if (order.client.ice) {
+    doc.text(`ICE: ${order.client.ice}`, 25, yPos)
   }
 
   // Items table
@@ -117,7 +137,7 @@ export function generateInvoicePDF(order: Order): void {
   ])
 
   autoTable(doc, {
-    startY: 105,
+    startY: 108,
     head: [['#', 'Code', 'Designation', 'Qte', 'Prix Unit.', 'Total HT']],
     body: tableData,
     theme: 'striped',
@@ -145,6 +165,7 @@ export function generateInvoicePDF(order: Order): void {
   })
 
   // Get the Y position after the table
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const finalY = (doc as any).lastAutoTable.finalY + 10
 
   // Totals
@@ -155,6 +176,7 @@ export function generateInvoicePDF(order: Order): void {
 
   doc.setFontSize(10)
   doc.setFont('helvetica', 'normal')
+  doc.setTextColor(0, 0, 0)
   doc.text('Total HT:', totalsX + 5, finalY + 10)
   doc.text(formatPrice(order.total_ht), totalsX + 55, finalY + 10, { align: 'right' })
 
@@ -176,18 +198,32 @@ export function generateInvoicePDF(order: Order): void {
     doc.text(order.notes, 20, finalY + 16)
   }
 
-  // Footer
+  // Footer with company identifiers
   const pageHeight = doc.internal.pageSize.height
   doc.setFontSize(8)
   doc.setTextColor(150, 150, 150)
+
+  const identifiers = formatCompanyIdentifiers(settings)
+  if (identifiers) {
+    doc.text(
+      `${settings.company_name} - ${identifiers}`,
+      doc.internal.pageSize.width / 2,
+      pageHeight - 20,
+      { align: 'center' }
+    )
+  }
+
+  if (settings.capital) {
+    doc.text(
+      `Capital: ${settings.capital}`,
+      doc.internal.pageSize.width / 2,
+      pageHeight - 15,
+      { align: 'center' }
+    )
+  }
+
   doc.text(
-    `${companyName} - ICE: XXXXXXXXXX - IF: XXXXXXXX - RC: XXXXXX`,
-    doc.internal.pageSize.width / 2,
-    pageHeight - 15,
-    { align: 'center' }
-  )
-  doc.text(
-    'Merci pour votre confiance!',
+    settings.invoice_footer || 'Merci pour votre confiance!',
     doc.internal.pageSize.width / 2,
     pageHeight - 10,
     { align: 'center' }
@@ -197,25 +233,33 @@ export function generateInvoicePDF(order: Order): void {
   doc.save(`Facture_${order.order_number}.pdf`)
 }
 
-export function generateDeliveryNotePDF(order: Order): void {
+export function generateDeliveryNotePDF(order: Order, company?: CompanySettings): void {
   const doc = new jsPDF()
+  const settings = company || defaultCompanySettings
 
-  // Company info
-  const companyName = 'KARAM Olives & Sauces'
-  const companyAddress = 'Zone Industrielle, Marrakech'
-  const companyPhone = '+212 5XX XX XX XX'
-
-  // Header
+  // Header - Company info
   doc.setFontSize(24)
   doc.setFont('helvetica', 'bold')
   doc.setTextColor(34, 139, 34)
-  doc.text(companyName, 20, 25)
+  doc.text(settings.company_name, 20, 25)
 
   doc.setFontSize(10)
   doc.setFont('helvetica', 'normal')
   doc.setTextColor(100, 100, 100)
-  doc.text(companyAddress, 20, 32)
-  doc.text(`Tel: ${companyPhone}`, 20, 37)
+
+  let headerY = 32
+  const companyAddress = formatCompanyAddress(settings)
+  if (companyAddress) {
+    doc.text(companyAddress, 20, headerY)
+    headerY += 5
+  }
+  if (settings.phone) {
+    doc.text(`Tel: ${settings.phone}`, 20, headerY)
+    headerY += 5
+  }
+  if (settings.email) {
+    doc.text(`Email: ${settings.email}`, 20, headerY)
+  }
 
   // Delivery note title
   doc.setFontSize(20)
@@ -291,11 +335,13 @@ export function generateDeliveryNotePDF(order: Order): void {
   })
 
   // Get the Y position after the table
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const finalY = (doc as any).lastAutoTable.finalY + 20
 
   // Signature boxes
   doc.setFontSize(10)
   doc.setFont('helvetica', 'bold')
+  doc.setTextColor(0, 0, 0)
 
   // Livreur signature
   doc.text('Signature Livreur:', 20, finalY)
@@ -306,13 +352,24 @@ export function generateDeliveryNotePDF(order: Order): void {
   doc.text('Signature Client:', 120, finalY)
   doc.rect(120, finalY + 5, 60, 25)
 
-  // Footer
+  // Footer with company info
   const pageHeight = doc.internal.pageSize.height
   doc.setFontSize(8)
   doc.setFont('helvetica', 'normal')
   doc.setTextColor(150, 150, 150)
+
+  const identifiers = formatCompanyIdentifiers(settings)
+  if (identifiers) {
+    doc.text(
+      `${settings.company_name} - ${identifiers}`,
+      doc.internal.pageSize.width / 2,
+      pageHeight - 15,
+      { align: 'center' }
+    )
+  }
+
   doc.text(
-    `${companyName} - Document genere le ${new Date().toLocaleDateString('fr-FR')}`,
+    `Document genere le ${new Date().toLocaleDateString('fr-FR')}`,
     doc.internal.pageSize.width / 2,
     pageHeight - 10,
     { align: 'center' }

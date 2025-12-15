@@ -1,5 +1,6 @@
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
+import { CompanySettings, defaultCompanySettings, formatCompanyAddress, formatCompanyIdentifiers } from '../company'
 
 interface PurchaseOrderItem {
   article: {
@@ -32,27 +33,37 @@ interface PurchaseOrder {
   purchase_order_items: PurchaseOrderItem[]
 }
 
-export function generatePurchaseOrderPDF(order: PurchaseOrder): void {
+export function generatePurchaseOrderPDF(order: PurchaseOrder, company?: CompanySettings): void {
   const doc = new jsPDF()
+  const settings = company || defaultCompanySettings
 
-  // Company info
-  const companyName = 'KARAM Olives & Sauces'
-  const companyAddress = 'Zone Industrielle, Marrakech'
-  const companyPhone = '+212 5XX XX XX XX'
-  const companyEmail = 'contact@karam-olives.ma'
-
-  // Header
+  // Header - Company info
   doc.setFontSize(24)
   doc.setFont('helvetica', 'bold')
   doc.setTextColor(34, 139, 34) // Green color
-  doc.text(companyName, 20, 25)
+  doc.text(settings.company_name, 20, 25)
 
   doc.setFontSize(10)
   doc.setFont('helvetica', 'normal')
   doc.setTextColor(100, 100, 100)
-  doc.text(companyAddress, 20, 32)
-  doc.text(`Tel: ${companyPhone}`, 20, 37)
-  doc.text(`Email: ${companyEmail}`, 20, 42)
+
+  let headerY = 32
+  const companyAddress = formatCompanyAddress(settings)
+  if (companyAddress) {
+    doc.text(companyAddress, 20, headerY)
+    headerY += 5
+  }
+  if (settings.phone) {
+    doc.text(`Tel: ${settings.phone}`, 20, headerY)
+    headerY += 5
+  }
+  if (settings.fax) {
+    doc.text(`Fax: ${settings.fax}`, 20, headerY)
+    headerY += 5
+  }
+  if (settings.email) {
+    doc.text(`Email: ${settings.email}`, 20, headerY)
+  }
 
   // Purchase Order title
   doc.setFontSize(18)
@@ -181,17 +192,22 @@ export function generatePurchaseOrderPDF(order: PurchaseOrder): void {
   doc.text('Signature Fournisseur:', 120, sigY)
   doc.rect(120, sigY + 5, 60, 25)
 
-  // Footer
+  // Footer with company identifiers
   const pageHeight = doc.internal.pageSize.height
   doc.setFontSize(8)
   doc.setFont('helvetica', 'normal')
   doc.setTextColor(150, 150, 150)
-  doc.text(
-    `${companyName} - ICE: XXXXXXXXXX - IF: XXXXXXXX - RC: XXXXXX`,
-    doc.internal.pageSize.width / 2,
-    pageHeight - 15,
-    { align: 'center' }
-  )
+
+  const identifiers = formatCompanyIdentifiers(settings)
+  if (identifiers) {
+    doc.text(
+      `${settings.company_name} - ${identifiers}`,
+      doc.internal.pageSize.width / 2,
+      pageHeight - 15,
+      { align: 'center' }
+    )
+  }
+
   doc.text(
     `Document genere le ${new Date().toLocaleDateString('fr-FR')}`,
     doc.internal.pageSize.width / 2,
