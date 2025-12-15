@@ -221,7 +221,7 @@ export default function StocksPage() {
                 </Button>
               </ProtectedModule>
             </DialogTrigger>
-            <DialogContent className="max-w-lg">
+            <DialogContent className="max-w-2xl">
               <DialogHeader>
                 <DialogTitle>Nouveau mouvement de stock</DialogTitle>
               </DialogHeader>

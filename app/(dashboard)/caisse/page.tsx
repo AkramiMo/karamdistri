@@ -149,7 +149,7 @@ export default function CaissePage() {
                 </Button>
               </ProtectedModule>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="max-w-2xl">
               <DialogHeader>
                 <DialogTitle>Nouvelle opération de caisse</DialogTitle>
               </DialogHeader>

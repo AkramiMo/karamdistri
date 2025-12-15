@@ -712,7 +712,7 @@ export default function ArticlesPage() {
 
         {/* View Dialog */}
         <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
-          <DialogContent className="max-w-lg">
+          <DialogContent className="max-w-2xl">
             <DialogHeader>
               <DialogTitle>Détails de l&apos;article</DialogTitle>
             </DialogHeader>

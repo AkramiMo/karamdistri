@@ -572,7 +572,7 @@ export default function ClientsPage() {
 
         {/* View Client Dialog */}
         <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
-          <DialogContent className="max-w-lg">
+          <DialogContent className="max-w-2xl">
             <DialogHeader>
               <DialogTitle>Détails du client</DialogTitle>
             </DialogHeader>

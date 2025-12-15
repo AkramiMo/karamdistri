@@ -582,7 +582,7 @@ export default function LivraisonsPage() {
                   </Button>
                 </ProtectedModule>
               </DialogTrigger>
-              <DialogContent className="max-w-lg">
+              <DialogContent className="max-w-2xl">
                 <DialogHeader>
                   <DialogTitle>Nouveau bon de livraison</DialogTitle>
                 </DialogHeader>

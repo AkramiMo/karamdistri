@@ -255,7 +255,7 @@ export default function VentesPage() {
                 </Button>
               </ProtectedModule>
             </DialogTrigger>
-            <DialogContent className="max-w-lg">
+            <DialogContent className="max-w-2xl">
               <DialogHeader>
                 <DialogTitle>Nouvelle vente</DialogTitle>
               </DialogHeader>
