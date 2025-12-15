@@ -30,7 +30,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Search, DollarSign, Eye } from 'lucide-react'
+import { Plus, Search, DollarSign, Eye, Trash2 } from 'lucide-react'
+import { Checkbox } from '@/components/ui/checkbox'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 
@@ -90,6 +91,7 @@ export default function VentesPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [selectedSales, setSelectedSales] = useState<Set<string>>(new Set())
   const supabase = createClient()
 
   const [formData, setFormData] = useState({
@@ -206,6 +208,61 @@ export default function VentesPage() {
       payment_method: 'cash',
       payment_status: 'pending',
     })
+  }
+
+  // Selection handlers
+  const toggleSaleSelection = (saleId: string) => {
+    const newSelected = new Set(selectedSales)
+    if (newSelected.has(saleId)) {
+      newSelected.delete(saleId)
+    } else {
+      newSelected.add(saleId)
+    }
+    setSelectedSales(newSelected)
+  }
+
+  const handleDeleteSale = async (saleId: string, saleNumber: string) => {
+    if (!confirm(`Êtes-vous sûr de vouloir supprimer la vente ${saleNumber} ?`)) {
+      return
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('sales') as any).delete().eq('id', saleId)
+
+    if (error) {
+      console.error('Error deleting sale:', error)
+      alert('Erreur lors de la suppression de la vente')
+    } else {
+      fetchSales()
+      selectedSales.delete(saleId)
+      setSelectedSales(new Set(selectedSales))
+    }
+  }
+
+  const handleDeleteSelected = async () => {
+    if (selectedSales.size === 0) {
+      alert('Veuillez sélectionner au moins une vente')
+      return
+    }
+
+    if (!confirm(`Êtes-vous sûr de vouloir supprimer ${selectedSales.size} vente(s) ?`)) {
+      return
+    }
+
+    const idsToDelete = Array.from(selectedSales)
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('sales') as any)
+      .delete()
+      .in('id', idsToDelete)
+
+    if (error) {
+      console.error('Error deleting sales:', error)
+      alert('Erreur lors de la suppression des ventes')
+    } else {
+      fetchSales()
+      setSelectedSales(new Set())
+    }
   }
 
   const filteredSales = sales.filter(
@@ -432,6 +489,16 @@ export default function VentesPage() {
                   className="pl-10"
                 />
               </div>
+              {selectedSales.size > 0 && (
+                <Button
+                  variant="destructive"
+                  onClick={handleDeleteSelected}
+                  className="gap-2"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Supprimer ({selectedSales.size})
+                </Button>
+              )}
             </div>
           </CardHeader>
           <CardContent>
@@ -445,6 +512,18 @@ export default function VentesPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-12">
+                      <Checkbox
+                        checked={selectedSales.size === filteredSales.length && filteredSales.length > 0}
+                        onCheckedChange={(checked) => {
+                          if (checked) {
+                            setSelectedSales(new Set(filteredSales.map(s => s.id)))
+                          } else {
+                            setSelectedSales(new Set())
+                          }
+                        }}
+                      />
+                    </TableHead>
                     <TableHead>N° Vente</TableHead>
                     <TableHead>Client</TableHead>
                     <TableHead>BL</TableHead>
@@ -457,7 +536,13 @@ export default function VentesPage() {
                 </TableHeader>
                 <TableBody>
                   {filteredSales.map((sale) => (
-                    <TableRow key={sale.id}>
+                    <TableRow key={sale.id} className={selectedSales.has(sale.id) ? 'bg-red-50' : ''}>
+                      <TableCell>
+                        <Checkbox
+                          checked={selectedSales.has(sale.id)}
+                          onCheckedChange={() => toggleSaleSelection(sale.id)}
+                        />
+                      </TableCell>
                       <TableCell className="font-medium">{sale.sale_number}</TableCell>
                       <TableCell>{sale.client?.name}</TableCell>
                       <TableCell>{sale.delivery?.delivery_number || '-'}</TableCell>
@@ -474,9 +559,19 @@ export default function VentesPage() {
                       </TableCell>
                       <TableCell className="text-right">{formatPrice(sale.total_ttc)}</TableCell>
                       <TableCell className="text-right">
-                        <Button variant="ghost" size="icon">
-                          <Eye className="h-4 w-4" />
-                        </Button>
+                        <div className="flex justify-end gap-1">
+                          <Button variant="ghost" size="icon">
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDeleteSale(sale.id, sale.sale_number)}
+                            title="Supprimer"
+                          >
+                            <Trash2 className="h-4 w-4 text-red-600" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}

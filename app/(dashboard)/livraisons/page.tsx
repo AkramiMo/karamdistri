@@ -905,7 +905,7 @@ export default function LivraisonsPage() {
 
         {/* View Delivery Dialog */}
         <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
-          <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
+          <DialogContent className="w-[95vw] max-w-4xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <Truck className="h-5 w-5 text-purple-600" />
@@ -913,8 +913,8 @@ export default function LivraisonsPage() {
               </DialogTitle>
             </DialogHeader>
             {viewDelivery && (
-              <div className="space-y-6">
-                <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <h3 className="font-semibold text-gray-700">Client</h3>
                     <div className="bg-gray-50 p-3 rounded-lg">
@@ -951,7 +951,8 @@ export default function LivraisonsPage() {
 
                 <div>
                   <h3 className="font-semibold text-gray-700 mb-2">Articles livres</h3>
-                  <Table>
+                  <div className="overflow-x-auto">
+                  <Table className="min-w-full">
                     <TableHeader>
                       <TableRow>
                         <TableHead>Code</TableHead>
@@ -983,6 +984,7 @@ export default function LivraisonsPage() {
                       ))}
                     </TableBody>
                   </Table>
+                  </div>
                 </div>
 
                 <div className="flex justify-end">
