@@ -91,6 +91,8 @@ export default function VentesPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
+  const [viewingSale, setViewingSale] = useState<Sale | null>(null)
   const [selectedSales, setSelectedSales] = useState<Set<string>>(new Set())
   const supabase = createClient()
 
@@ -208,6 +210,11 @@ export default function VentesPage() {
       payment_method: 'cash',
       payment_status: 'pending',
     })
+  }
+
+  const handleViewSale = (sale: Sale) => {
+    setViewingSale(sale)
+    setIsViewDialogOpen(true)
   }
 
   // Selection handlers
@@ -560,7 +567,12 @@ export default function VentesPage() {
                       <TableCell className="text-right">{formatPrice(sale.total_ttc)}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
-                          <Button variant="ghost" size="icon">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleViewSale(sale)}
+                            title="Voir détails"
+                          >
                             <Eye className="h-4 w-4" />
                           </Button>
                           <Button
@@ -580,6 +592,83 @@ export default function VentesPage() {
             )}
           </CardContent>
         </Card>
+
+        {/* View Sale Dialog */}
+        <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
+          <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <DollarSign className="h-5 w-5 text-green-600" />
+                Vente {viewingSale?.sale_number}
+              </DialogTitle>
+            </DialogHeader>
+            {viewingSale && (
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <h3 className="font-semibold text-gray-700">Client</h3>
+                    <div className="bg-gray-50 p-3 rounded-lg">
+                      <p className="font-medium">{viewingSale.client?.code} - {viewingSale.client?.name}</p>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <h3 className="font-semibold text-gray-700">Détails</h3>
+                    <div className="bg-gray-50 p-3 rounded-lg space-y-1">
+                      <p className="text-sm">
+                        <span className="text-gray-600">Date:</span>{' '}
+                        {format(new Date(viewingSale.sale_date), 'dd MMMM yyyy', { locale: fr })}
+                      </p>
+                      {viewingSale.delivery && (
+                        <p className="text-sm">
+                          <span className="text-gray-600">BL:</span>{' '}
+                          {viewingSale.delivery.delivery_number}
+                        </p>
+                      )}
+                      <p className="text-sm">
+                        <span className="text-gray-600">Mode:</span>{' '}
+                        {viewingSale.payment_method ? paymentMethodLabels[viewingSale.payment_method] : '-'}
+                      </p>
+                      <div className="flex items-center gap-2 pt-1">
+                        <span className="text-gray-600 text-sm">Statut:</span>
+                        <Badge className={paymentStatusColors[viewingSale.payment_status]}>
+                          {paymentStatusLabels[viewingSale.payment_status]}
+                        </Badge>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border-t pt-4">
+                  <div className="flex justify-end">
+                    <div className="w-64 space-y-2">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-600">Total HT:</span>
+                        <span className="font-medium">{formatPrice(viewingSale.total_ht)}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-600">TVA (20%):</span>
+                        <span className="font-medium">{formatPrice((viewingSale.total_ht || 0) * 0.2)}</span>
+                      </div>
+                      <div className="flex justify-between text-lg font-bold border-t pt-2">
+                        <span>Total TTC:</span>
+                        <span className="text-green-600">{formatPrice(viewingSale.total_ttc)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-4 border-t">
+                  <Button
+                    variant="outline"
+                    onClick={() => setIsViewDialogOpen(false)}
+                  >
+                    Fermer
+                  </Button>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
       </div>
     </ProtectedModule>
   )
