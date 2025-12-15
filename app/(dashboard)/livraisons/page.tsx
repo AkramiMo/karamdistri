@@ -50,6 +50,7 @@ import {
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { generateDeliveryNotePDF } from '@/lib/pdf/invoice'
+import { useCompanySettings } from '@/hooks/useCompanySettings'
 
 interface DeliveryItem {
   id: string
@@ -158,6 +159,7 @@ export default function LivraisonsPage() {
   const [isRouteDialogOpen, setIsRouteDialogOpen] = useState(false)
 
   const supabase = useSupabase()
+  const { companySettings } = useCompanySettings()
 
   const [formData, setFormData] = useState({
     order_id: '',
@@ -328,7 +330,7 @@ export default function LivraisonsPage() {
         })),
       }
 
-      generateDeliveryNotePDF(orderData)
+      generateDeliveryNotePDF(orderData, companySettings)
     } catch (error) {
       console.error('Error generating PDF:', error)
       alert('Erreur lors de la generation du PDF')

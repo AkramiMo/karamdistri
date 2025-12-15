@@ -31,6 +31,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Plus, Search, Eye, FileText, Trash2, FileDown, Package } from 'lucide-react'
 import { generatePurchaseOrderPDF } from '@/lib/pdf/purchaseOrder'
+import { useCompanySettings } from '@/hooks/useCompanySettings'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import Link from 'next/link'
@@ -115,6 +116,7 @@ export default function AchatsPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const supabase = createClient()
+  const { companySettings } = useCompanySettings()
 
   const [formData, setFormData] = useState({
     supplier_id: '',
@@ -184,7 +186,7 @@ export default function AchatsPage() {
         unit_price: item.unit_price,
         total_ht: item.total_ht,
       })),
-    })
+    }, companySettings)
   }
 
   const fetchSuppliers = async () => {

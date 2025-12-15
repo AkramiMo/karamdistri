@@ -34,6 +34,7 @@ import { Plus, Search, Eye, PackageCheck, Trash2, FileDown } from 'lucide-react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { generateReceptionPDF } from '@/lib/pdf/reception'
+import { useCompanySettings } from '@/hooks/useCompanySettings'
 
 interface Reception {
   id: string
@@ -119,6 +120,7 @@ export default function ReceptionsPage() {
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [viewingReception, setViewingReception] = useState<Reception | null>(null)
   const supabase = createClient()
+  const { companySettings } = useCompanySettings()
 
   const [formData, setFormData] = useState({
     supplier_id: '',
@@ -275,7 +277,7 @@ export default function ReceptionsPage() {
         quantity_received: item.quantity_received,
         unit_price: item.unit_price,
       })),
-    })
+    }, companySettings)
   }
 
   // Handle purchase order selection - auto-fill items

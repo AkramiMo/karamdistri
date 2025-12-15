@@ -47,6 +47,7 @@ import { Plus, Search, Eye, ShoppingCart, Trash2, FileText, Truck, Download, Use
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { generateInvoicePDF, generateDeliveryNotePDF } from '@/lib/pdf/invoice'
+import { useCompanySettings } from '@/hooks/useCompanySettings'
 import { cn } from '@/lib/utils'
 
 interface OrderItemDB {
@@ -146,6 +147,7 @@ export default function CommandesPage() {
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [viewingOrder, setViewingOrder] = useState<Order | null>(null)
   const supabase = createClient()
+  const { companySettings } = useCompanySettings()
 
   const [formData, setFormData] = useState({
     client_id: '',
@@ -365,7 +367,7 @@ export default function CommandesPage() {
       })),
     }
 
-    generateInvoicePDF(pdfOrder)
+    generateInvoicePDF(pdfOrder, companySettings)
   }
 
   const handleGenerateDeliveryNote = (order: Order) => {
@@ -404,7 +406,7 @@ export default function CommandesPage() {
       })),
     }
 
-    generateDeliveryNotePDF(pdfOrder)
+    generateDeliveryNotePDF(pdfOrder, companySettings)
   }
 
   const updateOrderStatus = async (orderId: string, newStatus: string) => {
