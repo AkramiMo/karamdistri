@@ -28,12 +28,26 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Search, Eye, ShoppingCart, Trash2, FileText, Truck, Download, Users, Package } from 'lucide-react'
+import { Plus, Search, Eye, ShoppingCart, Trash2, FileText, Truck, Download, Users, Package, Check, ChevronsUpDown } from 'lucide-react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { generateInvoicePDF, generateDeliveryNotePDF } from '@/lib/pdf/invoice'
+import { cn } from '@/lib/utils'
 
 interface OrderItemDB {
   id: string
@@ -142,6 +156,10 @@ export default function CommandesPage() {
   const [orderItems, setOrderItems] = useState<OrderItem[]>([])
   const [selectedArticle, setSelectedArticle] = useState('')
   const [selectedQuantity, setSelectedQuantity] = useState('1')
+
+  // Combobox open states
+  const [clientOpen, setClientOpen] = useState(false)
+  const [articleOpen, setArticleOpen] = useState(false)
 
   const fetchOrders = async () => {
     setIsLoading(true)
@@ -494,21 +512,50 @@ export default function CommandesPage() {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Client *</Label>
-                    <Select
-                      value={formData.client_id}
-                      onValueChange={(value) => setFormData({ ...formData, client_id: value })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Selectionner un client" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {clients.map((client) => (
-                          <SelectItem key={client.id} value={client.id}>
-                            {client.code} - {client.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <Popover open={clientOpen} onOpenChange={setClientOpen}>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          role="combobox"
+                          aria-expanded={clientOpen}
+                          className="w-full justify-between"
+                        >
+                          {formData.client_id
+                            ? clients.find((c) => c.id === formData.client_id)?.name || "Client selectionne"
+                            : "Rechercher un client..."}
+                          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-[400px] p-0">
+                        <Command>
+                          <CommandInput placeholder="Rechercher par nom ou code..." />
+                          <CommandList>
+                            <CommandEmpty>Aucun client trouve.</CommandEmpty>
+                            <CommandGroup>
+                              {clients.map((client) => (
+                                <CommandItem
+                                  key={client.id}
+                                  value={`${client.code} ${client.name}`}
+                                  onSelect={() => {
+                                    setFormData({ ...formData, client_id: client.id })
+                                    setClientOpen(false)
+                                  }}
+                                >
+                                  <Check
+                                    className={cn(
+                                      "mr-2 h-4 w-4",
+                                      formData.client_id === client.id ? "opacity-100" : "opacity-0"
+                                    )}
+                                  />
+                                  <span className="font-medium">{client.code}</span>
+                                  <span className="ml-2 text-gray-600">{client.name}</span>
+                                </CommandItem>
+                              ))}
+                            </CommandGroup>
+                          </CommandList>
+                        </Command>
+                      </PopoverContent>
+                    </Popover>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="order_date">Date de commande</Label>
@@ -541,23 +588,62 @@ export default function CommandesPage() {
                     )}
                   </h3>
                   <div className="flex gap-2 mb-4">
-                    <Select value={selectedArticle} onValueChange={setSelectedArticle}>
-                      <SelectTrigger className="flex-1">
-                        <SelectValue placeholder="Selectionner un article" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {articles.map((article) => {
-                          const clientPrice = clientPrices.find(cp => cp.article_id === article.id)
-                          const displayPrice = clientPrice ? clientPrice.custom_price : article.price_ht
-                          return (
-                            <SelectItem key={article.id} value={article.id}>
-                              {article.code} - {article.name} ({formatPrice(displayPrice)})
-                              {clientPrice && ' *'}
-                            </SelectItem>
-                          )
-                        })}
-                      </SelectContent>
-                    </Select>
+                    <Popover open={articleOpen} onOpenChange={setArticleOpen}>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          role="combobox"
+                          aria-expanded={articleOpen}
+                          className="flex-1 justify-between"
+                        >
+                          {selectedArticle
+                            ? (() => {
+                                const article = articles.find((a) => a.id === selectedArticle)
+                                if (!article) return "Article selectionne"
+                                const clientPrice = clientPrices.find(cp => cp.article_id === article.id)
+                                const displayPrice = clientPrice ? clientPrice.custom_price : article.price_ht
+                                return `${article.code} - ${article.name} (${formatPrice(displayPrice)})`
+                              })()
+                            : "Rechercher un article..."}
+                          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-[500px] p-0">
+                        <Command>
+                          <CommandInput placeholder="Rechercher par code ou nom..." />
+                          <CommandList>
+                            <CommandEmpty>Aucun article trouve.</CommandEmpty>
+                            <CommandGroup>
+                              {articles.map((article) => {
+                                const clientPrice = clientPrices.find(cp => cp.article_id === article.id)
+                                const displayPrice = clientPrice ? clientPrice.custom_price : article.price_ht
+                                return (
+                                  <CommandItem
+                                    key={article.id}
+                                    value={`${article.code} ${article.name}`}
+                                    onSelect={() => {
+                                      setSelectedArticle(article.id)
+                                      setArticleOpen(false)
+                                    }}
+                                  >
+                                    <Check
+                                      className={cn(
+                                        "mr-2 h-4 w-4",
+                                        selectedArticle === article.id ? "opacity-100" : "opacity-0"
+                                      )}
+                                    />
+                                    <span className="font-medium">{article.code}</span>
+                                    <span className="ml-2 text-gray-600">{article.name}</span>
+                                    <span className="ml-auto text-green-600">{formatPrice(displayPrice)}</span>
+                                    {clientPrice && <Badge className="ml-1 bg-yellow-100 text-yellow-800 text-xs">*</Badge>}
+                                  </CommandItem>
+                                )
+                              })}
+                            </CommandGroup>
+                          </CommandList>
+                        </Command>
+                      </PopoverContent>
+                    </Popover>
                     <Input
                       type="number"
                       min="1"
