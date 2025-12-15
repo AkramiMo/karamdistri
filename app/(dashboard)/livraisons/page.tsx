@@ -1,12 +1,13 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { useEffect, useState, useCallback } from 'react'
+import { useSupabase, queryWithRetry } from '@/hooks/useSupabase'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Table,
   TableBody,
@@ -30,7 +31,21 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Search, Truck, Eye, FileText, TrendingUp } from 'lucide-react'
+import {
+  Plus,
+  Search,
+  Truck,
+  Eye,
+  FileText,
+  TrendingUp,
+  Route,
+  MapPin,
+  Clock,
+  RefreshCw,
+  AlertCircle,
+  CheckCircle2,
+  Printer,
+} from 'lucide-react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { generateDeliveryNotePDF } from '@/lib/pdf/invoice'
@@ -49,6 +64,17 @@ interface DeliveryItem {
   }
 }
 
+interface Client {
+  code: string
+  name: string
+  contact_name: string | null
+  phone: string | null
+  address: string | null
+  city: string | null
+  gps_lat: number | null
+  gps_lng: number | null
+}
+
 interface Delivery {
   id: string
   delivery_number: string
@@ -58,14 +84,7 @@ interface Delivery {
   delivery_date: string | null
   total_ht: number | null
   notes: string | null
-  client?: {
-    code: string
-    name: string
-    contact_name: string | null
-    phone: string | null
-    address: string | null
-    city: string | null
-  }
+  client?: Client
   order?: { order_number: string }
   delivery_items?: DeliveryItem[]
 }
@@ -79,10 +98,27 @@ interface Order {
   client?: { name: string }
 }
 
-interface Client {
+interface ClientSimple {
   id: string
   code: string
   name: string
+}
+
+interface OptimizedDelivery {
+  id: string
+  delivery_number: string
+  client_name: string
+  client_code: string
+  address: string
+  city: string
+  location: { latitude: number; longitude: number }
+  total_ht: number
+}
+
+interface OptimizedRoute {
+  deliveries: OptimizedDelivery[]
+  totalDistance: number
+  totalDuration: number
 }
 
 const statusColors: Record<string, string> = {
@@ -104,14 +140,23 @@ const statusLabels: Record<string, string> = {
 export default function LivraisonsPage() {
   const [deliveries, setDeliveries] = useState<Delivery[]>([])
   const [orders, setOrders] = useState<Order[]>([])
-  const [clients, setClients] = useState<Client[]>([])
+  const [clients, setClients] = useState<ClientSimple[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
+  const [dateFilter, setDateFilter] = useState<string>('')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [viewDelivery, setViewDelivery] = useState<Delivery | null>(null)
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
-  const supabase = createClient()
+
+  // Route optimization state
+  const [selectedDeliveries, setSelectedDeliveries] = useState<Set<string>>(new Set())
+  const [isOptimizing, setIsOptimizing] = useState(false)
+  const [optimizedRoute, setOptimizedRoute] = useState<OptimizedRoute | null>(null)
+  const [isRouteDialogOpen, setIsRouteDialogOpen] = useState(false)
+
+  const supabase = useSupabase()
 
   const [formData, setFormData] = useState({
     order_id: '',
@@ -120,57 +165,69 @@ export default function LivraisonsPage() {
     notes: '',
   })
 
-  const fetchDeliveries = async () => {
+  const fetchData = useCallback(async () => {
     setIsLoading(true)
-    const { data, error } = await supabase
-      .from('deliveries')
-      .select(`
-        *,
-        client:clients(code, name, contact_name, phone, address, city),
-        order:orders(order_number),
-        delivery_items(
-          id,
-          article_id,
-          quantity_ordered,
-          quantity_delivered,
-          quantity_returned,
-          unit_price,
-          article:articles(code, name, description)
-        )
-      `)
-      .order('delivery_date', { ascending: false })
+    setLoadError(null)
 
-    if (error) {
-      console.error('Error fetching deliveries:', error)
-    } else {
-      setDeliveries(data || [])
+    try {
+      // Parallel fetching with retry logic
+      const [deliveriesResult, ordersResult, clientsResult] = await Promise.all([
+        queryWithRetry(() =>
+          supabase
+            .from('deliveries')
+            .select(`
+              *,
+              client:clients(code, name, contact_name, phone, address, city, gps_lat, gps_lng),
+              order:orders(order_number),
+              delivery_items(
+                id,
+                article_id,
+                quantity_ordered,
+                quantity_delivered,
+                quantity_returned,
+                unit_price,
+                article:articles(code, name, description)
+              )
+            `)
+            .order('delivery_date', { ascending: false })
+            .limit(100)
+        ),
+        queryWithRetry(() =>
+          supabase
+            .from('orders')
+            .select('id, order_number, client_id, status, total_ht, client:clients(name)')
+            .in('status', ['confirmed', 'in_progress'])
+            .order('order_date', { ascending: false })
+            .limit(50)
+        ),
+        queryWithRetry(() =>
+          supabase
+            .from('clients')
+            .select('id, code, name')
+            .eq('is_active', true)
+            .order('name')
+            .limit(200)
+        ),
+      ])
+
+      if (deliveriesResult.error) {
+        throw new Error('Erreur lors du chargement des livraisons')
+      }
+
+      setDeliveries((deliveriesResult.data as Delivery[]) || [])
+      setOrders((ordersResult.data as Order[]) || [])
+      setClients((clientsResult.data as ClientSimple[]) || [])
+    } catch (error) {
+      console.error('Error fetching data:', error)
+      setLoadError(error instanceof Error ? error.message : 'Erreur de chargement')
+    } finally {
+      setIsLoading(false)
     }
-    setIsLoading(false)
-  }
-
-  const fetchOrders = async () => {
-    const { data } = await supabase
-      .from('orders')
-      .select('id, order_number, client_id, status, total_ht, client:clients(name)')
-      .in('status', ['confirmed', 'in_progress'])
-      .order('order_date', { ascending: false })
-    setOrders(data || [])
-  }
-
-  const fetchClients = async () => {
-    const { data } = await supabase
-      .from('clients')
-      .select('id, code, name')
-      .eq('is_active', true)
-      .order('name')
-    setClients(data || [])
-  }
+  }, [supabase])
 
   useEffect(() => {
-    fetchDeliveries()
-    fetchOrders()
-    fetchClients()
-  }, [])
+    fetchData()
+  }, [fetchData])
 
   const generateDeliveryNumber = () => {
     const date = new Date()
@@ -217,7 +274,7 @@ export default function LivraisonsPage() {
       return
     }
 
-    fetchDeliveries()
+    fetchData()
     setIsDialogOpen(false)
     resetForm()
   }
@@ -248,7 +305,6 @@ export default function LivraisonsPage() {
     }
 
     try {
-      // Transform delivery data for PDF generation
       const orderData = {
         id: delivery.id,
         order_number: delivery.delivery_number,
@@ -295,8 +351,161 @@ export default function LivraisonsPage() {
     if (error) {
       console.error('Error updating status:', error)
     } else {
-      fetchDeliveries()
+      fetchData()
       setIsViewDialogOpen(false)
+    }
+  }
+
+  // Selection handlers
+  const toggleDeliverySelection = (deliveryId: string) => {
+    const newSelected = new Set(selectedDeliveries)
+    if (newSelected.has(deliveryId)) {
+      newSelected.delete(deliveryId)
+    } else {
+      newSelected.add(deliveryId)
+    }
+    setSelectedDeliveries(newSelected)
+  }
+
+  const selectAllPending = () => {
+    const pendingIds = filteredDeliveries
+      .filter(d => d.status === 'pending' || d.status === 'in_progress')
+      .map(d => d.id)
+    setSelectedDeliveries(new Set(pendingIds))
+  }
+
+  const clearSelection = () => {
+    setSelectedDeliveries(new Set())
+    setOptimizedRoute(null)
+  }
+
+  // Route optimization
+  const optimizeRoute = async () => {
+    if (selectedDeliveries.size === 0) {
+      alert('Veuillez selectionner au moins une livraison')
+      return
+    }
+
+    setIsOptimizing(true)
+
+    try {
+      const selectedList = deliveries.filter(d => selectedDeliveries.has(d.id))
+
+      // Prepare data for optimization
+      const deliveriesData = selectedList.map(d => ({
+        id: d.id,
+        delivery_number: d.delivery_number,
+        client_name: d.client?.name || '',
+        client_code: d.client?.code || '',
+        address: d.client?.address || '',
+        city: d.client?.city || '',
+        location: {
+          latitude: d.client?.gps_lat || 0,
+          longitude: d.client?.gps_lng || 0,
+        },
+        total_ht: d.total_ht || 0,
+      }))
+
+      const response = await fetch('/api/route-optimization', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deliveries: deliveriesData }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Erreur lors de l\'optimisation')
+      }
+
+      const result = await response.json()
+      setOptimizedRoute(result)
+      setIsRouteDialogOpen(true)
+    } catch (error) {
+      console.error('Route optimization error:', error)
+      alert('Erreur lors de l\'optimisation du trajet')
+    } finally {
+      setIsOptimizing(false)
+    }
+  }
+
+  // Generate daily route sheet
+  const generateRouteSheet = () => {
+    if (!optimizedRoute) return
+
+    // Create printable HTML
+    const today = new Date()
+    const dateStr = format(today, 'dd MMMM yyyy', { locale: fr })
+
+    const printContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Fiche de Tournee - ${dateStr}</title>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 20px; }
+          h1 { color: #228B22; border-bottom: 2px solid #228B22; padding-bottom: 10px; }
+          .header { display: flex; justify-content: space-between; margin-bottom: 20px; }
+          .summary { background: #f5f5f5; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+          .summary-item { display: inline-block; margin-right: 30px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+          th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+          th { background: #228B22; color: white; }
+          tr:nth-child(even) { background: #f9f9f9; }
+          .order-num { font-weight: bold; color: #228B22; font-size: 18px; }
+          .signature-box { border: 1px solid #ddd; height: 60px; margin-top: 5px; }
+          .footer { margin-top: 30px; text-align: center; color: #666; font-size: 12px; }
+          @media print { body { margin: 0; } }
+        </style>
+      </head>
+      <body>
+        <h1>KARAM Olives & Sauces - Fiche de Tournee</h1>
+        <div class="header">
+          <div><strong>Date:</strong> ${dateStr}</div>
+          <div><strong>Livreur:</strong> _____________________</div>
+        </div>
+        <div class="summary">
+          <div class="summary-item"><strong>Livraisons:</strong> ${optimizedRoute.deliveries.length}</div>
+          <div class="summary-item"><strong>Distance:</strong> ${optimizedRoute.totalDistance} km</div>
+          <div class="summary-item"><strong>Duree estimee:</strong> ${Math.floor(optimizedRoute.totalDuration / 60)}h ${optimizedRoute.totalDuration % 60}min</div>
+          <div class="summary-item"><strong>Total:</strong> ${optimizedRoute.deliveries.reduce((sum, d) => sum + d.total_ht, 0).toFixed(2)} MAD</div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 40px;">#</th>
+              <th>N BL</th>
+              <th>Client</th>
+              <th>Adresse</th>
+              <th>Montant</th>
+              <th style="width: 100px;">Signature</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${optimizedRoute.deliveries.map((d, i) => `
+              <tr>
+                <td class="order-num">${i + 1}</td>
+                <td>${d.delivery_number}</td>
+                <td><strong>${d.client_code}</strong><br/>${d.client_name}</td>
+                <td>${d.address || ''}<br/>${d.city || ''}</td>
+                <td>${d.total_ht.toFixed(2)} MAD</td>
+                <td><div class="signature-box"></div></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        <div class="footer">
+          <p>Document genere le ${format(new Date(), 'dd/MM/yyyy HH:mm', { locale: fr })}</p>
+          <p>KARAM Olives & Sauces - Zone Industrielle, Marrakech</p>
+        </div>
+      </body>
+      </html>
+    `
+
+    // Open print window
+    const printWindow = window.open('', '_blank')
+    if (printWindow) {
+      printWindow.document.write(printContent)
+      printWindow.document.close()
+      printWindow.print()
     }
   }
 
@@ -306,7 +515,8 @@ export default function LivraisonsPage() {
         delivery.client?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
         delivery.client?.code?.toLowerCase().includes(searchTerm.toLowerCase())
       const matchesStatus = statusFilter === 'all' || delivery.status === statusFilter
-      return matchesSearch && matchesStatus
+      const matchesDate = !dateFilter || delivery.delivery_date === dateFilter
+      return matchesSearch && matchesStatus && matchesDate
     }
   )
 
@@ -332,95 +542,121 @@ export default function LivraisonsPage() {
             <p className="text-gray-500">Gerez vos bons de livraison</p>
           </div>
 
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <ProtectedModule module="livraisons" action="create">
+          <div className="flex gap-2">
+            {selectedDeliveries.size > 0 && (
+              <>
                 <Button
-                  className="bg-green-600 hover:bg-green-700"
-                  onClick={() => {
-                    resetForm()
-                    setIsDialogOpen(true)
-                  }}
+                  variant="outline"
+                  onClick={clearSelection}
+                  className="gap-2"
                 >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Nouveau BL
+                  Annuler ({selectedDeliveries.size})
                 </Button>
-              </ProtectedModule>
-            </DialogTrigger>
-            <DialogContent className="max-w-lg">
-              <DialogHeader>
-                <DialogTitle>Nouveau bon de livraison</DialogTitle>
-              </DialogHeader>
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="space-y-2">
-                  <Label>Commande (optionnel)</Label>
-                  <Select
-                    value={formData.order_id}
-                    onValueChange={handleOrderSelect}
+                <Button
+                  onClick={optimizeRoute}
+                  disabled={isOptimizing}
+                  className="bg-blue-600 hover:bg-blue-700 gap-2"
+                >
+                  {isOptimizing ? (
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Route className="h-4 w-4" />
+                  )}
+                  Optimiser trajet
+                </Button>
+              </>
+            )}
+
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <DialogTrigger asChild>
+                <ProtectedModule module="livraisons" action="create">
+                  <Button
+                    className="bg-green-600 hover:bg-green-700"
+                    onClick={() => {
+                      resetForm()
+                      setIsDialogOpen(true)
+                    }}
                   >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Selectionner une commande" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {orders.map((order) => (
-                        <SelectItem key={order.id} value={order.id}>
-                          {order.order_number} - {order.client?.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Client *</Label>
-                  <Select
-                    value={formData.client_id}
-                    onValueChange={(value) => setFormData({ ...formData, client_id: value })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Selectionner un client" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {clients.map((client) => (
-                        <SelectItem key={client.id} value={client.id}>
-                          {client.code} - {client.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="delivery_date">Date de livraison</Label>
-                  <Input
-                    id="delivery_date"
-                    type="date"
-                    value={formData.delivery_date}
-                    onChange={(e) => setFormData({ ...formData, delivery_date: e.target.value })}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="notes">Notes</Label>
-                  <Input
-                    id="notes"
-                    value={formData.notes}
-                    onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                    placeholder="Notes sur la livraison"
-                  />
-                </div>
-
-                <div className="flex justify-end gap-2 pt-4">
-                  <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                    Annuler
+                    <Plus className="mr-2 h-4 w-4" />
+                    Nouveau BL
                   </Button>
-                  <Button type="submit" className="bg-green-600 hover:bg-green-700">
-                    Creer le BL
-                  </Button>
-                </div>
-              </form>
-            </DialogContent>
-          </Dialog>
+                </ProtectedModule>
+              </DialogTrigger>
+              <DialogContent className="max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>Nouveau bon de livraison</DialogTitle>
+                </DialogHeader>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                  <div className="space-y-2">
+                    <Label>Commande (optionnel)</Label>
+                    <Select
+                      value={formData.order_id}
+                      onValueChange={handleOrderSelect}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Selectionner une commande" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {orders.map((order) => (
+                          <SelectItem key={order.id} value={order.id}>
+                            {order.order_number} - {order.client?.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Client *</Label>
+                    <Select
+                      value={formData.client_id}
+                      onValueChange={(value) => setFormData({ ...formData, client_id: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Selectionner un client" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {clients.map((client) => (
+                          <SelectItem key={client.id} value={client.id}>
+                            {client.code} - {client.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="delivery_date">Date de livraison</Label>
+                    <Input
+                      id="delivery_date"
+                      type="date"
+                      value={formData.delivery_date}
+                      onChange={(e) => setFormData({ ...formData, delivery_date: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="notes">Notes</Label>
+                    <Input
+                      id="notes"
+                      value={formData.notes}
+                      onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                      placeholder="Notes sur la livraison"
+                    />
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-4">
+                    <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                      Annuler
+                    </Button>
+                    <Button type="submit" className="bg-green-600 hover:bg-green-700">
+                      Creer le BL
+                    </Button>
+                  </div>
+                </form>
+              </DialogContent>
+            </Dialog>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -440,7 +676,7 @@ export default function LivraisonsPage() {
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-gray-600">
-                En cours
+                En attente
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -480,7 +716,7 @@ export default function LivraisonsPage() {
 
         <Card>
           <CardHeader>
-            <div className="flex items-center gap-4">
+            <div className="flex flex-col md:flex-row items-start md:items-center gap-4">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <Input
@@ -490,6 +726,13 @@ export default function LivraisonsPage() {
                   className="pl-10"
                 />
               </div>
+              <Input
+                type="date"
+                value={dateFilter}
+                onChange={(e) => setDateFilter(e.target.value)}
+                className="w-44"
+                placeholder="Filtrer par date"
+              />
               <Select value={statusFilter} onValueChange={setStatusFilter}>
                 <SelectTrigger className="w-48">
                   <SelectValue placeholder="Filtrer par statut" />
@@ -503,22 +746,51 @@ export default function LivraisonsPage() {
                   <SelectItem value="returned">Retournee</SelectItem>
                 </SelectContent>
               </Select>
+              <Button variant="outline" onClick={selectAllPending} className="gap-2">
+                <CheckCircle2 className="h-4 w-4" />
+                Selectionner en attente
+              </Button>
+              <Button variant="ghost" size="icon" onClick={fetchData} title="Actualiser">
+                <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+              </Button>
             </div>
           </CardHeader>
           <CardContent>
-            {isLoading ? (
-              <div className="text-center py-8 text-gray-500">Chargement...</div>
+            {loadError ? (
+              <div className="text-center py-8">
+                <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
+                <p className="text-red-600 mb-4">{loadError}</p>
+                <Button onClick={fetchData} variant="outline">
+                  Reessayer
+                </Button>
+              </div>
+            ) : isLoading ? (
+              <div className="text-center py-8">
+                <RefreshCw className="h-8 w-8 text-gray-400 mx-auto mb-4 animate-spin" />
+                <p className="text-gray-500">Chargement...</p>
+              </div>
             ) : filteredDeliveries.length === 0 ? (
               <div className="text-center py-8 text-gray-500">
-                Aucune livraison pour le moment
+                Aucune livraison trouvee
               </div>
             ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-10">
+                      <Checkbox
+                        checked={selectedDeliveries.size === filteredDeliveries.length && filteredDeliveries.length > 0}
+                        onCheckedChange={(checked) => {
+                          if (checked) {
+                            setSelectedDeliveries(new Set(filteredDeliveries.map(d => d.id)))
+                          } else {
+                            setSelectedDeliveries(new Set())
+                          }
+                        }}
+                      />
+                    </TableHead>
                     <TableHead>N BL</TableHead>
                     <TableHead>Client</TableHead>
-                    <TableHead>Commande</TableHead>
                     <TableHead>Date</TableHead>
                     <TableHead>Articles</TableHead>
                     <TableHead>Statut</TableHead>
@@ -528,15 +800,26 @@ export default function LivraisonsPage() {
                 </TableHeader>
                 <TableBody>
                   {filteredDeliveries.map((delivery) => (
-                    <TableRow key={delivery.id}>
+                    <TableRow
+                      key={delivery.id}
+                      className={selectedDeliveries.has(delivery.id) ? 'bg-blue-50' : ''}
+                    >
+                      <TableCell>
+                        <Checkbox
+                          checked={selectedDeliveries.has(delivery.id)}
+                          onCheckedChange={() => toggleDeliverySelection(delivery.id)}
+                        />
+                      </TableCell>
                       <TableCell className="font-medium">{delivery.delivery_number}</TableCell>
                       <TableCell>
                         <div>
                           <span className="font-medium">{delivery.client?.code}</span>
                           <span className="text-gray-500 ml-2">{delivery.client?.name}</span>
+                          {delivery.client?.gps_lat && (
+                            <MapPin className="inline h-3 w-3 text-green-500 ml-1" title="GPS disponible" />
+                          )}
                         </div>
                       </TableCell>
-                      <TableCell>{delivery.order?.order_number || '-'}</TableCell>
                       <TableCell>
                         {delivery.delivery_date
                           ? format(new Date(delivery.delivery_date), 'dd/MM/yyyy', { locale: fr })
@@ -580,6 +863,10 @@ export default function LivraisonsPage() {
                 </TableBody>
               </Table>
             )}
+            <div className="mt-4 text-sm text-gray-500 text-right">
+              {filteredDeliveries.length} livraison(s) affichee(s)
+              {selectedDeliveries.size > 0 && ` - ${selectedDeliveries.size} selectionnee(s)`}
+            </div>
           </CardContent>
         </Card>
 
@@ -594,7 +881,6 @@ export default function LivraisonsPage() {
             </DialogHeader>
             {viewDelivery && (
               <div className="space-y-6">
-                {/* Delivery Info */}
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <h3 className="font-semibold text-gray-700">Client</h3>
@@ -620,10 +906,6 @@ export default function LivraisonsPage() {
                           ? format(new Date(viewDelivery.delivery_date), 'dd MMMM yyyy', { locale: fr })
                           : '-'}
                       </p>
-                      <p className="text-sm">
-                        <span className="text-gray-600">Commande:</span>{' '}
-                        {viewDelivery.order?.order_number || 'Directe'}
-                      </p>
                       <div className="flex items-center gap-2">
                         <span className="text-gray-600 text-sm">Statut:</span>
                         <Badge className={statusColors[viewDelivery.status]}>
@@ -634,7 +916,6 @@ export default function LivraisonsPage() {
                   </div>
                 </div>
 
-                {/* Items Table */}
                 <div>
                   <h3 className="font-semibold text-gray-700 mb-2">Articles livres</h3>
                   <Table>
@@ -671,7 +952,6 @@ export default function LivraisonsPage() {
                   </Table>
                 </div>
 
-                {/* Totals */}
                 <div className="flex justify-end">
                   <div className="w-64 space-y-2">
                     <div className="flex justify-between text-sm">
@@ -689,18 +969,9 @@ export default function LivraisonsPage() {
                   </div>
                 </div>
 
-                {/* Notes */}
-                {viewDelivery.notes && (
-                  <div>
-                    <h3 className="font-semibold text-gray-700 mb-2">Notes</h3>
-                    <p className="text-gray-600 bg-gray-50 p-3 rounded-lg">{viewDelivery.notes}</p>
-                  </div>
-                )}
-
-                {/* Actions */}
                 <div className="flex justify-between items-center pt-4 border-t">
                   <div className="flex gap-2">
-                    <Label className="text-sm text-gray-600">Changer le statut:</Label>
+                    <Label className="text-sm text-gray-600">Statut:</Label>
                     <Select
                       value={viewDelivery.status}
                       onValueChange={(value) => handleStatusChange(viewDelivery.id, value)}
@@ -733,6 +1004,96 @@ export default function LivraisonsPage() {
                       Fermer
                     </Button>
                   </div>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+
+        {/* Optimized Route Dialog */}
+        <Dialog open={isRouteDialogOpen} onOpenChange={setIsRouteDialogOpen}>
+          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Route className="h-5 w-5 text-blue-600" />
+                Trajet Optimise - Fiche du Jour
+              </DialogTitle>
+            </DialogHeader>
+            {optimizedRoute && (
+              <div className="space-y-6">
+                {/* Summary */}
+                <div className="grid grid-cols-4 gap-4">
+                  <div className="bg-blue-50 p-4 rounded-lg text-center">
+                    <Truck className="h-8 w-8 text-blue-600 mx-auto mb-2" />
+                    <p className="text-2xl font-bold text-blue-600">{optimizedRoute.deliveries.length}</p>
+                    <p className="text-sm text-gray-600">Livraisons</p>
+                  </div>
+                  <div className="bg-green-50 p-4 rounded-lg text-center">
+                    <MapPin className="h-8 w-8 text-green-600 mx-auto mb-2" />
+                    <p className="text-2xl font-bold text-green-600">{optimizedRoute.totalDistance} km</p>
+                    <p className="text-sm text-gray-600">Distance</p>
+                  </div>
+                  <div className="bg-orange-50 p-4 rounded-lg text-center">
+                    <Clock className="h-8 w-8 text-orange-600 mx-auto mb-2" />
+                    <p className="text-2xl font-bold text-orange-600">
+                      {Math.floor(optimizedRoute.totalDuration / 60)}h {optimizedRoute.totalDuration % 60}min
+                    </p>
+                    <p className="text-sm text-gray-600">Duree estimee</p>
+                  </div>
+                  <div className="bg-purple-50 p-4 rounded-lg text-center">
+                    <TrendingUp className="h-8 w-8 text-purple-600 mx-auto mb-2" />
+                    <p className="text-2xl font-bold text-purple-600">
+                      {formatPrice(optimizedRoute.deliveries.reduce((sum, d) => sum + d.total_ht, 0))}
+                    </p>
+                    <p className="text-sm text-gray-600">Total</p>
+                  </div>
+                </div>
+
+                {/* Route Order */}
+                <div>
+                  <h3 className="font-semibold text-gray-700 mb-3">Ordre de livraison optimise</h3>
+                  <div className="space-y-2">
+                    {optimizedRoute.deliveries.map((delivery, index) => (
+                      <div
+                        key={delivery.id}
+                        className="flex items-center gap-4 p-3 bg-gray-50 rounded-lg"
+                      >
+                        <div className="w-10 h-10 bg-blue-600 text-white rounded-full flex items-center justify-center font-bold">
+                          {index + 1}
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">{delivery.delivery_number}</span>
+                            <Badge variant="outline">{delivery.client_code}</Badge>
+                          </div>
+                          <p className="text-sm text-gray-600">{delivery.client_name}</p>
+                          <p className="text-xs text-gray-500">
+                            {delivery.address && `${delivery.address}, `}{delivery.city}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-semibold text-green-600">{formatPrice(delivery.total_ht)}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex justify-end gap-3 pt-4 border-t">
+                  <Button
+                    variant="outline"
+                    onClick={() => setIsRouteDialogOpen(false)}
+                  >
+                    Fermer
+                  </Button>
+                  <Button
+                    onClick={generateRouteSheet}
+                    className="bg-blue-600 hover:bg-blue-700 gap-2"
+                  >
+                    <Printer className="h-4 w-4" />
+                    Imprimer Fiche du Jour
+                  </Button>
                 </div>
               </div>
             )}
