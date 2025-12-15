@@ -426,7 +426,7 @@ export default function CommandesPage() {
                 </Button>
               </ProtectedModule>
             </DialogTrigger>
-            <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+            <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Nouvelle commande</DialogTitle>
               </DialogHeader>
@@ -747,7 +747,7 @@ export default function CommandesPage() {
 
         {/* View Order Dialog */}
         <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
-          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-3 text-xl">
                 <ShoppingCart className="h-6 w-6 text-green-600" />
