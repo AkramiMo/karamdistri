@@ -162,7 +162,7 @@ export default function FournisseursPage() {
               Nouveau fournisseur
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-w-2xl">
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>
                 {editingSupplier ? 'Modifier le fournisseur' : 'Nouveau fournisseur'}

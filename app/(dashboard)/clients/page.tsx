@@ -582,7 +582,7 @@ export default function ClientsPage() {
 
         {/* View Client Dialog */}
         <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
-          <DialogContent className="max-w-2xl">
+          <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Détails du client</DialogTitle>
             </DialogHeader>
