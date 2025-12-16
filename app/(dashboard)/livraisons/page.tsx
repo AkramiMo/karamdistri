@@ -124,6 +124,7 @@ interface OptimizedRoute {
   deliveries: OptimizedDelivery[]
   totalDistance: number
   totalDuration: number
+  usingGoogle?: boolean
 }
 
 const statusColors: Record<string, string> = {
@@ -1231,6 +1232,15 @@ export default function LivraisonsPage() {
                     </p>
                     <p className="text-sm text-gray-600">Total</p>
                   </div>
+                </div>
+
+                {/* Google API indicator */}
+                <div className={`text-center text-sm py-2 px-4 rounded-lg ${optimizedRoute.usingGoogle ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                  {optimizedRoute.usingGoogle ? (
+                    <span>Calcul precis via Google Maps API</span>
+                  ) : (
+                    <span>Calcul approximatif (ajoutez GOOGLE_MAPS_API_KEY pour plus de precision)</span>
+                  )}
                 </div>
 
                 {/* Route Order */}
