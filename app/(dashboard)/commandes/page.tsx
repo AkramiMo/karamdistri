@@ -306,6 +306,13 @@ export default function CommandesPage() {
 
     if (orderError) {
       console.error('Error creating order:', orderError)
+      alert(`Erreur lors de la création: ${orderError.message || orderError.code || JSON.stringify(orderError)}`)
+      return
+    }
+
+    if (!orderData) {
+      console.error('No order data returned')
+      alert('Erreur: Aucune donnée retournée lors de la création')
       return
     }
 
@@ -529,7 +536,7 @@ export default function CommandesPage() {
                           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                         </Button>
                       </PopoverTrigger>
-                      <PopoverContent className="w-[400px] p-0">
+                      <PopoverContent className="w-[400px] p-0" align="start">
                         <Command>
                           <CommandInput placeholder="Rechercher par nom ou code..." />
                           <CommandList>
@@ -614,7 +621,7 @@ export default function CommandesPage() {
                           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                         </Button>
                       </PopoverTrigger>
-                      <PopoverContent className="w-[500px] p-0">
+                      <PopoverContent className="w-[500px] p-0" align="start">
                         <Command>
                           <CommandInput placeholder="Rechercher par code ou nom..." />
                           <CommandList>
@@ -712,7 +719,7 @@ export default function CommandesPage() {
                   )}
                 </div>
 
-                <div className="flex justify-end gap-2 pt-4">
+                <div className="flex justify-end gap-2 pt-4 border-t mt-4 relative z-50">
                   <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                     Annuler
                   </Button>
