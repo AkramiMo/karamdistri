@@ -30,49 +30,50 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Search, Warehouse, AlertTriangle, ArrowUpCircle, ArrowDownCircle, Package } from 'lucide-react'
+import { Plus, Search, Package, AlertTriangle, ArrowUpCircle, ArrowDownCircle } from 'lucide-react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import Link from 'next/link'
 
-interface StockItem {
+interface SupplyStockItem {
   id: string
-  article_id: string
+  supply_id: string
   quantity: number
   warehouse: string
   updated_at: string
-  article?: { code: string; name: string; min_stock: number }
+  supply?: { code: string; name: string; min_stock: number; unit: string }
 }
 
-interface StockMovement {
+interface SupplyStockMovement {
   id: string
-  article_id: string
+  supply_id: string
   quantity: number
   movement_type: string
   reference_type: string | null
   notes: string | null
   created_at: string
-  article?: { code: string; name: string }
+  supply?: { code: string; name: string }
 }
 
-interface Article {
+interface Supply {
   id: string
   code: string
   name: string
   min_stock: number
+  unit: string
 }
 
-export default function StocksPage() {
-  const [stocks, setStocks] = useState<StockItem[]>([])
-  const [movements, setMovements] = useState<StockMovement[]>([])
-  const [articles, setArticles] = useState<Article[]>([])
+export default function StockFournituresPage() {
+  const [stocks, setStocks] = useState<SupplyStockItem[]>([])
+  const [movements, setMovements] = useState<SupplyStockMovement[]>([])
+  const [supplies, setSupplies] = useState<Supply[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const supabase = createClient()
 
   const [formData, setFormData] = useState({
-    article_id: '',
+    supply_id: '',
     quantity: '',
     movement_type: 'in',
     reference_type: '',
@@ -81,16 +82,18 @@ export default function StocksPage() {
 
   const fetchStocks = async () => {
     setIsLoading(true)
-    const { data, error } = await supabase
-      .from('stock')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (supabase.from('supply_stock') as any)
       .select(`
         *,
-        article:articles(code, name, min_stock)
+        supply:supplies(code, name, min_stock, unit)
       `)
       .order('updated_at', { ascending: false })
 
     if (error) {
-      console.error('Error fetching stocks:', error)
+      console.error('Error fetching supply stocks:', error)
+      // If table doesn't exist, show empty
+      setStocks([])
     } else {
       setStocks(data || [])
     }
@@ -98,11 +101,11 @@ export default function StocksPage() {
   }
 
   const fetchMovements = async () => {
-    const { data } = await supabase
-      .from('stock_movements')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await (supabase.from('supply_stock_movements') as any)
       .select(`
         *,
-        article:articles(code, name)
+        supply:supplies(code, name)
       `)
       .order('created_at', { ascending: false })
       .limit(50)
@@ -110,26 +113,26 @@ export default function StocksPage() {
     setMovements(data || [])
   }
 
-  const fetchArticles = async () => {
+  const fetchSupplies = async () => {
     const { data } = await supabase
-      .from('articles')
-      .select('id, code, name, min_stock')
+      .from('supplies')
+      .select('id, code, name, min_stock, unit')
       .eq('is_active', true)
       .order('name')
-    setArticles(data || [])
+    setSupplies((data as Supply[]) || [])
   }
 
   useEffect(() => {
     fetchStocks()
     fetchMovements()
-    fetchArticles()
+    fetchSupplies()
   }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
-    if (!formData.article_id || !formData.quantity) {
-      alert('Veuillez semplir tous les champs obligatoires')
+    if (!formData.supply_id || !formData.quantity) {
+      alert('Veuillez remplir tous les champs obligatoires')
       return
     }
 
@@ -137,8 +140,8 @@ export default function StocksPage() {
 
     // Create stock movement
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { error: movementError } = await (supabase.from('stock_movements') as any).insert([{
-      article_id: formData.article_id,
+    const { error: movementError } = await (supabase.from('supply_stock_movements') as any).insert([{
+      supply_id: formData.supply_id,
       quantity: formData.movement_type === 'out' ? -quantity : quantity,
       movement_type: formData.movement_type,
       reference_type: formData.reference_type || null,
@@ -151,7 +154,7 @@ export default function StocksPage() {
     }
 
     // Update or create stock record
-    const existingStock = stocks.find(s => s.article_id === formData.article_id)
+    const existingStock = stocks.find(s => s.supply_id === formData.supply_id)
 
     if (existingStock) {
       const newQuantity = formData.movement_type === 'out'
@@ -159,13 +162,13 @@ export default function StocksPage() {
         : existingStock.quantity + quantity
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabase.from('stock') as any)
+      await (supabase.from('supply_stock') as any)
         .update({ quantity: newQuantity, updated_at: new Date().toISOString() })
         .eq('id', existingStock.id)
     } else {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabase.from('stock') as any).insert([{
-        article_id: formData.article_id,
+      await (supabase.from('supply_stock') as any).insert([{
+        supply_id: formData.supply_id,
         quantity: formData.movement_type === 'out' ? -quantity : quantity,
         warehouse: 'principal',
       }])
@@ -179,7 +182,7 @@ export default function StocksPage() {
 
   const resetForm = () => {
     setFormData({
-      article_id: '',
+      supply_id: '',
       quantity: '',
       movement_type: 'in',
       reference_type: '',
@@ -189,13 +192,13 @@ export default function StocksPage() {
 
   const filteredStocks = stocks.filter(
     (stock) =>
-      stock.article?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      stock.article?.code?.toLowerCase().includes(searchTerm.toLowerCase())
+      stock.supply?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      stock.supply?.code?.toLowerCase().includes(searchTerm.toLowerCase())
   )
 
   // Calculate stats
-  const totalArticles = stocks.length
-  const lowStock = stocks.filter(s => s.article && s.quantity <= s.article.min_stock && s.quantity > 0).length
+  const totalSupplies = stocks.length
+  const lowStock = stocks.filter(s => s.supply && s.quantity <= s.supply.min_stock && s.quantity > 0).length
   const outOfStock = stocks.filter(s => s.quantity <= 0).length
 
   return (
@@ -203,126 +206,124 @@ export default function StocksPage() {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Stock Articles</h1>
-            <p className="text-gray-500">Gérez votre inventaire d'articles pour la vente</p>
+            <h1 className="text-2xl font-bold text-gray-900">Stock Fournitures</h1>
+            <p className="text-gray-500">Gérez votre stock interne de fournitures</p>
           </div>
 
           <div className="flex gap-2">
-            <Link href="/stocks/fournitures">
-              <Button variant="outline" className="gap-2">
-                <Package className="h-4 w-4" />
-                Stock Fournitures
+            <Link href="/stocks">
+              <Button variant="outline">
+                Stock Articles
               </Button>
             </Link>
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <ProtectedModule module="stocks" action="create">
-                <Button
-                  className="bg-green-600 hover:bg-green-700"
-                  onClick={() => {
-                    resetForm()
-                    setIsDialogOpen(true)
-                  }}
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Mouvement de stock
-                </Button>
-              </ProtectedModule>
-            </DialogTrigger>
-            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>Nouveau mouvement de stock</DialogTitle>
-              </DialogHeader>
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="space-y-2">
-                  <Label>Article *</Label>
-                  <Select
-                    value={formData.article_id}
-                    onValueChange={(value) => setFormData({ ...formData, article_id: value })}
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <DialogTrigger asChild>
+                <ProtectedModule module="stocks" action="create">
+                  <Button
+                    className="bg-orange-600 hover:bg-orange-700"
+                    onClick={() => {
+                      resetForm()
+                      setIsDialogOpen(true)
+                    }}
                   >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Sélectionner un article" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {articles.map((article) => (
-                        <SelectItem key={article.id} value={article.id}>
-                          {article.code} - {article.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
+                    <Plus className="mr-2 h-4 w-4" />
+                    Mouvement de stock
+                  </Button>
+                </ProtectedModule>
+              </DialogTrigger>
+              <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>Nouveau mouvement de stock fournitures</DialogTitle>
+                </DialogHeader>
+                <form onSubmit={handleSubmit} className="space-y-4">
                   <div className="space-y-2">
-                    <Label>Type de mouvement</Label>
+                    <Label>Fourniture *</Label>
                     <Select
-                      value={formData.movement_type}
-                      onValueChange={(value) => setFormData({ ...formData, movement_type: value })}
+                      value={formData.supply_id}
+                      onValueChange={(value) => setFormData({ ...formData, supply_id: value })}
                     >
                       <SelectTrigger>
-                        <SelectValue />
+                        <SelectValue placeholder="Sélectionner une fourniture" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="in">Entrée</SelectItem>
-                        <SelectItem value="out">Sortie</SelectItem>
-                        <SelectItem value="adjustment">Ajustement</SelectItem>
+                        {supplies.map((supply) => (
+                          <SelectItem key={supply.id} value={supply.id}>
+                            {supply.code} - {supply.name}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Type de mouvement</Label>
+                      <Select
+                        value={formData.movement_type}
+                        onValueChange={(value) => setFormData({ ...formData, movement_type: value })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="in">Entrée</SelectItem>
+                          <SelectItem value="out">Sortie</SelectItem>
+                          <SelectItem value="adjustment">Ajustement</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="quantity">Quantité *</Label>
+                      <Input
+                        id="quantity"
+                        type="number"
+                        min="1"
+                        value={formData.quantity}
+                        onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
+                        required
+                      />
+                    </div>
+                  </div>
+
                   <div className="space-y-2">
-                    <Label htmlFor="quantity">Quantité *</Label>
+                    <Label>Référence</Label>
+                    <Select
+                      value={formData.reference_type}
+                      onValueChange={(value) => setFormData({ ...formData, reference_type: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Type de référence (optionnel)" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="reception">Réception BC</SelectItem>
+                        <SelectItem value="production">Production</SelectItem>
+                        <SelectItem value="inventaire">Inventaire</SelectItem>
+                        <SelectItem value="autre">Autre</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="notes">Notes</Label>
                     <Input
-                      id="quantity"
-                      type="number"
-                      min="1"
-                      value={formData.quantity}
-                      onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
-                      required
+                      id="notes"
+                      value={formData.notes}
+                      onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                      placeholder="Notes sur le mouvement"
                     />
                   </div>
-                </div>
 
-                <div className="space-y-2">
-                  <Label>Référence</Label>
-                  <Select
-                    value={formData.reference_type}
-                    onValueChange={(value) => setFormData({ ...formData, reference_type: value })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Type de référence (optionnel)" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="commande">Commande</SelectItem>
-                      <SelectItem value="livraison">Livraison</SelectItem>
-                      <SelectItem value="reception">Réception</SelectItem>
-                      <SelectItem value="inventaire">Inventaire</SelectItem>
-                      <SelectItem value="autre">Autre</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="notes">Notes</Label>
-                  <Input
-                    id="notes"
-                    value={formData.notes}
-                    onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                    placeholder="Notes sur le mouvement"
-                  />
-                </div>
-
-                <div className="flex justify-end gap-2 pt-4">
-                  <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                    Annuler
-                  </Button>
-                  <Button type="submit" className="bg-green-600 hover:bg-green-700">
-                    Enregistrer
-                  </Button>
-                </div>
-              </form>
-            </DialogContent>
-          </Dialog>
+                  <div className="flex justify-end gap-2 pt-4">
+                    <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                      Annuler
+                    </Button>
+                    <Button type="submit" className="bg-orange-600 hover:bg-orange-700">
+                      Enregistrer
+                    </Button>
+                  </div>
+                </form>
+              </DialogContent>
+            </Dialog>
           </div>
         </div>
 
@@ -330,13 +331,13 @@ export default function StocksPage() {
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-gray-600">
-                Articles en stock
+                Fournitures en stock
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-2">
-                <Warehouse className="h-8 w-8 text-blue-600" />
-                <span className="text-2xl font-bold">{totalArticles}</span>
+                <Package className="h-8 w-8 text-orange-600" />
+                <span className="text-2xl font-bold">{totalSupplies}</span>
               </div>
             </CardContent>
           </Card>
@@ -368,11 +369,11 @@ export default function StocksPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <Card>
             <CardHeader>
-              <CardTitle>État des stocks</CardTitle>
+              <CardTitle>État des stocks fournitures</CardTitle>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <Input
-                  placeholder="Rechercher un article..."
+                  placeholder="Rechercher une fourniture..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-10 mt-2"
@@ -384,31 +385,35 @@ export default function StocksPage() {
                 <div className="text-center py-8 text-gray-500">Chargement...</div>
               ) : filteredStocks.length === 0 ? (
                 <div className="text-center py-8 text-gray-500">
-                  Aucun article en stock
+                  Aucune fourniture en stock
                 </div>
               ) : (
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Article</TableHead>
+                      <TableHead>Fourniture</TableHead>
                       <TableHead className="text-right">Quantité</TableHead>
+                      <TableHead>Unité</TableHead>
                       <TableHead>Statut</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {filteredStocks.map((stock) => {
-                      const isLow = stock.article && stock.quantity <= stock.article.min_stock && stock.quantity > 0
+                      const isLow = stock.supply && stock.quantity <= stock.supply.min_stock && stock.quantity > 0
                       const isOut = stock.quantity <= 0
                       return (
                         <TableRow key={stock.id}>
                           <TableCell>
                             <div>
-                              <div className="font-medium">{stock.article?.code}</div>
-                              <div className="text-sm text-gray-500">{stock.article?.name}</div>
+                              <div className="font-medium">{stock.supply?.code}</div>
+                              <div className="text-sm text-gray-500">{stock.supply?.name}</div>
                             </div>
                           </TableCell>
                           <TableCell className="text-right font-medium">
                             {stock.quantity}
+                          </TableCell>
+                          <TableCell className="text-gray-500">
+                            {stock.supply?.unit || '-'}
                           </TableCell>
                           <TableCell>
                             {isOut ? (
@@ -447,16 +452,16 @@ export default function StocksPage() {
                         ) : movement.movement_type === 'out' ? (
                           <ArrowDownCircle className="h-5 w-5 text-red-600" />
                         ) : (
-                          <Warehouse className="h-5 w-5 text-blue-600" />
+                          <Package className="h-5 w-5 text-orange-600" />
                         )}
                         <div>
-                          <div className="font-medium text-sm">{movement.article?.name}</div>
+                          <div className="font-medium text-sm">{movement.supply?.name}</div>
                           <div className="text-xs text-gray-500">
                             {format(new Date(movement.created_at), 'dd/MM/yyyy HH:mm', { locale: fr })}
                           </div>
                         </div>
                       </div>
-                      <div className={`font-medium ${movement.movement_type === 'in' ? 'text-green-600' : movement.movement_type === 'out' ? 'text-red-600' : 'text-blue-600'}`}>
+                      <div className={`font-medium ${movement.movement_type === 'in' ? 'text-green-600' : movement.movement_type === 'out' ? 'text-red-600' : 'text-orange-600'}`}>
                         {movement.movement_type === 'in' ? '+' : movement.movement_type === 'out' ? '-' : ''}
                         {Math.abs(movement.quantity)}
                       </div>

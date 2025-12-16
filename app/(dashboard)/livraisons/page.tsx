@@ -46,6 +46,9 @@ import {
   CheckCircle2,
   Printer,
   Trash2,
+  Pencil,
+  Navigation,
+  Building,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
@@ -151,12 +154,23 @@ export default function LivraisonsPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [viewDelivery, setViewDelivery] = useState<Delivery | null>(null)
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
+  const [editingDelivery, setEditingDelivery] = useState<Delivery | null>(null)
+  const [editFormData, setEditFormData] = useState({
+    delivery_date: '',
+    notes: '',
+    status: '',
+  })
+  const [editItems, setEditItems] = useState<DeliveryItem[]>([])
 
   // Route optimization state
   const [selectedDeliveries, setSelectedDeliveries] = useState<Set<string>>(new Set())
   const [isOptimizing, setIsOptimizing] = useState(false)
   const [optimizedRoute, setOptimizedRoute] = useState<OptimizedRoute | null>(null)
   const [isRouteDialogOpen, setIsRouteDialogOpen] = useState(false)
+  const [useCurrentLocation, setUseCurrentLocation] = useState(false)
+  const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null)
+  const [isGettingLocation, setIsGettingLocation] = useState(false)
 
   const supabase = useSupabase()
   const { companySettings } = useCompanySettings()
@@ -375,6 +389,74 @@ export default function LivraisonsPage() {
     }
   }
 
+  // Edit handlers
+  const handleEditDelivery = async (delivery: Delivery) => {
+    setEditingDelivery(delivery)
+    setEditFormData({
+      delivery_date: delivery.delivery_date || new Date().toISOString().split('T')[0],
+      notes: delivery.notes || '',
+      status: delivery.status,
+    })
+
+    // Fetch delivery items
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: items } = await (supabase.from('delivery_items') as any)
+      .select(`
+        id, article_id, quantity_ordered, quantity_delivered, quantity_returned, unit_price,
+        article:articles(code, name, description)
+      `)
+      .eq('delivery_id', delivery.id)
+
+    setEditItems(items || [])
+    setIsEditDialogOpen(true)
+  }
+
+  const updateItemQuantity = (itemId: string, field: 'quantity_delivered' | 'quantity_returned', value: number) => {
+    setEditItems(editItems.map(item =>
+      item.id === itemId ? { ...item, [field]: value } : item
+    ))
+  }
+
+  const handleSaveEdit = async () => {
+    if (!editingDelivery) return
+
+    // Calculate new total
+    const newTotal = editItems.reduce((sum, item) => sum + (item.quantity_delivered * item.unit_price), 0)
+
+    // Update delivery
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: deliveryError } = await (supabase.from('deliveries') as any)
+      .update({
+        delivery_date: editFormData.delivery_date,
+        notes: editFormData.notes || null,
+        status: editFormData.status,
+        total_ht: newTotal,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', editingDelivery.id)
+
+    if (deliveryError) {
+      console.error('Error updating delivery:', deliveryError)
+      alert('Erreur lors de la mise à jour')
+      return
+    }
+
+    // Update each delivery item
+    for (const item of editItems) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase.from('delivery_items') as any)
+        .update({
+          quantity_delivered: item.quantity_delivered,
+          quantity_returned: item.quantity_returned,
+        })
+        .eq('id', item.id)
+    }
+
+    alert('Bon de livraison mis à jour avec succès')
+    setIsEditDialogOpen(false)
+    fetchData()
+  }
+
   // Selection handlers
   const toggleDeliverySelection = (deliveryId: string) => {
     const newSelected = new Set(selectedDeliveries)
@@ -398,6 +480,31 @@ export default function LivraisonsPage() {
     setOptimizedRoute(null)
   }
 
+  // Get current location
+  const getCurrentLocation = () => {
+    setIsGettingLocation(true)
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setCurrentLocation({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+          })
+          setUseCurrentLocation(true)
+          setIsGettingLocation(false)
+        },
+        (error) => {
+          console.error('Geolocation error:', error)
+          alert('Erreur de géolocalisation: ' + error.message)
+          setIsGettingLocation(false)
+        }
+      )
+    } else {
+      alert('La géolocalisation n\'est pas supportée par ce navigateur')
+      setIsGettingLocation(false)
+    }
+  }
+
   // Route optimization
   const optimizeRoute = async () => {
     if (selectedDeliveries.size === 0) {
@@ -409,6 +516,17 @@ export default function LivraisonsPage() {
 
     try {
       const selectedList = deliveries.filter(d => selectedDeliveries.has(d.id))
+
+      // Determine start location
+      let startLocation = null
+      if (useCurrentLocation && currentLocation) {
+        startLocation = { latitude: currentLocation.lat, longitude: currentLocation.lng }
+      } else if (companySettings?.depot_lat && companySettings?.depot_lng) {
+        startLocation = {
+          latitude: companySettings.depot_lat,
+          longitude: companySettings.depot_lng,
+        }
+      }
 
       // Prepare data for optimization
       const deliveriesData = selectedList.map(d => ({
@@ -428,7 +546,10 @@ export default function LivraisonsPage() {
       const response = await fetch('/api/route-optimization', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ deliveries: deliveriesData }),
+        body: JSON.stringify({
+          deliveries: deliveriesData,
+          startLocation,
+        }),
       })
 
       if (!response.ok) {
@@ -571,6 +692,28 @@ export default function LivraisonsPage() {
                 >
                   Annuler ({selectedDeliveries.size})
                 </Button>
+                <Button
+                  variant="outline"
+                  onClick={getCurrentLocation}
+                  disabled={isGettingLocation}
+                  className={`gap-2 ${useCurrentLocation ? 'border-green-500 text-green-600' : ''}`}
+                  title={useCurrentLocation ? 'Position actuelle utilisée' : 'Utiliser ma position'}
+                >
+                  {isGettingLocation ? (
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                  ) : useCurrentLocation ? (
+                    <Navigation className="h-4 w-4 text-green-600" />
+                  ) : (
+                    <Navigation className="h-4 w-4" />
+                  )}
+                  {useCurrentLocation ? 'Position OK' : 'Ma position'}
+                </Button>
+                {!useCurrentLocation && companySettings?.depot_lat && (
+                  <span className="text-xs text-gray-500 flex items-center gap-1">
+                    <Building className="h-3 w-3" />
+                    Départ: Dépôt
+                  </span>
+                )}
                 <Button
                   onClick={optimizeRoute}
                   disabled={isOptimizing}
@@ -874,6 +1017,14 @@ export default function LivraisonsPage() {
                           <Button
                             variant="ghost"
                             size="icon"
+                            onClick={() => handleEditDelivery(delivery)}
+                            title="Modifier"
+                          >
+                            <Pencil className="h-4 w-4 text-blue-600" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
                             onClick={() => handleGeneratePDF(delivery)}
                             title="Telecharger BL"
                           >
@@ -1126,6 +1277,159 @@ export default function LivraisonsPage() {
                   >
                     <Printer className="h-4 w-4" />
                     Imprimer Fiche du Jour
+                  </Button>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+
+        {/* Edit Delivery Dialog */}
+        <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Pencil className="h-5 w-5 text-blue-600" />
+                Modifier BL {editingDelivery?.delivery_number}
+              </DialogTitle>
+            </DialogHeader>
+            {editingDelivery && (
+              <div className="space-y-6">
+                {/* Edit form */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="edit_date">Date de livraison</Label>
+                    <Input
+                      id="edit_date"
+                      type="date"
+                      value={editFormData.delivery_date}
+                      onChange={(e) => setEditFormData({ ...editFormData, delivery_date: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Statut</Label>
+                    <Select
+                      value={editFormData.status}
+                      onValueChange={(value) => setEditFormData({ ...editFormData, status: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="pending">En attente</SelectItem>
+                        <SelectItem value="in_progress">En cours</SelectItem>
+                        <SelectItem value="delivered">Livree</SelectItem>
+                        <SelectItem value="partial">Partielle</SelectItem>
+                        <SelectItem value="returned">Retournee</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit_notes">Notes</Label>
+                    <Input
+                      id="edit_notes"
+                      value={editFormData.notes}
+                      onChange={(e) => setEditFormData({ ...editFormData, notes: e.target.value })}
+                      placeholder="Notes"
+                    />
+                  </div>
+                </div>
+
+                {/* Client info */}
+                <div className="bg-gray-50 p-4 rounded-lg">
+                  <h3 className="font-semibold text-gray-700 mb-2">Client</h3>
+                  <p className="font-medium">{editingDelivery.client?.code} - {editingDelivery.client?.name}</p>
+                  {editingDelivery.client?.address && (
+                    <p className="text-sm text-gray-600">{editingDelivery.client.address}, {editingDelivery.client.city}</p>
+                  )}
+                </div>
+
+                {/* Edit items */}
+                <div>
+                  <h3 className="font-semibold text-gray-700 mb-3">Articles</h3>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Code</TableHead>
+                        <TableHead>Designation</TableHead>
+                        <TableHead className="text-center">Qte Cmd</TableHead>
+                        <TableHead className="text-center">Qte Livree</TableHead>
+                        <TableHead className="text-center">Qte Retour</TableHead>
+                        <TableHead className="text-right">Prix Unit.</TableHead>
+                        <TableHead className="text-right">Total</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {editItems.map((item) => (
+                        <TableRow key={item.id}>
+                          <TableCell className="font-mono text-sm">{item.article?.code}</TableCell>
+                          <TableCell>{item.article?.description || item.article?.name}</TableCell>
+                          <TableCell className="text-center">{item.quantity_ordered}</TableCell>
+                          <TableCell className="text-center">
+                            <Input
+                              type="number"
+                              min="0"
+                              value={item.quantity_delivered}
+                              onChange={(e) => updateItemQuantity(item.id, 'quantity_delivered', parseInt(e.target.value) || 0)}
+                              className="w-20 text-center"
+                            />
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <Input
+                              type="number"
+                              min="0"
+                              value={item.quantity_returned}
+                              onChange={(e) => updateItemQuantity(item.id, 'quantity_returned', parseInt(e.target.value) || 0)}
+                              className="w-20 text-center"
+                            />
+                          </TableCell>
+                          <TableCell className="text-right">{formatPrice(item.unit_price)}</TableCell>
+                          <TableCell className="text-right font-medium">
+                            {formatPrice(item.quantity_delivered * item.unit_price)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+
+                {/* Totals */}
+                <div className="flex justify-end">
+                  <div className="w-64 space-y-2 bg-gray-50 p-4 rounded-lg">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-600">Total HT:</span>
+                      <span className="font-medium">
+                        {formatPrice(editItems.reduce((sum, item) => sum + (item.quantity_delivered * item.unit_price), 0))}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-600">TVA (20%):</span>
+                      <span className="font-medium">
+                        {formatPrice(editItems.reduce((sum, item) => sum + (item.quantity_delivered * item.unit_price), 0) * 0.2)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-lg font-bold border-t pt-2">
+                      <span>Total TTC:</span>
+                      <span className="text-green-600">
+                        {formatPrice(editItems.reduce((sum, item) => sum + (item.quantity_delivered * item.unit_price), 0) * 1.2)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex justify-end gap-3 pt-4 border-t">
+                  <Button
+                    variant="outline"
+                    onClick={() => setIsEditDialogOpen(false)}
+                  >
+                    Annuler
+                  </Button>
+                  <Button
+                    onClick={handleSaveEdit}
+                    className="bg-green-600 hover:bg-green-700"
+                  >
+                    Enregistrer
                   </Button>
                 </div>
               </div>

@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { Settings, Building, Mail, FileText, Banknote, Save, Loader2 } from 'lucide-react'
+import { Settings, Building, Mail, FileText, Banknote, Save, Loader2, MapPin, Navigation } from 'lucide-react'
 
 interface CompanySettings {
   id: string
@@ -30,6 +30,9 @@ interface CompanySettings {
   bank_rib: string | null
   logo_url: string | null
   invoice_footer: string | null
+  depot_lat: number | null
+  depot_lng: number | null
+  depot_address: string | null
 }
 
 export default function SettingsPage() {
@@ -58,6 +61,9 @@ export default function SettingsPage() {
     bank_account: '',
     bank_rib: '',
     invoice_footer: '',
+    depot_lat: '',
+    depot_lng: '',
+    depot_address: '',
   })
 
   const fetchSettings = async () => {
@@ -95,6 +101,9 @@ export default function SettingsPage() {
         bank_account: settingsData.bank_account || '',
         bank_rib: settingsData.bank_rib || '',
         invoice_footer: settingsData.invoice_footer || '',
+        depot_lat: settingsData.depot_lat?.toString() || '',
+        depot_lng: settingsData.depot_lng?.toString() || '',
+        depot_address: settingsData.depot_address || '',
       })
     }
     setIsLoading(false)
@@ -127,6 +136,9 @@ export default function SettingsPage() {
       bank_account: formData.bank_account || null,
       bank_rib: formData.bank_rib || null,
       invoice_footer: formData.invoice_footer || null,
+      depot_lat: formData.depot_lat ? parseFloat(formData.depot_lat) : null,
+      depot_lng: formData.depot_lng ? parseFloat(formData.depot_lng) : null,
+      depot_address: formData.depot_address || null,
       updated_at: new Date().toISOString(),
     }
 
@@ -411,8 +423,85 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
 
+        {/* Depot / Point de départ livraisons */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <MapPin className="h-5 w-5" />
+              Point de départ des livraisons
+            </CardTitle>
+            <CardDescription>
+              Coordonnées du dépôt pour le calcul des trajets
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="depot_address">Adresse du dépôt</Label>
+              <Input
+                id="depot_address"
+                value={formData.depot_address}
+                onChange={(e) => setFormData({ ...formData, depot_address: e.target.value })}
+                placeholder="Adresse du point de départ"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="depot_lat">Latitude</Label>
+                <Input
+                  id="depot_lat"
+                  type="number"
+                  step="any"
+                  value={formData.depot_lat}
+                  onChange={(e) => setFormData({ ...formData, depot_lat: e.target.value })}
+                  placeholder="ex: 31.6295"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="depot_lng">Longitude</Label>
+                <Input
+                  id="depot_lng"
+                  type="number"
+                  step="any"
+                  value={formData.depot_lng}
+                  onChange={(e) => setFormData({ ...formData, depot_lng: e.target.value })}
+                  placeholder="ex: -7.9811"
+                />
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full gap-2"
+              onClick={() => {
+                if (navigator.geolocation) {
+                  navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                      setFormData({
+                        ...formData,
+                        depot_lat: position.coords.latitude.toString(),
+                        depot_lng: position.coords.longitude.toString(),
+                      })
+                    },
+                    (error) => {
+                      alert('Erreur de géolocalisation: ' + error.message)
+                    }
+                  )
+                } else {
+                  alert('La géolocalisation n\'est pas supportée par ce navigateur')
+                }
+              }}
+            >
+              <Navigation className="h-4 w-4" />
+              Utiliser ma position actuelle
+            </Button>
+            <p className="text-xs text-gray-500">
+              Ces coordonnées seront utilisées comme point de départ pour calculer les trajets de livraison
+            </p>
+          </CardContent>
+        </Card>
+
         {/* Pied de page factures */}
-        <Card className="lg:col-span-2">
+        <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Settings className="h-5 w-5" />

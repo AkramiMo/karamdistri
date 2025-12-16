@@ -93,6 +93,7 @@ interface Client {
   id: string
   code: string
   name: string
+  phone: string | null
 }
 
 interface Article {
@@ -188,7 +189,7 @@ export default function CommandesPage() {
   const fetchClients = async () => {
     const { data } = await supabase
       .from('clients')
-      .select('id, code, name')
+      .select('id, code, name, phone')
       .eq('is_active', true)
       .order('code')
     setClients(data || [])
@@ -537,7 +538,7 @@ export default function CommandesPage() {
                               {clients.map((client) => (
                                 <CommandItem
                                   key={client.id}
-                                  value={`${client.code} ${client.name}`}
+                                  value={`${client.code} ${client.name} ${client.phone || ''}`}
                                   onSelect={() => {
                                     setFormData({ ...formData, client_id: client.id })
                                     setClientOpen(false)
@@ -551,6 +552,9 @@ export default function CommandesPage() {
                                   />
                                   <span className="font-medium">{client.code}</span>
                                   <span className="ml-2 text-gray-600">{client.name}</span>
+                                  {client.phone && (
+                                    <span className="ml-2 text-gray-400 text-sm">{client.phone}</span>
+                                  )}
                                 </CommandItem>
                               ))}
                             </CommandGroup>
@@ -831,7 +835,7 @@ export default function CommandesPage() {
                       <TableHead>Date</TableHead>
                       <TableHead className="text-center">Articles</TableHead>
                       <TableHead>Statut</TableHead>
-                      <TableHead className="text-right">Total TTC</TableHead>
+                      <TableHead className="text-right">Total HT</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -863,7 +867,7 @@ export default function CommandesPage() {
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right font-medium">
-                          {formatPrice(order.total_ttc)}
+                          {formatPrice(order.total_ht)}
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">

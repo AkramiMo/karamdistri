@@ -88,8 +88,8 @@ interface POItem {
   supply_name: string
   supply_code: string
   quantity: number
-  unit_price: number
-  total_ht: number
+  unit_price: number | null
+  total_ht: number | null
 }
 
 const statusColors: Record<string, string> = {
@@ -222,14 +222,14 @@ export default function AchatsPage() {
   }
 
   const addItem = () => {
-    if (!selectedSupply || !selectedQuantity || !selectedPrice) return
+    if (!selectedSupply || !selectedQuantity) return
 
     const supply = supplies.find(s => s.id === selectedSupply)
     if (!supply) return
 
     const quantity = parseInt(selectedQuantity)
-    const unit_price = parseFloat(selectedPrice)
-    const total_ht = unit_price * quantity
+    const unit_price = selectedPrice ? parseFloat(selectedPrice) : null
+    const total_ht = unit_price !== null ? unit_price * quantity : null
 
     setPOItems([...poItems, {
       supply_id: supply.id,
@@ -265,7 +265,7 @@ export default function AchatsPage() {
       return
     }
 
-    const total_ht = poItems.reduce((sum, item) => sum + item.total_ht, 0)
+    const total_ht = poItems.reduce((sum, item) => sum + (item.total_ht || 0), 0) || null
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error } = await (supabase.from('purchase_orders') as any).insert([{
@@ -403,7 +403,7 @@ export default function AchatsPage() {
                     value={selectedPrice}
                     onChange={(e) => setSelectedPrice(e.target.value)}
                     className="w-32"
-                    placeholder="Prix"
+                    placeholder="Prix (opt.)"
                   />
                   <Button type="button" onClick={addItem} variant="outline">
                     <Plus className="h-4 w-4" />
@@ -447,7 +447,9 @@ export default function AchatsPage() {
                           Total HT:
                         </TableCell>
                         <TableCell className="text-right font-bold">
-                          {formatPrice(poItems.reduce((sum, item) => sum + item.total_ht, 0))}
+                          {poItems.some(item => item.total_ht !== null)
+                            ? formatPrice(poItems.reduce((sum, item) => sum + (item.total_ht || 0), 0))
+                            : '-'}
                         </TableCell>
                         <TableCell></TableCell>
                       </TableRow>

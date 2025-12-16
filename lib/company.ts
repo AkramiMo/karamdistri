@@ -20,6 +20,9 @@ export interface CompanySettings {
   bank_rib: string | null
   logo_url: string | null
   invoice_footer: string | null
+  depot_lat: number | null
+  depot_lng: number | null
+  depot_address: string | null
 }
 
 // Default company settings (fallback)
@@ -43,6 +46,9 @@ export const defaultCompanySettings: CompanySettings = {
   bank_rib: null,
   logo_url: null,
   invoice_footer: 'Merci pour votre confiance!',
+  depot_lat: null,
+  depot_lng: null,
+  depot_address: null,
 }
 
 // Format company address for display
