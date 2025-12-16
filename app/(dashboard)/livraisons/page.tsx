@@ -49,6 +49,7 @@ import {
   Pencil,
   Navigation,
   Building,
+  Link2,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
@@ -161,6 +162,7 @@ export default function LivraisonsPage() {
     delivery_date: '',
     notes: '',
     status: '',
+    order_id: '',
   })
   const [editItems, setEditItems] = useState<DeliveryItem[]>([])
 
@@ -196,7 +198,8 @@ export default function LivraisonsPage() {
             .select(`
               id, delivery_number, order_id, client_id, status, delivery_date, total_ht, notes,
               client:clients(code, name, contact_name, phone, address, city, gps_lat, gps_lng),
-              order:orders(order_number)
+              order:orders(order_number),
+              delivery_items(id, article_id, quantity_ordered, quantity_delivered, quantity_returned, unit_price, article:articles(code, name, description))
             `)
             .order('delivery_date', { ascending: false })
             .limit(30)
@@ -268,8 +271,9 @@ export default function LivraisonsPage() {
 
     const selectedOrder = orders.find(o => o.id === formData.order_id)
 
+    // Create the delivery
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { error } = await (supabase.from('deliveries') as any).insert([{
+    const { data: newDelivery, error } = await (supabase.from('deliveries') as any).insert([{
       delivery_number: generateDeliveryNumber(),
       order_id: formData.order_id || null,
       client_id: formData.client_id,
@@ -277,11 +281,40 @@ export default function LivraisonsPage() {
       status: 'pending',
       total_ht: selectedOrder?.total_ht || 0,
       notes: formData.notes || null,
-    }])
+    }]).select().single()
 
     if (error) {
       console.error('Error creating delivery:', error)
+      alert('Erreur lors de la création du BL')
       return
+    }
+
+    // If order is selected, copy order_items to delivery_items
+    if (formData.order_id && newDelivery) {
+      // Fetch order items
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: orderItems } = await (supabase.from('order_items') as any)
+        .select('article_id, quantity, unit_price, total_ht')
+        .eq('order_id', formData.order_id)
+
+      if (orderItems && orderItems.length > 0) {
+        // Create delivery items from order items
+        const deliveryItems = orderItems.map((item: { article_id: string; quantity: number; unit_price: number }) => ({
+          delivery_id: newDelivery.id,
+          article_id: item.article_id,
+          quantity_ordered: item.quantity,
+          quantity_delivered: item.quantity, // Default to full delivery
+          quantity_returned: 0,
+          unit_price: item.unit_price,
+        }))
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { error: itemsError } = await (supabase.from('delivery_items') as any).insert(deliveryItems)
+
+        if (itemsError) {
+          console.error('Error creating delivery items:', itemsError)
+        }
+      }
     }
 
     fetchData()
@@ -397,6 +430,7 @@ export default function LivraisonsPage() {
       delivery_date: delivery.delivery_date || new Date().toISOString().split('T')[0],
       notes: delivery.notes || '',
       status: delivery.status,
+      order_id: delivery.order_id || '',
     })
 
     // Fetch delivery items
@@ -418,6 +452,64 @@ export default function LivraisonsPage() {
     ))
   }
 
+  // Load items from a different order
+  const handleEditOrderChange = async (newOrderId: string) => {
+    setEditFormData({ ...editFormData, order_id: newOrderId })
+
+    if (newOrderId && editingDelivery) {
+      // Delete existing delivery items
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase.from('delivery_items') as any)
+        .delete()
+        .eq('delivery_id', editingDelivery.id)
+
+      // Fetch order items from new order
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: orderItems } = await (supabase.from('order_items') as any)
+        .select('article_id, quantity, unit_price, total_ht')
+        .eq('order_id', newOrderId)
+
+      if (orderItems && orderItems.length > 0) {
+        // Create new delivery items
+        const newDeliveryItems = orderItems.map((item: { article_id: string; quantity: number; unit_price: number }) => ({
+          delivery_id: editingDelivery.id,
+          article_id: item.article_id,
+          quantity_ordered: item.quantity,
+          quantity_delivered: item.quantity,
+          quantity_returned: 0,
+          unit_price: item.unit_price,
+        }))
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabase.from('delivery_items') as any).insert(newDeliveryItems)
+
+        // Reload items with article info
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: items } = await (supabase.from('delivery_items') as any)
+          .select(`
+            id, article_id, quantity_ordered, quantity_delivered, quantity_returned, unit_price,
+            article:articles(code, name, description)
+          `)
+          .eq('delivery_id', editingDelivery.id)
+
+        setEditItems(items || [])
+
+        // Update order reference
+        const selectedOrder = orders.find(o => o.id === newOrderId)
+        if (selectedOrder) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await (supabase.from('deliveries') as any)
+            .update({
+              order_id: newOrderId,
+              client_id: selectedOrder.client_id,
+              total_ht: selectedOrder.total_ht,
+            })
+            .eq('id', editingDelivery.id)
+        }
+      }
+    }
+  }
+
   const handleSaveEdit = async () => {
     if (!editingDelivery) return
 
@@ -431,6 +523,7 @@ export default function LivraisonsPage() {
         delivery_date: editFormData.delivery_date,
         notes: editFormData.notes || null,
         status: editFormData.status,
+        order_id: editFormData.order_id || null,
         total_ht: newTotal,
         updated_at: new Date().toISOString(),
       })
@@ -1306,7 +1399,7 @@ export default function LivraisonsPage() {
             {editingDelivery && (
               <div className="space-y-6">
                 {/* Edit form */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="edit_date">Date de livraison</Label>
                     <Input
@@ -1333,6 +1426,29 @@ export default function LivraisonsPage() {
                         <SelectItem value="returned">Retournee</SelectItem>
                       </SelectContent>
                     </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="flex items-center gap-2">
+                      <Link2 className="h-4 w-4" />
+                      Commande associee
+                    </Label>
+                    <Select
+                      value={editFormData.order_id}
+                      onValueChange={handleEditOrderChange}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Changer de commande" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="">Aucune commande</SelectItem>
+                        {orders.map((order) => (
+                          <SelectItem key={order.id} value={order.id}>
+                            {order.order_number} - {order.client?.name} ({formatPrice(order.total_ht)})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-gray-500">Changer la commande remplacera tous les articles</p>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="edit_notes">Notes</Label>
