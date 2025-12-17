@@ -153,7 +153,18 @@ class SupabaseSecureManager {
     try {
       const startTime = performance.now();
 
-      // Utiliser un simple ping à la base plutôt que getSession
+      // First check if user is authenticated before querying protected tables
+      const { data: { session } } = await this.client.auth.getSession();
+
+      if (!session) {
+        // Not authenticated yet, mark as initialized but skip DB health check
+        this.connectionStatus = 'unknown';
+        this.isInitialized = true;
+        this.lastHealthCheck = Date.now();
+        return;
+      }
+
+      // User is authenticated, perform DB health check
       const { error } = await Promise.race([
         this.client.from('roles').select('id').limit(1),
         new Promise<{ data: null; error: Error }>((_, reject) =>
