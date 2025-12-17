@@ -29,7 +29,7 @@ import {
 } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Search, Eye, FileText, Trash2, FileDown, Package } from 'lucide-react'
+import { Plus, Search, Eye, FileText, Trash2, FileDown, Package, Pencil, Users } from 'lucide-react'
 import { generatePurchaseOrderPDF } from '@/lib/pdf/purchaseOrder'
 import { useCompanySettings } from '@/hooks/useCompanySettings'
 import { format } from 'date-fns'
@@ -115,6 +115,10 @@ export default function AchatsPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
+  const [viewingOrder, setViewingOrder] = useState<PurchaseOrder | null>(null)
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
+  const [editingOrder, setEditingOrder] = useState<PurchaseOrder | null>(null)
   const supabase = createClient()
   const { companySettings } = useCompanySettings()
 
@@ -295,6 +299,74 @@ export default function AchatsPage() {
     setSelectedSupply('')
     setSelectedQuantity('1')
     setSelectedPrice('')
+  }
+
+  // View order
+  const handleViewOrder = (order: PurchaseOrder) => {
+    setViewingOrder(order)
+    setIsViewDialogOpen(true)
+  }
+
+  // Edit order
+  const [editFormData, setEditFormData] = useState({
+    supplier_id: '',
+    order_date: '',
+    status: 'draft',
+  })
+
+  const handleEditOrder = (order: PurchaseOrder) => {
+    setEditingOrder(order)
+    setEditFormData({
+      supplier_id: order.supplier_id,
+      order_date: order.order_date,
+      status: order.status,
+    })
+    setIsEditDialogOpen(true)
+  }
+
+  const handleSaveEdit = async () => {
+    if (!editingOrder) return
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('purchase_orders') as any)
+      .update({
+        supplier_id: editFormData.supplier_id,
+        order_date: editFormData.order_date,
+        status: editFormData.status,
+      })
+      .eq('id', editingOrder.id)
+
+    if (error) {
+      console.error('Error updating purchase order:', error)
+      alert('Erreur lors de la modification')
+      return
+    }
+
+    fetchPurchaseOrders()
+    setIsEditDialogOpen(false)
+    setEditingOrder(null)
+  }
+
+  // Delete order
+  const handleDeleteOrder = async (orderId: string, poNumber: string) => {
+    if (!confirm(`Êtes-vous sûr de vouloir supprimer le BC ${poNumber} ?`)) {
+      return
+    }
+
+    // First delete items
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase.from('purchase_order_items') as any).delete().eq('purchase_order_id', orderId)
+
+    // Then delete the order
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('purchase_orders') as any).delete().eq('id', orderId)
+
+    if (error) {
+      console.error('Error deleting purchase order:', error)
+      alert('Erreur lors de la suppression')
+    } else {
+      fetchPurchaseOrders()
+    }
   }
 
   const filteredOrders = purchaseOrders.filter(
@@ -572,8 +644,21 @@ export default function AchatsPage() {
                     <TableCell className="text-right">{formatPrice(order.total_ht)}</TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="icon">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleViewOrder(order)}
+                          title="Voir détails"
+                        >
                           <Eye className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleEditOrder(order)}
+                          title="Modifier"
+                        >
+                          <Pencil className="h-4 w-4 text-orange-600" />
                         </Button>
                         <Button
                           variant="ghost"
@@ -582,6 +667,14 @@ export default function AchatsPage() {
                           title="Exporter PDF"
                         >
                           <FileDown className="h-4 w-4 text-blue-600" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleDeleteOrder(order.id, order.po_number)}
+                          title="Supprimer"
+                        >
+                          <Trash2 className="h-4 w-4 text-red-600" />
                         </Button>
                       </div>
                     </TableCell>
@@ -592,6 +685,182 @@ export default function AchatsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* View Order Dialog */}
+      <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-3 text-xl">
+              <FileText className="h-6 w-6 text-blue-600" />
+              Bon de commande {viewingOrder?.po_number}
+              {viewingOrder && (
+                <Badge className={`ml-2 ${statusColors[viewingOrder.status]}`}>
+                  {statusLabels[viewingOrder.status]}
+                </Badge>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          {viewingOrder && (
+            <div className="space-y-6">
+              {/* Supplier Info */}
+              <div className="bg-gradient-to-br from-blue-50 to-blue-100 border border-blue-200 rounded-xl p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <Users className="h-5 w-5 text-blue-600" />
+                  <h3 className="font-semibold text-blue-800">Fournisseur</h3>
+                </div>
+                <div className="space-y-1">
+                  <p className="font-bold text-lg text-gray-900">
+                    {viewingOrder.supplier?.code} - {viewingOrder.supplier?.name}
+                  </p>
+                  {viewingOrder.supplier?.contact_name && (
+                    <p className="text-sm text-gray-600">Contact: {viewingOrder.supplier.contact_name}</p>
+                  )}
+                  {viewingOrder.supplier?.phone && (
+                    <p className="text-sm text-gray-600">Tél: {viewingOrder.supplier.phone}</p>
+                  )}
+                  {viewingOrder.supplier?.email && (
+                    <p className="text-sm text-gray-600">Email: {viewingOrder.supplier.email}</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Order Info */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-xs text-gray-500 uppercase">Date de commande</p>
+                  <p className="font-medium">
+                    {format(new Date(viewingOrder.order_date), 'dd MMMM yyyy', { locale: fr })}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500 uppercase">Total HT</p>
+                  <p className="font-bold text-green-600 text-lg">{formatPrice(viewingOrder.total_ht)}</p>
+                </div>
+              </div>
+
+              {/* Items Table */}
+              {viewingOrder.purchase_order_items && viewingOrder.purchase_order_items.length > 0 && (
+                <div className="border rounded-xl overflow-hidden">
+                  <div className="bg-gray-50 px-4 py-3 border-b">
+                    <h3 className="font-semibold text-gray-700 flex items-center gap-2">
+                      <Package className="h-5 w-5" />
+                      Fournitures commandées ({viewingOrder.purchase_order_items.length})
+                    </h3>
+                  </div>
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-gray-50">
+                        <TableHead>Code</TableHead>
+                        <TableHead>Désignation</TableHead>
+                        <TableHead className="text-center">Qté</TableHead>
+                        <TableHead className="text-right">Prix Unit.</TableHead>
+                        <TableHead className="text-right">Total HT</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {viewingOrder.purchase_order_items.map((item, index) => (
+                        <TableRow key={index}>
+                          <TableCell className="font-mono text-sm text-blue-600">{item.supply?.code}</TableCell>
+                          <TableCell className="font-medium">{item.supply?.name}</TableCell>
+                          <TableCell className="text-center">
+                            <Badge variant="outline">{item.quantity}</Badge>
+                          </TableCell>
+                          <TableCell className="text-right">{formatPrice(item.unit_price)}</TableCell>
+                          <TableCell className="text-right font-semibold">{formatPrice(item.total_ht)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="flex justify-end gap-3 pt-4 border-t">
+                <Button variant="outline" onClick={() => setIsViewDialogOpen(false)}>
+                  Fermer
+                </Button>
+                <Button
+                  className="bg-blue-600 hover:bg-blue-700"
+                  onClick={() => handleExportPDF(viewingOrder)}
+                >
+                  <FileDown className="h-4 w-4 mr-2" />
+                  Exporter PDF
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Order Dialog */}
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Pencil className="h-5 w-5 text-orange-600" />
+              Modifier le BC {editingOrder?.po_number}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Fournisseur</Label>
+              <Select
+                value={editFormData.supplier_id}
+                onValueChange={(value) => setEditFormData({ ...editFormData, supplier_id: value })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {suppliers.map((supplier) => (
+                    <SelectItem key={supplier.id} value={supplier.id}>
+                      {supplier.code} - {supplier.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Date de commande</Label>
+                <Input
+                  type="date"
+                  value={editFormData.order_date}
+                  onChange={(e) => setEditFormData({ ...editFormData, order_date: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Statut</Label>
+                <Select
+                  value={editFormData.status}
+                  onValueChange={(value) => setEditFormData({ ...editFormData, status: value })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="draft">Brouillon</SelectItem>
+                    <SelectItem value="sent">Envoyée</SelectItem>
+                    <SelectItem value="partial">Partielle</SelectItem>
+                    <SelectItem value="received">Reçue</SelectItem>
+                    <SelectItem value="cancelled">Annulée</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-4 border-t">
+              <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>
+                Annuler
+              </Button>
+              <Button onClick={handleSaveEdit} className="bg-orange-600 hover:bg-orange-700">
+                Enregistrer
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
