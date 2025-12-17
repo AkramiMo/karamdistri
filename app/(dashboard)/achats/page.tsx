@@ -29,7 +29,8 @@ import {
 } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Search, Eye, FileText, Trash2, FileDown, Package, Pencil, Users } from 'lucide-react'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Plus, Search, Eye, FileText, Trash2, FileDown, Package, Pencil, Users, Edit3 } from 'lucide-react'
 import { generatePurchaseOrderPDF } from '@/lib/pdf/purchaseOrder'
 import { useCompanySettings } from '@/hooks/useCompanySettings'
 import { format } from 'date-fns'
@@ -84,12 +85,13 @@ interface Supply {
 }
 
 interface POItem {
-  supply_id: string
+  supply_id: string | null  // null si saisie libre
   supply_name: string
   supply_code: string
   quantity: number
   unit_price: number | null
   total_ht: number | null
+  is_custom: boolean  // true si saisie libre
 }
 
 const statusColors: Record<string, string> = {
@@ -131,6 +133,8 @@ export default function AchatsPage() {
   const [selectedSupply, setSelectedSupply] = useState('')
   const [selectedQuantity, setSelectedQuantity] = useState('1')
   const [selectedPrice, setSelectedPrice] = useState('')
+  const [customDesignation, setCustomDesignation] = useState('')
+  const [isCustomEntry, setIsCustomEntry] = useState(false)
 
   const fetchPurchaseOrders = async () => {
     setIsLoading(true)
@@ -226,25 +230,51 @@ export default function AchatsPage() {
   }
 
   const addItem = () => {
-    if (!selectedSupply || !selectedQuantity) return
-
-    const supply = supplies.find(s => s.id === selectedSupply)
-    if (!supply) return
-
-    const quantity = parseInt(selectedQuantity)
+    const quantity = parseInt(selectedQuantity) || 1
     const unit_price = selectedPrice ? parseFloat(selectedPrice) : null
     const total_ht = unit_price !== null ? unit_price * quantity : null
 
-    setPOItems([...poItems, {
-      supply_id: supply.id,
-      supply_name: supply.name,
-      supply_code: supply.code,
-      quantity,
-      unit_price,
-      total_ht,
-    }])
+    if (isCustomEntry) {
+      // Saisie libre
+      if (!customDesignation.trim()) {
+        alert('Veuillez saisir une désignation')
+        return
+      }
 
-    setSelectedSupply('')
+      setPOItems([...poItems, {
+        supply_id: null,
+        supply_name: customDesignation.trim(),
+        supply_code: '-',
+        quantity,
+        unit_price,
+        total_ht,
+        is_custom: true,
+      }])
+
+      setCustomDesignation('')
+    } else {
+      // Sélection depuis la liste
+      if (!selectedSupply) {
+        alert('Veuillez sélectionner une fourniture ou saisir une désignation')
+        return
+      }
+
+      const supply = supplies.find(s => s.id === selectedSupply)
+      if (!supply) return
+
+      setPOItems([...poItems, {
+        supply_id: supply.id,
+        supply_name: supply.name,
+        supply_code: supply.code,
+        quantity,
+        unit_price,
+        total_ht,
+        is_custom: false,
+      }])
+
+      setSelectedSupply('')
+    }
+
     setSelectedQuantity('1')
     setSelectedPrice('')
   }
@@ -257,7 +287,8 @@ export default function AchatsPage() {
     const supply = supplies.find(s => s.id === supplyId)
     if (supply) {
       setSelectedSupply(supplyId)
-      setSelectedPrice(supply.price_ht?.toString() || '0')
+      setSelectedPrice(supply.price_ht?.toString() || '')
+      setIsCustomEntry(false)
     }
   }
 
@@ -299,6 +330,8 @@ export default function AchatsPage() {
     setSelectedSupply('')
     setSelectedQuantity('1')
     setSelectedPrice('')
+    setCustomDesignation('')
+    setIsCustomEntry(false)
   }
 
   // View order
@@ -442,25 +475,52 @@ export default function AchatsPage() {
               <div className="border-t pt-4">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="font-medium">Fournitures</h3>
-                  <Link href="/fournitures" className="text-sm text-green-600 hover:underline flex items-center gap-1">
-                    <Package className="h-4 w-4" />
-                    Gérer les fournitures
-                  </Link>
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center space-x-2">
+                      <Checkbox
+                        id="customEntry"
+                        checked={isCustomEntry}
+                        onCheckedChange={(checked) => {
+                          setIsCustomEntry(checked === true)
+                          setSelectedSupply('')
+                          setCustomDesignation('')
+                        }}
+                      />
+                      <Label htmlFor="customEntry" className="text-sm cursor-pointer flex items-center gap-1">
+                        <Edit3 className="h-3 w-3" />
+                        Saisie libre
+                      </Label>
+                    </div>
+                    <Link href="/fournitures" className="text-sm text-green-600 hover:underline flex items-center gap-1">
+                      <Package className="h-4 w-4" />
+                      Gérer les fournitures
+                    </Link>
+                  </div>
                 </div>
+
                 <div className="flex gap-2 mb-4">
-                  <Select value={selectedSupply} onValueChange={handleSupplySelect}>
-                    <SelectTrigger className="flex-1">
-                      <SelectValue placeholder="Sélectionner une fourniture" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {supplies.map((supply) => (
-                        <SelectItem key={supply.id} value={supply.id}>
-                          {supply.code} - {supply.name}
-                          {supply.supply_categories?.name && ` (${supply.supply_categories.name})`}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  {isCustomEntry ? (
+                    <Input
+                      value={customDesignation}
+                      onChange={(e) => setCustomDesignation(e.target.value)}
+                      className="flex-1"
+                      placeholder="Saisir la désignation..."
+                    />
+                  ) : (
+                    <Select value={selectedSupply} onValueChange={handleSupplySelect}>
+                      <SelectTrigger className="flex-1">
+                        <SelectValue placeholder="Sélectionner une fourniture" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {supplies.map((supply) => (
+                          <SelectItem key={supply.id} value={supply.id}>
+                            {supply.code} - {supply.name}
+                            {supply.supply_categories?.name && ` (${supply.supply_categories.name})`}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                   <Input
                     type="number"
                     min="1"
@@ -497,11 +557,21 @@ export default function AchatsPage() {
                     <TableBody>
                       {poItems.map((item, index) => (
                         <TableRow key={index}>
-                          <TableCell className="font-mono">{item.supply_code}</TableCell>
+                          <TableCell className="font-mono">
+                            {item.is_custom ? (
+                              <Badge variant="outline" className="text-xs">Libre</Badge>
+                            ) : (
+                              item.supply_code
+                            )}
+                          </TableCell>
                           <TableCell>{item.supply_name}</TableCell>
                           <TableCell className="text-right">{item.quantity}</TableCell>
-                          <TableCell className="text-right">{formatPrice(item.unit_price)}</TableCell>
-                          <TableCell className="text-right">{formatPrice(item.total_ht)}</TableCell>
+                          <TableCell className="text-right">
+                            {item.unit_price !== null ? formatPrice(item.unit_price) : '-'}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {item.total_ht !== null ? formatPrice(item.total_ht) : '-'}
+                          </TableCell>
                           <TableCell>
                             <Button
                               type="button"
@@ -641,7 +711,9 @@ export default function AchatsPage() {
                         {statusLabels[order.status]}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-right">{formatPrice(order.total_ht)}</TableCell>
+                    <TableCell className="text-right">
+                      {order.total_ht ? formatPrice(order.total_ht) : '-'}
+                    </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
                         <Button
@@ -734,7 +806,9 @@ export default function AchatsPage() {
                 </div>
                 <div>
                   <p className="text-xs text-gray-500 uppercase">Total HT</p>
-                  <p className="font-bold text-green-600 text-lg">{formatPrice(viewingOrder.total_ht)}</p>
+                  <p className="font-bold text-green-600 text-lg">
+                    {viewingOrder.total_ht ? formatPrice(viewingOrder.total_ht) : 'Non renseigné'}
+                  </p>
                 </div>
               </div>
 
@@ -760,13 +834,19 @@ export default function AchatsPage() {
                     <TableBody>
                       {viewingOrder.purchase_order_items.map((item, index) => (
                         <TableRow key={index}>
-                          <TableCell className="font-mono text-sm text-blue-600">{item.supply?.code}</TableCell>
-                          <TableCell className="font-medium">{item.supply?.name}</TableCell>
+                          <TableCell className="font-mono text-sm text-blue-600">
+                            {item.supply?.code || '-'}
+                          </TableCell>
+                          <TableCell className="font-medium">{item.supply?.name || '-'}</TableCell>
                           <TableCell className="text-center">
                             <Badge variant="outline">{item.quantity}</Badge>
                           </TableCell>
-                          <TableCell className="text-right">{formatPrice(item.unit_price)}</TableCell>
-                          <TableCell className="text-right font-semibold">{formatPrice(item.total_ht)}</TableCell>
+                          <TableCell className="text-right">
+                            {item.unit_price ? formatPrice(item.unit_price) : '-'}
+                          </TableCell>
+                          <TableCell className="text-right font-semibold">
+                            {item.total_ht ? formatPrice(item.total_ht) : '-'}
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
