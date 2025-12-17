@@ -9,8 +9,8 @@ interface PurchaseOrderItem {
     description: string | null
   }
   quantity: number
-  unit_price: number
-  total_ht: number
+  unit_price: number | null
+  total_ht: number | null
 }
 
 interface Supplier {
@@ -27,7 +27,7 @@ interface PurchaseOrder {
   po_number: string
   order_date: string
   status: string
-  total_ht: number
+  total_ht: number | null
   notes: string | null
   supplier: Supplier
   purchase_order_items: PurchaseOrderItem[]
@@ -114,19 +114,57 @@ export function generatePurchaseOrderPDF(order: PurchaseOrder, company?: Company
     doc.text(`${order.supplier.address}`, 25, yPos)
   }
 
-  // Items table
-  const tableData = order.purchase_order_items.map((item, index) => [
-    (index + 1).toString(),
-    item.article.code,
-    item.article.description || item.article.name,
-    item.quantity.toString(),
-    formatPrice(item.unit_price),
-    formatPrice(item.total_ht),
-  ])
+  // Check what columns we have data for
+  const hasCode = order.purchase_order_items.some(item => item.article.code && item.article.code !== '-')
+  const hasPrice = order.purchase_order_items.some(item => item.unit_price !== null && item.unit_price > 0)
+  const hasTotal = order.purchase_order_items.some(item => item.total_ht !== null && item.total_ht > 0)
+
+  // Build table headers and data dynamically
+  const headers: string[] = ['#']
+  if (hasCode) headers.push('Code')
+  headers.push('Designation')
+  headers.push('Qte')
+  if (hasPrice) headers.push('Prix Unit.')
+  if (hasTotal) headers.push('Total HT')
+
+  const tableData = order.purchase_order_items.map((item, index) => {
+    const row: string[] = [(index + 1).toString()]
+    if (hasCode) row.push(item.article.code || '-')
+    row.push(item.article.description || item.article.name)
+    row.push(item.quantity.toString())
+    if (hasPrice) row.push(item.unit_price ? formatPrice(item.unit_price) : '-')
+    if (hasTotal) row.push(item.total_ht ? formatPrice(item.total_ht) : '-')
+    return row
+  })
+
+  // Build column styles dynamically
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const columnStyles: Record<number, any> = {
+    0: { halign: 'center', cellWidth: 10 },
+  }
+
+  let colIndex = 1
+  if (hasCode) {
+    columnStyles[colIndex] = { halign: 'center', cellWidth: 25 }
+    colIndex++
+  }
+  // Designation gets remaining space
+  const designationWidth = hasCode ? (hasPrice || hasTotal ? 80 : 130) : (hasPrice || hasTotal ? 105 : 155)
+  columnStyles[colIndex] = { halign: 'left', cellWidth: designationWidth }
+  colIndex++
+  columnStyles[colIndex] = { halign: 'center', cellWidth: 15 } // Qte
+  colIndex++
+  if (hasPrice) {
+    columnStyles[colIndex] = { halign: 'right', cellWidth: 25 }
+    colIndex++
+  }
+  if (hasTotal) {
+    columnStyles[colIndex] = { halign: 'right', cellWidth: 25 }
+  }
 
   autoTable(doc, {
     startY: 105,
-    head: [['#', 'Code', 'Designation', 'Qte', 'Prix Unit.', 'Total HT']],
+    head: [headers],
     body: tableData,
     theme: 'striped',
     headStyles: {
@@ -135,14 +173,7 @@ export function generatePurchaseOrderPDF(order: PurchaseOrder, company?: Company
       fontStyle: 'bold',
       halign: 'center',
     },
-    columnStyles: {
-      0: { halign: 'center', cellWidth: 10 },
-      1: { halign: 'center', cellWidth: 25 },
-      2: { halign: 'left', cellWidth: 70 },
-      3: { halign: 'center', cellWidth: 15 },
-      4: { halign: 'right', cellWidth: 25 },
-      5: { halign: 'right', cellWidth: 25 },
-    },
+    columnStyles,
     styles: {
       fontSize: 9,
       cellPadding: 3,
@@ -154,19 +185,23 @@ export function generatePurchaseOrderPDF(order: PurchaseOrder, company?: Company
 
   // Get the Y position after the table
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const finalY = (doc as any).lastAutoTable.finalY + 10
+  let finalY = (doc as any).lastAutoTable.finalY + 10
 
-  // Totals
-  const totalsX = 130
-  doc.setDrawColor(200, 200, 200)
-  doc.setFillColor(255, 255, 255)
-  doc.roundedRect(totalsX, finalY, 65, 20, 2, 2, 'D')
+  // Totals - only show if we have prices
+  if (hasTotal && order.total_ht) {
+    const totalsX = 130
+    doc.setDrawColor(200, 200, 200)
+    doc.setFillColor(255, 255, 255)
+    doc.roundedRect(totalsX, finalY, 65, 20, 2, 2, 'D')
 
-  doc.setFontSize(12)
-  doc.setFont('helvetica', 'bold')
-  doc.setTextColor(34, 139, 34)
-  doc.text('Total HT:', totalsX + 5, finalY + 13)
-  doc.text(formatPrice(order.total_ht), totalsX + 55, finalY + 13, { align: 'right' })
+    doc.setFontSize(12)
+    doc.setFont('helvetica', 'bold')
+    doc.setTextColor(34, 139, 34)
+    doc.text('Total HT:', totalsX + 5, finalY + 13)
+    doc.text(formatPrice(order.total_ht), totalsX + 55, finalY + 13, { align: 'right' })
+  } else {
+    finalY -= 10 // Adjust if no totals box
+  }
 
   // Notes
   if (order.notes) {
@@ -228,7 +263,8 @@ function formatDate(dateString: string): string {
   })
 }
 
-function formatPrice(price: number): string {
+function formatPrice(price: number | null): string {
+  if (price === null || price === 0) return '-'
   return new Intl.NumberFormat('fr-MA', {
     style: 'currency',
     currency: 'MAD',
