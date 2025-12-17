@@ -30,7 +30,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Search, DollarSign, Eye, Trash2 } from 'lucide-react'
+import { Plus, Search, DollarSign, Eye, Trash2, Wallet } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
@@ -104,6 +104,7 @@ export default function VentesPage() {
     payment_method: 'cash',
     payment_status: 'pending',
   })
+  const [addToCaisse, setAddToCaisse] = useState(false)
 
   const fetchSales = async () => {
     setIsLoading(true)
@@ -203,7 +204,7 @@ export default function VentesPage() {
     const saleNumber = await generateSaleNumber()
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { error } = await (supabase.from('sales') as any).insert([{
+    const { data: saleData, error } = await (supabase.from('sales') as any).insert([{
       sale_number: saleNumber,
       delivery_id: formData.delivery_id || null,
       client_id: formData.client_id,
@@ -212,11 +213,26 @@ export default function VentesPage() {
       total_ttc,
       payment_method: formData.payment_method,
       payment_status: formData.payment_status,
-    }])
+    }]).select().single()
 
     if (error) {
       console.error('Error creating sale:', error)
       return
+    }
+
+    // Ajouter à la caisse si demandé et paiement effectué
+    if (addToCaisse && (formData.payment_status === 'paid' || formData.payment_status === 'partial')) {
+      const clientName = clients.find(c => c.id === formData.client_id)?.name || ''
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase.from('cash_register') as any).insert([{
+        operation_type: 'in',
+        category: 'vente',
+        amount: total_ttc,
+        reference: saleNumber,
+        reference_id: saleData?.id || null,
+        notes: `Vente ${saleNumber} - ${clientName}`,
+        transaction_date: formData.sale_date,
+      }])
     }
 
     fetchSales()
@@ -225,6 +241,7 @@ export default function VentesPage() {
   }
 
   const resetForm = () => {
+    setAddToCaisse(false)
     setFormData({
       delivery_id: '',
       client_id: '',
@@ -442,6 +459,23 @@ export default function VentesPage() {
                     </Select>
                   </div>
                 </div>
+
+                {/* Option pour ajouter à la caisse */}
+                {(formData.payment_status === 'paid' || formData.payment_status === 'partial') && (
+                  <div className="flex items-center space-x-3 p-4 bg-green-50 border border-green-200 rounded-lg">
+                    <Checkbox
+                      id="addToCaisse"
+                      checked={addToCaisse}
+                      onCheckedChange={(checked) => setAddToCaisse(checked === true)}
+                    />
+                    <div className="flex items-center gap-2">
+                      <Wallet className="h-4 w-4 text-green-600" />
+                      <Label htmlFor="addToCaisse" className="text-sm font-medium cursor-pointer">
+                        Ajouter cette vente à la caisse
+                      </Label>
+                    </div>
+                  </div>
+                )}
 
                 <div className="flex justify-end gap-2 pt-4">
                   <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
