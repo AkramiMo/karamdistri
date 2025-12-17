@@ -1,86 +1,10 @@
 /**
  * Supabase Secure Client - AKKA ERP
- * Client robuste avec retry automatique, health monitoring et logging
+ * Health monitoring et retry logic (utilise le client singleton de client.ts)
  */
-
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import type { Database } from '@/types/database';
 
 // Mode debug - réduit les logs en production
 const DEBUG_MODE = process.env.NODE_ENV === 'development';
-
-// Validation des variables d'environnement
-const validateEnvironment = () => {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!url || !key) {
-    console.error('🚨 CRITICAL: Missing Supabase credentials');
-    console.error('   NEXT_PUBLIC_SUPABASE_URL:', url ? '✅ Set' : '❌ Missing');
-    console.error('   NEXT_PUBLIC_SUPABASE_ANON_KEY:', key ? '✅ Set' : '❌ Missing');
-    throw new Error('Missing Supabase credentials in environment');
-  }
-
-  if (!url.includes('.supabase.co')) {
-    console.warn('⚠️ SECURITY: Supabase URL may be invalid:', url.substring(0, 30) + '...');
-  }
-
-  return { url, key };
-};
-
-const { url: SUPABASE_URL, key: SUPABASE_ANON_KEY } = validateEnvironment();
-
-// Configuration avancée de connexion
-const CONNECTION_CONFIG = {
-  auth: {
-    autoRefreshToken: true,
-    persistSession: true,
-    detectSessionInUrl: true,
-    flowType: 'pkce' as const,
-    debug: process.env.NODE_ENV === 'development',
-  },
-  db: {
-    schema: 'public' as const,
-  },
-  global: {
-    headers: {
-      'x-application-name': 'akka-erp',
-      'x-client-version': '1.0.0',
-    },
-    // Fetch avec timeout
-    fetch: (url: RequestInfo | URL, options: RequestInit = {}) => {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => {
-        console.warn('⏱️ Request timeout - aborting after 20s');
-        controller.abort();
-      }, 20000); // 20s timeout
-
-      const startTime = Date.now();
-
-      return fetch(url, {
-        ...options,
-        signal: controller.signal,
-        headers: {
-          ...options.headers,
-          'Connection': 'keep-alive',
-        },
-      })
-        .then(response => {
-          const duration = Date.now() - startTime;
-          if (duration > 5000) {
-            console.warn(`⚠️ Slow request (${duration}ms): ${typeof url === 'string' ? url.split('?')[0] : 'Unknown'}`);
-          }
-          return response;
-        })
-        .finally(() => clearTimeout(timeoutId));
-    }
-  },
-  realtime: {
-    params: {
-      eventsPerSecond: 2,
-    }
-  }
-};
 
 // Types pour le status de connexion
 type ConnectionStatus = 'healthy' | 'degraded' | 'failed' | 'unknown';
@@ -95,10 +19,9 @@ interface HealthStatus {
   lastError?: string;
 }
 
-// Singleton Manager
-class SupabaseSecureManager {
-  private static instance: SupabaseSecureManager;
-  private client: SupabaseClient<Database>;
+// Singleton Manager - utilise le client passé en paramètre
+class SupabaseHealthManager {
+  private static instance: SupabaseHealthManager;
   private connectionStatus: ConnectionStatus = 'unknown';
   private lastHealthCheck = 0;
   private retryCount = 0;
@@ -106,29 +29,40 @@ class SupabaseSecureManager {
   private lastError?: string;
   private healthCheckInterval: NodeJS.Timeout | null = null;
   private isInitialized = false;
+  private getClientFn: (() => any) | null = null;
 
   private constructor() {
     if (DEBUG_MODE) {
-      console.log('🔧 Initializing Supabase Secure Client...');
+      console.log('🛡️ Supabase Health Manager initialized');
     }
-
-    this.client = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, CONNECTION_CONFIG);
-
-    // Délai avant le premier health check pour laisser le temps à l'auth de s'initialiser
-    setTimeout(() => {
-      this.initializeHealthMonitoring();
-    }, 2000);
   }
 
-  static getInstance(): SupabaseSecureManager {
-    if (!SupabaseSecureManager.instance) {
-      SupabaseSecureManager.instance = new SupabaseSecureManager();
+  static getInstance(): SupabaseHealthManager {
+    if (!SupabaseHealthManager.instance) {
+      SupabaseHealthManager.instance = new SupabaseHealthManager();
     }
-    return SupabaseSecureManager.instance;
+    return SupabaseHealthManager.instance;
   }
 
-  getClient(): SupabaseClient<Database> {
-    return this.client;
+  // Initialiser avec la fonction pour obtenir le client
+  initialize(getClient: () => any) {
+    if (this.getClientFn) return; // Déjà initialisé
+
+    this.getClientFn = getClient;
+
+    // Délai avant le premier health check
+    if (typeof window !== 'undefined') {
+      setTimeout(() => {
+        this.initializeHealthMonitoring();
+      }, 3000);
+    }
+  }
+
+  private getClient() {
+    if (!this.getClientFn) {
+      throw new Error('SupabaseHealthManager not initialized');
+    }
+    return this.getClientFn();
   }
 
   // Monitoring de santé
@@ -144,20 +78,21 @@ class SupabaseSecureManager {
     }
   }
 
-  private async performHealthCheck(): Promise<void> {
-    // Skip si déjà en cours de check
+  async performHealthCheck(): Promise<void> {
+    // Skip si pas de client ou déjà en cours de check
+    if (!this.getClientFn) return;
     if (this.isInitialized && Date.now() - this.lastHealthCheck < 5000) {
       return;
     }
 
     try {
+      const client = this.getClient();
       const startTime = performance.now();
 
-      // First check if user is authenticated before querying protected tables
-      const { data: { session } } = await this.client.auth.getSession();
+      // First check if user is authenticated
+      const { data: { session } } = await client.auth.getSession();
 
       if (!session) {
-        // Not authenticated yet, mark as initialized but skip DB health check
         this.connectionStatus = 'unknown';
         this.isInitialized = true;
         this.lastHealthCheck = Date.now();
@@ -166,7 +101,7 @@ class SupabaseSecureManager {
 
       // User is authenticated, perform DB health check
       const { error } = await Promise.race([
-        this.client.from('roles').select('id').limit(1),
+        client.from('roles').select('id').limit(1),
         new Promise<{ data: null; error: Error }>((_, reject) =>
           setTimeout(() => reject(new Error('Health check timeout')), 5000)
         )
@@ -213,16 +148,13 @@ class SupabaseSecureManager {
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       try {
-        // Re-check santé si connexion failed
         if (this.connectionStatus === 'failed' && attempt === 0) {
           await this.performHealthCheck();
         }
 
         const result = await this.withTimeout(operation(), 25000);
 
-        // Vérifier les erreurs Supabase
         if (result && typeof result === 'object' && 'error' in result) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const supabaseResult = result as unknown as { data: any; error: any };
           if (supabaseResult.error) {
             if (DEBUG_MODE) {
@@ -237,7 +169,6 @@ class SupabaseSecureManager {
           }
         }
 
-        // Succès
         this.retryCount = 0;
         return result;
 
@@ -264,7 +195,6 @@ class SupabaseSecureManager {
     throw lastError;
   }
 
-  // Classification des erreurs retryables
   private isRetryableError(error: any): boolean {
     if (!error) return false;
 
@@ -289,7 +219,6 @@ class SupabaseSecureManager {
            retryableCodes.includes(code);
   }
 
-  // Backoff exponentiel avec jitter
   private async backoffDelay(attempt: number): Promise<number> {
     const baseDelay = 1000;
     const exponentialDelay = baseDelay * Math.pow(2, attempt);
@@ -300,7 +229,6 @@ class SupabaseSecureManager {
     return totalDelay;
   }
 
-  // Timeout wrapper
   private async withTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
     return Promise.race([
       operation,
@@ -310,7 +238,6 @@ class SupabaseSecureManager {
     ]);
   }
 
-  // Status public
   getHealthStatus(): HealthStatus {
     const now = Date.now();
     const timeSinceCheck = now - this.lastHealthCheck;
@@ -326,13 +253,11 @@ class SupabaseSecureManager {
     };
   }
 
-  // Force health check
   async forceHealthCheck(): Promise<HealthStatus> {
     await this.performHealthCheck();
     return this.getHealthStatus();
   }
 
-  // Cleanup
   destroy() {
     if (this.healthCheckInterval) {
       clearInterval(this.healthCheckInterval);
@@ -341,30 +266,27 @@ class SupabaseSecureManager {
 }
 
 // Export du singleton
-const supabaseManager = SupabaseSecureManager.getInstance();
-export const supabaseSecure = supabaseManager.getClient();
-export const supabaseWithRetry = supabaseManager;
+const healthManager = SupabaseHealthManager.getInstance();
 
-// Wrapper de query avec retry
+export const initializeHealthManager = (getClient: () => any) => {
+  healthManager.initialize(getClient);
+};
+
+export const supabaseWithRetry = healthManager;
+
 export const secureQuery = {
   async execute<T>(
     queryFn: () => Promise<T>,
     context: string = 'query'
   ): Promise<T> {
-    return supabaseManager.executeWithRetry(queryFn, context);
+    return healthManager.executeWithRetry(queryFn, context);
   }
 };
 
-// Health monitoring
 export const healthMonitor = {
-  getStatus: () => supabaseManager.getHealthStatus(),
-  forceCheck: () => supabaseManager.forceHealthCheck(),
-  isHealthy: () => supabaseManager.getHealthStatus().healthy,
+  getStatus: () => healthManager.getHealthStatus(),
+  forceCheck: () => healthManager.forceHealthCheck(),
+  isHealthy: () => healthManager.getHealthStatus().healthy,
 };
 
-// Log au démarrage (une seule ligne)
-if (DEBUG_MODE) {
-  console.log('🛡️ Supabase Secure Client: retry=3, timeout=20s, health monitoring active');
-}
-
-export default supabaseSecure;
+export default healthManager;

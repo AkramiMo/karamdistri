@@ -6,6 +6,7 @@
 import { createBrowserClient } from '@supabase/ssr'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '@/types/database'
+import { initializeHealthManager, healthMonitor, secureQuery, supabaseWithRetry } from './secure-client'
 
 // Flag pour activer/désactiver le logging détaillé
 const DEBUG_MODE = process.env.NODE_ENV === 'development';
@@ -13,6 +14,7 @@ const DEBUG_MODE = process.env.NODE_ENV === 'development';
 // SINGLETON - Une seule instance du client
 let supabaseInstance: SupabaseClient<Database> | null = null;
 let instanceCreated = false;
+let healthManagerInitialized = false;
 
 export function createClient(): SupabaseClient<Database> {
   // Retourner l'instance existante si elle existe
@@ -33,7 +35,6 @@ export function createClient(): SupabaseClient<Database> {
 
   if (DEBUG_MODE && !instanceCreated) {
     console.log('🔧 Creating Supabase client (SINGLETON)');
-    console.log('   URL:', url.substring(0, 35) + '...');
     instanceCreated = true;
   }
 
@@ -42,7 +43,7 @@ export function createClient(): SupabaseClient<Database> {
       autoRefreshToken: true,
       persistSession: true,
       detectSessionInUrl: true,
-      debug: false, // Désactiver le debug auth pour réduire le bruit
+      debug: false,
     },
     global: {
       headers: {
@@ -51,50 +52,37 @@ export function createClient(): SupabaseClient<Database> {
       fetch: (url, options = {}) => {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => {
-          if (DEBUG_MODE) {
-            console.warn('⏱️ Request timeout after 20s - aborting');
-          }
           controller.abort();
         }, 20000);
-
-        const startTime = Date.now();
 
         return fetch(url, {
           ...options,
           signal: controller.signal,
-        })
-          .then(response => {
-            const duration = Date.now() - startTime;
-            if (DEBUG_MODE && duration > 3000) {
-              console.warn(`⚠️ Slow request (${duration}ms)`);
-            }
-            return response;
-          })
-          .catch(error => {
-            if (DEBUG_MODE) {
-              console.error('🔴 Fetch error:', error.message);
-            }
-            throw error;
-          })
-          .finally(() => clearTimeout(timeoutId));
+        }).finally(() => clearTimeout(timeoutId));
       }
     }
   });
 
-  if (DEBUG_MODE) {
-    console.log('✅ Supabase client ready (singleton instance)');
+  // Initialiser le health manager avec ce client (une seule fois)
+  if (!healthManagerInitialized) {
+    healthManagerInitialized = true;
+    initializeHealthManager(() => supabaseInstance);
+    if (DEBUG_MODE) {
+      console.log('✅ Supabase client ready');
+    }
   }
 
   return supabaseInstance;
 }
 
-// Export du secure client pour les opérations critiques
-export { supabaseSecure, healthMonitor, secureQuery } from './secure-client';
+// Export du health monitor et secure query
+export { healthMonitor, secureQuery, supabaseWithRetry };
 
-// Fonction pour réinitialiser le client (utile pour les tests ou déconnexion)
+// Fonction pour réinitialiser le client
 export function resetClient() {
   supabaseInstance = null;
   instanceCreated = false;
+  healthManagerInitialized = false;
   if (DEBUG_MODE) {
     console.log('🔄 Supabase client reset');
   }
