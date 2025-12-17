@@ -153,6 +153,7 @@ export default function CommandesPage() {
     client_id: '',
     order_date: '',
     notes: '',
+    status: 'draft',
   })
   const [editOrderItems, setEditOrderItems] = useState<OrderItem[]>([])
   const supabase = createClient()
@@ -519,6 +520,7 @@ export default function CommandesPage() {
       client_id: order.client_id,
       order_date: order.order_date,
       notes: order.notes || '',
+      status: order.status,
     })
 
     // Convert order items to editable format
@@ -600,6 +602,7 @@ export default function CommandesPage() {
         client_id: editFormData.client_id,
         order_date: editFormData.order_date,
         notes: editFormData.notes || null,
+        status: editFormData.status,
         total_ht,
         total_tva,
         total_ttc,
@@ -1168,21 +1171,9 @@ export default function CommandesPage() {
                       </div>
                       <div>
                         <p className="text-xs text-gray-500 uppercase">Statut</p>
-                        <Select
-                          value={viewingOrder.status}
-                          onValueChange={(value) => updateOrderStatus(viewingOrder.id, value)}
-                        >
-                          <SelectTrigger className="h-8 w-full mt-1">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="draft">Brouillon</SelectItem>
-                            <SelectItem value="confirmed">Confirmee</SelectItem>
-                            <SelectItem value="in_progress">En cours</SelectItem>
-                            <SelectItem value="delivered">Livree</SelectItem>
-                            <SelectItem value="cancelled">Annulee</SelectItem>
-                          </SelectContent>
-                        </Select>
+                        <Badge className={`mt-1 ${statusColors[viewingOrder.status]}`}>
+                          {statusLabels[viewingOrder.status]}
+                        </Badge>
                       </div>
                       <div>
                         <p className="text-xs text-gray-500 uppercase">Articles</p>
@@ -1359,14 +1350,34 @@ export default function CommandesPage() {
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="edit_notes">Notes</Label>
-                <Input
-                  id="edit_notes"
-                  value={editFormData.notes}
-                  onChange={(e) => setEditFormData({ ...editFormData, notes: e.target.value })}
-                  placeholder="Notes sur la commande"
-                />
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Statut</Label>
+                  <Select
+                    value={editFormData.status}
+                    onValueChange={(value) => setEditFormData({ ...editFormData, status: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="draft">Brouillon</SelectItem>
+                      <SelectItem value="confirmed">Confirmee</SelectItem>
+                      <SelectItem value="in_progress">En cours</SelectItem>
+                      <SelectItem value="delivered">Livree</SelectItem>
+                      <SelectItem value="cancelled">Annulee</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_notes">Notes</Label>
+                  <Input
+                    id="edit_notes"
+                    value={editFormData.notes}
+                    onChange={(e) => setEditFormData({ ...editFormData, notes: e.target.value })}
+                    placeholder="Notes sur la commande"
+                  />
+                </div>
               </div>
 
               <div className="border-t pt-4">
