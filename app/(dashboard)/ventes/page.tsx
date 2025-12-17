@@ -151,29 +151,31 @@ export default function VentesPage() {
 
   // Generate unique sequential sale/invoice number from database
   const generateSaleNumber = async (): Promise<string> => {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data, error } = await (supabase.rpc as any)('get_next_document_number', {
-        p_document_type: 'vente'
-      })
+    const year = new Date().getFullYear()
+    const prefix = `VTE-${year}-`
 
-      if (error) {
-        console.error('Error generating sale number:', error)
-        // Fallback to random if RPC fails
-        const date = new Date()
-        const year = date.getFullYear()
-        const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0')
-        return `VTE-${year}-${random}`
+    try {
+      // Query the last sale number for this year
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data } = await (supabase.from('sales') as any)
+        .select('sale_number')
+        .like('sale_number', `${prefix}%`)
+        .order('sale_number', { ascending: false })
+        .limit(1)
+
+      if (data && data.length > 0) {
+        // Extract number from last sale_number (e.g., "VTE-2025-000123" -> 123)
+        const lastNumber = parseInt(data[0].sale_number.replace(prefix, '')) || 0
+        return `${prefix}${(lastNumber + 1).toString().padStart(6, '0')}`
       }
 
-      return data
+      // First sale of the year
+      return `${prefix}000001`
     } catch (err) {
-      console.error('Error calling RPC:', err)
-      // Fallback to random
-      const date = new Date()
-      const year = date.getFullYear()
-      const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0')
-      return `VTE-${year}-${random}`
+      console.error('Error generating sale number:', err)
+      // Fallback to timestamp-based
+      const timestamp = Date.now().toString().slice(-6)
+      return `${prefix}${timestamp}`
     }
   }
 

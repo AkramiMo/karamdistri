@@ -223,25 +223,28 @@ export default function ReceptionsPage() {
 
   // Generate reception number
   const generateReceptionNumber = async (): Promise<string> => {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data, error } = await (supabase.rpc as any)('get_next_document_number', {
-        p_document_type: 'reception'
-      })
+    const year = new Date().getFullYear()
+    const prefix = `BR-${year}-`
 
-      if (error || !data) {
-        const date = new Date()
-        const year = date.getFullYear()
-        const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0')
-        return `BR-${year}-${random}`
+    try {
+      // Query the last reception number for this year
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data } = await (supabase.from('receptions') as any)
+        .select('reception_number')
+        .like('reception_number', `${prefix}%`)
+        .order('reception_number', { ascending: false })
+        .limit(1)
+
+      if (data && data.length > 0) {
+        const lastNumber = parseInt(data[0].reception_number.replace(prefix, '')) || 0
+        return `${prefix}${(lastNumber + 1).toString().padStart(6, '0')}`
       }
 
-      return data
-    } catch {
-      const date = new Date()
-      const year = date.getFullYear()
-      const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0')
-      return `BR-${year}-${random}`
+      return `${prefix}000001`
+    } catch (err) {
+      console.error('Error generating reception number:', err)
+      const timestamp = Date.now().toString().slice(-6)
+      return `${prefix}${timestamp}`
     }
   }
 
