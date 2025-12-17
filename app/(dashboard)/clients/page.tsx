@@ -441,9 +441,9 @@ export default function ClientsPage() {
               </Button>
             </Link>
 
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-              <DialogTrigger asChild>
-                <ProtectedModule module="clients" action="create">
+            <ProtectedModule module="clients" action="create">
+              <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+                <DialogTrigger asChild>
                   <Button
                     className="bg-green-600 hover:bg-green-700"
                     onClick={() => {
@@ -454,8 +454,7 @@ export default function ClientsPage() {
                     <Plus className="mr-2 h-4 w-4" />
                     Nouveau client
                   </Button>
-                </ProtectedModule>
-              </DialogTrigger>
+                </DialogTrigger>
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>
@@ -700,7 +699,8 @@ export default function ClientsPage() {
                 </div>
               </form>
             </DialogContent>
-          </Dialog>
+            </Dialog>
+          </ProtectedModule>
           </div>
         </div>
 

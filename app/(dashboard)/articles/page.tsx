@@ -307,9 +307,9 @@ export default function ArticlesPage() {
             <p className="text-gray-500">Gérez votre catalogue de produits</p>
           </div>
 
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <ProtectedModule module="articles" action="create">
+          <ProtectedModule module="articles" action="create">
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <DialogTrigger asChild>
                 <Button
                   className="bg-green-600 hover:bg-green-700"
                   onClick={() => {
@@ -320,8 +320,7 @@ export default function ArticlesPage() {
                   <Plus className="mr-2 h-4 w-4" />
                   Nouvel article
                 </Button>
-              </ProtectedModule>
-            </DialogTrigger>
+              </DialogTrigger>
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>
@@ -507,7 +506,8 @@ export default function ArticlesPage() {
                 </div>
               </form>
             </DialogContent>
-          </Dialog>
+            </Dialog>
+          </ProtectedModule>
         </div>
 
         {/* Stats */}

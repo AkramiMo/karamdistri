@@ -676,9 +676,9 @@ export default function CommandesPage() {
             <p className="text-gray-500">Gerez vos commandes clients</p>
           </div>
 
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <ProtectedModule module="commandes" action="create">
+          <ProtectedModule module="commandes" action="create">
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <DialogTrigger asChild>
                 <Button
                   className="bg-green-600 hover:bg-green-700"
                   onClick={() => {
@@ -689,8 +689,7 @@ export default function CommandesPage() {
                   <Plus className="mr-2 h-4 w-4" />
                   Nouvelle commande
                 </Button>
-              </ProtectedModule>
-            </DialogTrigger>
+              </DialogTrigger>
             <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Nouvelle commande</DialogTitle>
@@ -906,7 +905,8 @@ export default function CommandesPage() {
                 </div>
               </form>
             </DialogContent>
-          </Dialog>
+            </Dialog>
+          </ProtectedModule>
         </div>
 
         {/* Stats */}

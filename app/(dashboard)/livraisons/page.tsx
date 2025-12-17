@@ -1074,9 +1074,9 @@ export default function LivraisonsPage() {
               </>
             )}
 
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-              <DialogTrigger asChild>
-                <ProtectedModule module="livraisons" action="create">
+            <ProtectedModule module="livraisons" action="create">
+              <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+                <DialogTrigger asChild>
                   <Button
                     className="bg-green-600 hover:bg-green-700"
                     onClick={() => {
@@ -1087,8 +1087,7 @@ export default function LivraisonsPage() {
                     <Plus className="mr-2 h-4 w-4" />
                     Nouveau BL
                   </Button>
-                </ProtectedModule>
-              </DialogTrigger>
+                </DialogTrigger>
               <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                   <DialogTitle>Nouveau bon de livraison</DialogTitle>
@@ -1162,7 +1161,8 @@ export default function LivraisonsPage() {
                   </div>
                 </form>
               </DialogContent>
-            </Dialog>
+              </Dialog>
+            </ProtectedModule>
           </div>
         </div>
 

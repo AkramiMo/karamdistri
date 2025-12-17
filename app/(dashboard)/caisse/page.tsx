@@ -140,15 +140,14 @@ export default function CaissePage() {
             <p className="text-gray-500">Gérez votre trésorerie</p>
           </div>
 
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <ProtectedModule module="caisse" action="create">
+          <ProtectedModule module="caisse" action="create">
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <DialogTrigger asChild>
                 <Button className="bg-green-600 hover:bg-green-700">
                   <Plus className="mr-2 h-4 w-4" />
                   Nouvelle opération
                 </Button>
-              </ProtectedModule>
-            </DialogTrigger>
+              </DialogTrigger>
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Nouvelle opération de caisse</DialogTitle>
@@ -231,7 +230,8 @@ export default function CaissePage() {
                 </div>
               </form>
             </DialogContent>
-          </Dialog>
+            </Dialog>
+          </ProtectedModule>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">

@@ -327,9 +327,9 @@ export default function VentesPage() {
             <p className="text-gray-500">Gérez vos ventes et encaissements</p>
           </div>
 
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <ProtectedModule module="ventes" action="create">
+          <ProtectedModule module="ventes" action="create">
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <DialogTrigger asChild>
                 <Button
                   className="bg-green-600 hover:bg-green-700"
                   onClick={() => {
@@ -340,8 +340,7 @@ export default function VentesPage() {
                   <Plus className="mr-2 h-4 w-4" />
                   Nouvelle vente
                 </Button>
-              </ProtectedModule>
-            </DialogTrigger>
+              </DialogTrigger>
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Nouvelle vente</DialogTitle>
@@ -454,7 +453,8 @@ export default function VentesPage() {
                 </div>
               </form>
             </DialogContent>
-          </Dialog>
+            </Dialog>
+          </ProtectedModule>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
