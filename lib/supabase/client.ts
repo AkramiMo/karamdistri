@@ -1,22 +1,23 @@
 /**
  * Supabase Browser Client - AKKA ERP
- * Client principal avec support du secure client
+ * Client SINGLETON pour éviter les instances multiples
  */
 
 import { createBrowserClient } from '@supabase/ssr'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '@/types/database'
 
 // Flag pour activer/désactiver le logging détaillé
 const DEBUG_MODE = process.env.NODE_ENV === 'development';
 
-// Compteur de création de clients pour debugging
-let clientCreationCount = 0;
+// SINGLETON - Une seule instance du client
+let supabaseInstance: SupabaseClient<Database> | null = null;
+let instanceCreated = false;
 
-export function createClient() {
-  clientCreationCount++;
-
-  if (DEBUG_MODE && clientCreationCount > 1) {
-    console.log(`📊 Supabase client created (instance #${clientCreationCount})`);
+export function createClient(): SupabaseClient<Database> {
+  // Retourner l'instance existante si elle existe
+  if (supabaseInstance) {
+    return supabaseInstance;
   }
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -30,12 +31,18 @@ export function createClient() {
     throw new Error('Missing Supabase credentials');
   }
 
-  return createBrowserClient<Database>(url, key, {
+  if (DEBUG_MODE && !instanceCreated) {
+    console.log('🔧 Creating Supabase client (SINGLETON)');
+    console.log('   URL:', url.substring(0, 35) + '...');
+    instanceCreated = true;
+  }
+
+  supabaseInstance = createBrowserClient<Database>(url, key, {
     auth: {
       autoRefreshToken: true,
       persistSession: true,
       detectSessionInUrl: true,
-      debug: DEBUG_MODE,
+      debug: false, // Désactiver le debug auth pour réduire le bruit
     },
     global: {
       headers: {
@@ -45,7 +52,7 @@ export function createClient() {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => {
           if (DEBUG_MODE) {
-            console.warn('⏱️ Request timeout - aborting');
+            console.warn('⏱️ Request timeout after 20s - aborting');
           }
           controller.abort();
         }, 20000);
@@ -72,8 +79,23 @@ export function createClient() {
           .finally(() => clearTimeout(timeoutId));
       }
     }
-  })
+  });
+
+  if (DEBUG_MODE) {
+    console.log('✅ Supabase client ready (singleton instance)');
+  }
+
+  return supabaseInstance;
 }
 
 // Export du secure client pour les opérations critiques
 export { supabaseSecure, healthMonitor, secureQuery } from './secure-client';
+
+// Fonction pour réinitialiser le client (utile pour les tests ou déconnexion)
+export function resetClient() {
+  supabaseInstance = null;
+  instanceCreated = false;
+  if (DEBUG_MODE) {
+    console.log('🔄 Supabase client reset');
+  }
+}

@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import type { AuthChangeEvent, Session } from '@supabase/supabase-js'
 import type { AuthUser, UserWithRole, Permission } from '@/types/auth'
 
 interface AuthContextType {
@@ -83,7 +84,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     initAuth()
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
+      async (event: AuthChangeEvent, session: Session | null) => {
         if (event === 'SIGNED_OUT') {
           setUser(null)
           setProfile(null)

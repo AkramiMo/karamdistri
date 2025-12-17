@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import type { AuthChangeEvent, Session } from '@supabase/supabase-js'
 import type { AuthUser, UserWithRole, LoginCredentials } from '@/types/auth'
 
 export function useAuth() {
@@ -50,7 +51,7 @@ export function useAuth() {
     getUser()
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
+      async (event: AuthChangeEvent, session: Session | null) => {
         if (event === 'SIGNED_IN' && session?.user) {
           setUser(session.user as AuthUser)
           const userProfile = await fetchProfile(session.user.id)

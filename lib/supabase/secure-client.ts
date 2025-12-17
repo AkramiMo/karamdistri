@@ -6,6 +6,9 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from '@/types/database';
 
+// Mode debug - réduit les logs en production
+const DEBUG_MODE = process.env.NODE_ENV === 'development';
+
 // Validation des variables d'environnement
 const validateEnvironment = () => {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -102,13 +105,19 @@ class SupabaseSecureManager {
   private maxRetries = 3;
   private lastError?: string;
   private healthCheckInterval: NodeJS.Timeout | null = null;
+  private isInitialized = false;
 
   private constructor() {
-    console.log('🔧 Initializing Supabase Secure Client...');
-    console.log('   URL:', SUPABASE_URL.substring(0, 30) + '...');
+    if (DEBUG_MODE) {
+      console.log('🔧 Initializing Supabase Secure Client...');
+    }
 
     this.client = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, CONNECTION_CONFIG);
-    this.initializeHealthMonitoring();
+
+    // Délai avant le premier health check pour laisser le temps à l'auth de s'initialiser
+    setTimeout(() => {
+      this.initializeHealthMonitoring();
+    }, 2000);
   }
 
   static getInstance(): SupabaseSecureManager {
@@ -136,40 +145,51 @@ class SupabaseSecureManager {
   }
 
   private async performHealthCheck(): Promise<void> {
-    const checkId = Math.random().toString(36).substring(7);
-    console.log(`🏥 [${checkId}] Health check starting...`);
+    // Skip si déjà en cours de check
+    if (this.isInitialized && Date.now() - this.lastHealthCheck < 5000) {
+      return;
+    }
 
     try {
       const startTime = performance.now();
 
-      const { data, error } = await Promise.race([
-        this.client.auth.getSession(),
+      // Utiliser un simple ping à la base plutôt que getSession
+      const { error } = await Promise.race([
+        this.client.from('roles').select('id').limit(1),
         new Promise<{ data: null; error: Error }>((_, reject) =>
-          setTimeout(() => reject(new Error('Health check timeout (8s)')), 8000)
+          setTimeout(() => reject(new Error('Health check timeout')), 5000)
         )
       ]);
 
       const responseTime = performance.now() - startTime;
+      this.lastHealthCheck = Date.now();
+      this.isInitialized = true;
 
       if (error) {
         this.connectionStatus = 'degraded';
         this.lastError = error.message;
-        console.warn(`⚠️ [${checkId}] Health check warning: ${error.message} (${responseTime.toFixed(0)}ms)`);
-      } else if (responseTime > 5000) {
+        if (DEBUG_MODE) {
+          console.warn(`⚠️ Health check: ${error.message} (${responseTime.toFixed(0)}ms)`);
+        }
+      } else if (responseTime > 3000) {
         this.connectionStatus = 'degraded';
-        console.warn(`⚠️ [${checkId}] Connection slow: ${responseTime.toFixed(0)}ms`);
+        if (DEBUG_MODE) {
+          console.warn(`⚠️ Connection slow: ${responseTime.toFixed(0)}ms`);
+        }
       } else {
         this.connectionStatus = 'healthy';
         this.retryCount = 0;
         this.lastError = undefined;
-        console.log(`✅ [${checkId}] Health check passed (${responseTime.toFixed(0)}ms)`);
+        if (DEBUG_MODE) {
+          console.log(`✅ Connection OK (${responseTime.toFixed(0)}ms)`);
+        }
       }
-
-      this.lastHealthCheck = Date.now();
     } catch (error) {
       this.connectionStatus = 'failed';
       this.lastError = error instanceof Error ? error.message : 'Unknown error';
-      console.error(`🔴 [${checkId}] Health check failed:`, this.lastError);
+      if (DEBUG_MODE) {
+        console.error('🔴 Health check failed:', this.lastError);
+      }
     }
   }
 
@@ -179,37 +199,27 @@ class SupabaseSecureManager {
     context: string = 'database operation'
   ): Promise<T> {
     let lastError: any;
-    const operationId = Math.random().toString(36).substring(7);
-
-    console.log(`📤 [${operationId}] Starting: ${context}`);
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       try {
         // Re-check santé si connexion failed
         if (this.connectionStatus === 'failed' && attempt === 0) {
-          console.log(`🔄 [${operationId}] Connection was failed, performing health check...`);
           await this.performHealthCheck();
         }
 
-        const startTime = performance.now();
         const result = await this.withTimeout(operation(), 25000);
-        const duration = performance.now() - startTime;
 
         // Vérifier les erreurs Supabase
         if (result && typeof result === 'object' && 'error' in result) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const supabaseResult = result as unknown as { data: any; error: any };
           if (supabaseResult.error) {
-            console.error(`❌ [${operationId}] Supabase error:`, {
-              message: supabaseResult.error.message,
-              code: supabaseResult.error.code,
-              details: supabaseResult.error.details,
-              hint: supabaseResult.error.hint,
-            });
+            if (DEBUG_MODE) {
+              console.error(`❌ ${context}:`, supabaseResult.error.message);
+            }
 
             if (this.isRetryableError(supabaseResult.error) && attempt < this.maxRetries) {
               lastError = supabaseResult.error;
-              console.log(`🔄 [${operationId}] Retryable error, will retry (attempt ${attempt + 1}/${this.maxRetries})`);
               await this.backoffDelay(attempt);
               continue;
             }
@@ -218,23 +228,18 @@ class SupabaseSecureManager {
 
         // Succès
         this.retryCount = 0;
-        console.log(`✅ [${operationId}] Success: ${context} (${duration.toFixed(0)}ms)`);
         return result;
 
       } catch (error) {
         lastError = error;
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
-        console.error(`❌ [${operationId}] Error (attempt ${attempt + 1}):`, {
-          context,
-          error: errorMessage,
-          stack: error instanceof Error ? error.stack?.split('\n').slice(0, 3).join('\n') : undefined,
-        });
+        if (DEBUG_MODE) {
+          console.error(`❌ ${context} (attempt ${attempt + 1}):`, error instanceof Error ? error.message : error);
+        }
 
         if (this.isRetryableError(error) && attempt < this.maxRetries) {
           this.retryCount++;
-          const delay = await this.backoffDelay(attempt);
-          console.log(`🔄 [${operationId}] Retrying in ${delay}ms...`);
+          await this.backoffDelay(attempt);
           continue;
         }
 
@@ -242,7 +247,9 @@ class SupabaseSecureManager {
       }
     }
 
-    console.error(`💥 [${operationId}] ${context} failed after ${this.maxRetries + 1} attempts:`, lastError);
+    if (DEBUG_MODE) {
+      console.error(`💥 ${context} failed after ${this.maxRetries + 1} attempts`);
+    }
     throw lastError;
   }
 
@@ -266,15 +273,9 @@ class SupabaseSecureManager {
 
     const retryableCodes = ['500', '502', '503', '504', '408', '429'];
 
-    const isRetryable = networkErrors.some(err => message.includes(err)) ||
-                        temporaryErrors.some(err => message.includes(err)) ||
-                        retryableCodes.includes(code);
-
-    if (isRetryable) {
-      console.log('🔍 Error classified as retryable:', { message: message.substring(0, 100), code });
-    }
-
-    return isRetryable;
+    return networkErrors.some(err => message.includes(err)) ||
+           temporaryErrors.some(err => message.includes(err)) ||
+           retryableCodes.includes(code);
   }
 
   // Backoff exponentiel avec jitter
@@ -284,7 +285,6 @@ class SupabaseSecureManager {
     const jitter = Math.random() * 1000;
     const totalDelay = Math.min(exponentialDelay + jitter, 10000);
 
-    console.log(`⏳ Backoff delay: ${totalDelay.toFixed(0)}ms (attempt ${attempt + 1})`);
     await new Promise(resolve => setTimeout(resolve, totalDelay));
     return totalDelay;
   }
@@ -351,13 +351,9 @@ export const healthMonitor = {
   isHealthy: () => supabaseManager.getHealthStatus().healthy,
 };
 
-// Log au démarrage
-if (process.env.NODE_ENV === 'development') {
-  console.log('🛡️ Supabase Secure Client Ready:');
-  console.log('   ✅ Retry automatique (3 tentatives)');
-  console.log('   ✅ Health monitoring actif');
-  console.log('   ✅ Timeout: 20s requêtes, 25s opérations');
-  console.log('   ✅ Backoff exponentiel avec jitter');
+// Log au démarrage (une seule ligne)
+if (DEBUG_MODE) {
+  console.log('🛡️ Supabase Secure Client: retry=3, timeout=20s, health monitoring active');
 }
 
 export default supabaseSecure;
