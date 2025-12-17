@@ -43,7 +43,7 @@ import {
 } from '@/components/ui/popover'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Search, Eye, ShoppingCart, Trash2, FileText, Truck, Download, Users, Package, Check, ChevronsUpDown } from 'lucide-react'
+import { Plus, Search, Eye, ShoppingCart, Trash2, FileText, Truck, Download, Users, Package, Check, ChevronsUpDown, Pencil } from 'lucide-react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { generateInvoicePDF, generateDeliveryNotePDF } from '@/lib/pdf/invoice'
@@ -147,6 +147,14 @@ export default function CommandesPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [viewingOrder, setViewingOrder] = useState<Order | null>(null)
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
+  const [editingOrder, setEditingOrder] = useState<Order | null>(null)
+  const [editFormData, setEditFormData] = useState({
+    client_id: '',
+    order_date: '',
+    notes: '',
+  })
+  const [editOrderItems, setEditOrderItems] = useState<OrderItem[]>([])
   const supabase = createClient()
   const { companySettings } = useCompanySettings()
 
@@ -163,6 +171,13 @@ export default function CommandesPage() {
   // Combobox open states
   const [clientOpen, setClientOpen] = useState(false)
   const [articleOpen, setArticleOpen] = useState(false)
+
+  // Edit dialog combobox states
+  const [editClientOpen, setEditClientOpen] = useState(false)
+  const [editArticleOpen, setEditArticleOpen] = useState(false)
+  const [editSelectedArticle, setEditSelectedArticle] = useState('')
+  const [editSelectedQuantity, setEditSelectedQuantity] = useState('1')
+  const [editClientPrices, setEditClientPrices] = useState<ClientPrice[]>([])
 
   const fetchOrders = async () => {
     setIsLoading(true)
@@ -239,13 +254,22 @@ export default function CommandesPage() {
     }
   }, [formData.client_id])
 
-  const generateOrderNumber = () => {
-    const lastOrder = orders[0]
-    if (lastOrder && lastOrder.order_number.startsWith('BCC')) {
-      const lastNum = parseInt(lastOrder.order_number.replace('BCC', ''))
-      return `BCC${lastNum + 1}`
+  const generateOrderNumber = async (): Promise<string> => {
+    // Query database for the highest order number to avoid duplicates
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await (supabase.from('orders') as any)
+      .select('order_number')
+      .like('order_number', 'BCC%')
+      .order('order_number', { ascending: false })
+      .limit(1)
+
+    if (data && data.length > 0) {
+      const lastNum = parseInt(data[0].order_number.replace('BCC', ''))
+      if (!isNaN(lastNum)) {
+        return `BCC${lastNum + 1}`
+      }
     }
-    return `BCC${401 + orders.length}`
+    return `BCC${401}`
   }
 
   const addItem = () => {
@@ -288,11 +312,14 @@ export default function CommandesPage() {
     const total_tva = total_ht * 0.2 // 20% TVA
     const total_ttc = total_ht + total_tva
 
+    // Generate unique order number from database
+    const orderNumber = await generateOrderNumber()
+
     // Create order
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: orderData, error: orderError } = await (supabase.from('orders') as any)
       .insert([{
-        order_number: generateOrderNumber(),
+        order_number: orderNumber,
         client_id: formData.client_id,
         order_date: formData.order_date,
         status: 'draft',
@@ -464,6 +491,153 @@ export default function CommandesPage() {
     setOrderItems([])
     setSelectedArticle('')
     setSelectedQuantity('1')
+  }
+
+  // Edit order functions
+  const fetchEditClientPrices = async (clientId: string) => {
+    if (!clientId) {
+      setEditClientPrices([])
+      return
+    }
+    const { data } = await supabase
+      .from('client_prices')
+      .select('article_id, custom_price')
+      .eq('client_id', clientId)
+    setEditClientPrices(data || [])
+  }
+
+  const getEditArticlePrice = (articleId: string): number => {
+    const clientPrice = editClientPrices.find(cp => cp.article_id === articleId)
+    if (clientPrice) return clientPrice.custom_price
+    const article = articles.find(a => a.id === articleId)
+    return article?.price_ht || 0
+  }
+
+  const handleEditOrder = async (order: Order) => {
+    setEditingOrder(order)
+    setEditFormData({
+      client_id: order.client_id,
+      order_date: order.order_date,
+      notes: order.notes || '',
+    })
+
+    // Convert order items to editable format
+    const items: OrderItem[] = (order.order_items || []).map(item => ({
+      article_id: item.article_id,
+      article_code: item.article?.code || '',
+      article_name: item.article?.name || '',
+      article_description: item.article?.description || null,
+      quantity: item.quantity,
+      unit_price: item.unit_price,
+      total_ht: item.total_ht,
+    }))
+    setEditOrderItems(items)
+
+    // Fetch client prices
+    await fetchEditClientPrices(order.client_id)
+
+    setIsEditDialogOpen(true)
+  }
+
+  const addEditItem = () => {
+    if (!editSelectedArticle || !editSelectedQuantity) return
+
+    const article = articles.find(a => a.id === editSelectedArticle)
+    if (!article) return
+
+    const quantity = parseInt(editSelectedQuantity)
+    const unitPrice = getEditArticlePrice(editSelectedArticle)
+    const total_ht = unitPrice * quantity
+
+    setEditOrderItems([...editOrderItems, {
+      article_id: article.id,
+      article_code: article.code,
+      article_name: article.name,
+      article_description: article.description,
+      quantity,
+      unit_price: unitPrice,
+      total_ht,
+    }])
+
+    setEditSelectedArticle('')
+    setEditSelectedQuantity('1')
+  }
+
+  const removeEditItem = (index: number) => {
+    setEditOrderItems(editOrderItems.filter((_, i) => i !== index))
+  }
+
+  const updateEditItemQuantity = (index: number, newQuantity: number) => {
+    const updatedItems = [...editOrderItems]
+    updatedItems[index].quantity = newQuantity
+    updatedItems[index].total_ht = updatedItems[index].unit_price * newQuantity
+    setEditOrderItems(updatedItems)
+  }
+
+  const updateEditItemPrice = (index: number, newPrice: number) => {
+    const updatedItems = [...editOrderItems]
+    updatedItems[index].unit_price = newPrice
+    updatedItems[index].total_ht = newPrice * updatedItems[index].quantity
+    setEditOrderItems(updatedItems)
+  }
+
+  const handleSaveEdit = async () => {
+    if (!editingOrder) return
+
+    if (!editFormData.client_id || editOrderItems.length === 0) {
+      alert('Veuillez selectionner un client et ajouter au moins un article')
+      return
+    }
+
+    const total_ht = editOrderItems.reduce((sum, item) => sum + item.total_ht, 0)
+    const total_tva = total_ht * 0.2
+    const total_ttc = total_ht + total_tva
+
+    // Update order
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: orderError } = await (supabase.from('orders') as any)
+      .update({
+        client_id: editFormData.client_id,
+        order_date: editFormData.order_date,
+        notes: editFormData.notes || null,
+        total_ht,
+        total_tva,
+        total_ttc,
+      })
+      .eq('id', editingOrder.id)
+
+    if (orderError) {
+      console.error('Error updating order:', orderError)
+      alert(`Erreur lors de la modification: ${orderError.message || JSON.stringify(orderError)}`)
+      return
+    }
+
+    // Delete existing order items
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase.from('order_items') as any).delete().eq('order_id', editingOrder.id)
+
+    // Insert new order items
+    const itemsToInsert = editOrderItems.map(item => ({
+      order_id: editingOrder.id,
+      article_id: item.article_id,
+      quantity: item.quantity,
+      unit_price: item.unit_price,
+      discount_percent: 0,
+      total_ht: item.total_ht,
+    }))
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase.from('order_items') as any).insert(itemsToInsert)
+
+    fetchOrders()
+    setIsEditDialogOpen(false)
+    setEditingOrder(null)
+  }
+
+  // Handle client change in edit mode
+  const handleEditClientChange = async (newClientId: string) => {
+    setEditFormData({ ...editFormData, client_id: newClientId })
+    await fetchEditClientPrices(newClientId)
   }
 
   const filteredOrders = orders.filter((order) => {
@@ -889,6 +1063,14 @@ export default function CommandesPage() {
                             <Button
                               variant="ghost"
                               size="icon"
+                              title="Modifier"
+                              onClick={() => handleEditOrder(order)}
+                            >
+                              <Pencil className="h-4 w-4 text-orange-600" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
                               title="Telecharger facture"
                               onClick={() => handleGenerateInvoice(order)}
                             >
@@ -1102,6 +1284,245 @@ export default function CommandesPage() {
                 </div>
               </div>
             )}
+          </DialogContent>
+        </Dialog>
+
+        {/* Edit Order Dialog */}
+        <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Pencil className="h-5 w-5 text-orange-600" />
+                Modifier la commande {editingOrder?.order_number}
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Client *</Label>
+                  <Popover open={editClientOpen} onOpenChange={setEditClientOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        role="combobox"
+                        aria-expanded={editClientOpen}
+                        className="w-full justify-between"
+                      >
+                        {editFormData.client_id
+                          ? clients.find((c) => c.id === editFormData.client_id)?.name || "Client selectionne"
+                          : "Rechercher un client..."}
+                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[400px] p-0" align="start">
+                      <Command>
+                        <CommandInput placeholder="Rechercher par nom ou code..." />
+                        <CommandList>
+                          <CommandEmpty>Aucun client trouve.</CommandEmpty>
+                          <CommandGroup>
+                            {clients.map((client) => (
+                              <CommandItem
+                                key={client.id}
+                                value={`${client.code} ${client.name} ${client.phone || ''}`}
+                                onSelect={() => {
+                                  handleEditClientChange(client.id)
+                                  setEditClientOpen(false)
+                                }}
+                              >
+                                <Check
+                                  className={cn(
+                                    "mr-2 h-4 w-4",
+                                    editFormData.client_id === client.id ? "opacity-100" : "opacity-0"
+                                  )}
+                                />
+                                <span className="font-medium">{client.code}</span>
+                                <span className="ml-2 text-gray-600">{client.name}</span>
+                                {client.phone && (
+                                  <span className="ml-2 text-gray-400 text-sm">{client.phone}</span>
+                                )}
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_order_date">Date de commande</Label>
+                  <Input
+                    id="edit_order_date"
+                    type="date"
+                    value={editFormData.order_date}
+                    onChange={(e) => setEditFormData({ ...editFormData, order_date: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="edit_notes">Notes</Label>
+                <Input
+                  id="edit_notes"
+                  value={editFormData.notes}
+                  onChange={(e) => setEditFormData({ ...editFormData, notes: e.target.value })}
+                  placeholder="Notes sur la commande"
+                />
+              </div>
+
+              <div className="border-t pt-4">
+                <h3 className="font-medium mb-3">
+                  Articles
+                  {editClientPrices.length > 0 && (
+                    <Badge className="ml-2 bg-green-100 text-green-800">
+                      {editClientPrices.length} prix personnalises
+                    </Badge>
+                  )}
+                </h3>
+                <div className="flex gap-2 mb-4">
+                  <Popover open={editArticleOpen} onOpenChange={setEditArticleOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        role="combobox"
+                        aria-expanded={editArticleOpen}
+                        className="flex-1 justify-between"
+                      >
+                        {editSelectedArticle
+                          ? (() => {
+                              const article = articles.find((a) => a.id === editSelectedArticle)
+                              if (!article) return "Article selectionne"
+                              const clientPrice = editClientPrices.find(cp => cp.article_id === article.id)
+                              const displayPrice = clientPrice ? clientPrice.custom_price : article.price_ht
+                              return `${article.code} - ${article.name} (${formatPrice(displayPrice)})`
+                            })()
+                          : "Ajouter un article..."}
+                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[500px] p-0" align="start">
+                      <Command>
+                        <CommandInput placeholder="Rechercher par code ou nom..." />
+                        <CommandList>
+                          <CommandEmpty>Aucun article trouve.</CommandEmpty>
+                          <CommandGroup>
+                            {articles.map((article) => {
+                              const clientPrice = editClientPrices.find(cp => cp.article_id === article.id)
+                              const displayPrice = clientPrice ? clientPrice.custom_price : article.price_ht
+                              return (
+                                <CommandItem
+                                  key={article.id}
+                                  value={`${article.code} ${article.name}`}
+                                  onSelect={() => {
+                                    setEditSelectedArticle(article.id)
+                                    setEditArticleOpen(false)
+                                  }}
+                                >
+                                  <Check
+                                    className={cn(
+                                      "mr-2 h-4 w-4",
+                                      editSelectedArticle === article.id ? "opacity-100" : "opacity-0"
+                                    )}
+                                  />
+                                  <span className="font-medium">{article.code}</span>
+                                  <span className="ml-2 text-gray-600">{article.name}</span>
+                                  <span className="ml-auto text-green-600">{formatPrice(displayPrice)}</span>
+                                  {clientPrice && <Badge className="ml-1 bg-yellow-100 text-yellow-800 text-xs">*</Badge>}
+                                </CommandItem>
+                              )
+                            })}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                  <Input
+                    type="number"
+                    min="1"
+                    value={editSelectedQuantity}
+                    onChange={(e) => setEditSelectedQuantity(e.target.value)}
+                    className="w-24"
+                    placeholder="Qte"
+                  />
+                  <Button type="button" onClick={addEditItem} variant="outline">
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </div>
+
+                {editOrderItems.length > 0 && (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Article</TableHead>
+                        <TableHead className="text-right">Qte</TableHead>
+                        <TableHead className="text-right">Prix unit.</TableHead>
+                        <TableHead className="text-right">Total HT</TableHead>
+                        <TableHead></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {editOrderItems.map((item, index) => (
+                        <TableRow key={index}>
+                          <TableCell>
+                            <div>
+                              <span className="font-mono text-sm">{item.article_code}</span>
+                              <span className="ml-2">{item.article_name}</span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Input
+                              type="number"
+                              min="1"
+                              value={item.quantity}
+                              onChange={(e) => updateEditItemQuantity(index, parseInt(e.target.value) || 1)}
+                              className="w-20 text-right"
+                            />
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={item.unit_price}
+                              onChange={(e) => updateEditItemPrice(index, parseFloat(e.target.value) || 0)}
+                              className="w-24 text-right"
+                            />
+                          </TableCell>
+                          <TableCell className="text-right">{formatPrice(item.total_ht)}</TableCell>
+                          <TableCell>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => removeEditItem(index)}
+                            >
+                              <Trash2 className="h-4 w-4 text-red-600" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      <TableRow>
+                        <TableCell colSpan={3} className="text-right font-medium">
+                          Total HT:
+                        </TableCell>
+                        <TableCell className="text-right font-bold">
+                          {formatPrice(editOrderItems.reduce((sum, item) => sum + item.total_ht, 0))}
+                        </TableCell>
+                        <TableCell></TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
+
+              <div className="flex justify-end gap-2 pt-4 border-t mt-4">
+                <Button type="button" variant="outline" onClick={() => setIsEditDialogOpen(false)}>
+                  Annuler
+                </Button>
+                <Button onClick={handleSaveEdit} className="bg-orange-600 hover:bg-orange-700">
+                  Enregistrer les modifications
+                </Button>
+              </div>
+            </div>
           </DialogContent>
         </Dialog>
       </div>

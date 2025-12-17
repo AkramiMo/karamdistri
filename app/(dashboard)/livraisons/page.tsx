@@ -50,6 +50,11 @@ import {
   Navigation,
   Building,
   Link2,
+  Wallet,
+  Receipt,
+  CreditCard,
+  Banknote,
+  Building2,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
@@ -89,10 +94,27 @@ interface Delivery {
   status: string
   delivery_date: string | null
   total_ht: number | null
+  total_ttc?: number | null
+  amount_paid?: number | null
+  balance_due?: number | null
+  payment_status?: string | null
   notes: string | null
   client?: Client
   order?: { order_number: string }
   delivery_items?: DeliveryItem[]
+}
+
+interface Payment {
+  id: string
+  payment_number: string
+  client_id: string
+  delivery_id: string | null
+  amount: number
+  payment_method: string
+  payment_date: string
+  reference: string | null
+  notes: string | null
+  created_at: string
 }
 
 interface Order {
@@ -144,6 +166,25 @@ const statusLabels: Record<string, string> = {
   returned: 'Retournee',
 }
 
+const paymentStatusColors: Record<string, string> = {
+  pending: 'bg-red-100 text-red-800',
+  partial: 'bg-orange-100 text-orange-800',
+  paid: 'bg-green-100 text-green-800',
+}
+
+const paymentStatusLabels: Record<string, string> = {
+  pending: 'Non paye',
+  partial: 'Partiel',
+  paid: 'Paye',
+}
+
+const paymentMethodLabels: Record<string, string> = {
+  cash: 'Especes',
+  check: 'Cheque',
+  transfer: 'Virement',
+  card: 'Carte',
+}
+
 export default function LivraisonsPage() {
   const [deliveries, setDeliveries] = useState<Delivery[]>([])
   const [orders, setOrders] = useState<Order[]>([])
@@ -175,6 +216,20 @@ export default function LivraisonsPage() {
   const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null)
   const [isGettingLocation, setIsGettingLocation] = useState(false)
 
+  // Payment state
+  const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false)
+  const [paymentDelivery, setPaymentDelivery] = useState<Delivery | null>(null)
+  const [paymentFormData, setPaymentFormData] = useState({
+    amount: 0,
+    payment_method: 'cash',
+    payment_date: new Date().toISOString().split('T')[0],
+    reference: '',
+    notes: '',
+  })
+  const [deliveryPayments, setDeliveryPayments] = useState<Payment[]>([])
+  const [isReceiptDialogOpen, setIsReceiptDialogOpen] = useState(false)
+  const [lastPayment, setLastPayment] = useState<Payment | null>(null)
+
   const supabase = useSupabase()
   const { companySettings } = useCompanySettings()
 
@@ -196,7 +251,7 @@ export default function LivraisonsPage() {
           supabase
             .from('deliveries')
             .select(`
-              id, delivery_number, order_id, client_id, status, delivery_date, total_ht, notes,
+              id, delivery_number, order_id, client_id, status, delivery_date, total_ht, total_ttc, amount_paid, balance_due, payment_status, notes,
               client:clients(code, name, contact_name, phone, address, city, gps_lat, gps_lng),
               order:orders(order_number),
               delivery_items(id, article_id, quantity_ordered, quantity_delivered, quantity_returned, unit_price, article:articles(code, name, description))
@@ -454,9 +509,10 @@ export default function LivraisonsPage() {
 
   // Load items from a different order
   const handleEditOrderChange = async (newOrderId: string) => {
-    setEditFormData({ ...editFormData, order_id: newOrderId })
+    const orderId = newOrderId === 'none' ? '' : newOrderId
+    setEditFormData({ ...editFormData, order_id: orderId })
 
-    if (newOrderId && editingDelivery) {
+    if (orderId && editingDelivery) {
       // Delete existing delivery items
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (supabase.from('delivery_items') as any)
@@ -549,6 +605,201 @@ export default function LivraisonsPage() {
     alert('Bon de livraison mis à jour avec succès')
     setIsEditDialogOpen(false)
     fetchData()
+  }
+
+  // Payment handlers
+  const handleOpenPayment = async (delivery: Delivery) => {
+    setPaymentDelivery(delivery)
+    const totalTTC = (delivery.total_ht || 0) * 1.2
+    const balanceDue = delivery.balance_due ?? totalTTC
+
+    setPaymentFormData({
+      amount: balanceDue,
+      payment_method: 'cash',
+      payment_date: new Date().toISOString().split('T')[0],
+      reference: '',
+      notes: '',
+    })
+
+    // Fetch existing payments for this delivery
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: payments } = await (supabase.from('payments') as any)
+      .select('*')
+      .eq('delivery_id', delivery.id)
+      .order('created_at', { ascending: false })
+
+    setDeliveryPayments(payments || [])
+    setIsPaymentDialogOpen(true)
+  }
+
+  const generatePaymentNumber = async (): Promise<string> => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await (supabase.from('payments') as any)
+      .select('payment_number')
+      .like('payment_number', 'REC%')
+      .order('payment_number', { ascending: false })
+      .limit(1)
+
+    if (data && data.length > 0) {
+      const lastNum = parseInt(data[0].payment_number.replace('REC', ''))
+      if (!isNaN(lastNum)) {
+        return `REC${String(lastNum + 1).padStart(5, '0')}`
+      }
+    }
+    return 'REC00001'
+  }
+
+  const handleSubmitPayment = async (e: React.FormEvent) => {
+    e.preventDefault()
+
+    if (!paymentDelivery) return
+
+    if (paymentFormData.amount <= 0) {
+      alert('Le montant doit etre superieur a 0')
+      return
+    }
+
+    try {
+      const paymentNumber = await generatePaymentNumber()
+
+      // Create payment
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: newPayment, error } = await (supabase.from('payments') as any)
+        .insert({
+          payment_number: paymentNumber,
+          client_id: paymentDelivery.client_id,
+          delivery_id: paymentDelivery.id,
+          amount: paymentFormData.amount,
+          payment_method: paymentFormData.payment_method,
+          payment_date: paymentFormData.payment_date,
+          reference: paymentFormData.reference || null,
+          notes: paymentFormData.notes || null,
+        })
+        .select()
+        .single()
+
+      if (error) {
+        console.error('Payment error:', error)
+        alert('Erreur lors de l\'enregistrement du paiement')
+        return
+      }
+
+      // Update delivery payment status
+      const totalTTC = (paymentDelivery.total_ht || 0) * 1.2
+      const currentPaid = (paymentDelivery.amount_paid || 0) + paymentFormData.amount
+      const newBalance = Math.max(0, totalTTC - currentPaid)
+      const newStatus = newBalance <= 0 ? 'paid' : currentPaid > 0 ? 'partial' : 'pending'
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase.from('deliveries') as any)
+        .update({
+          amount_paid: currentPaid,
+          balance_due: newBalance,
+          payment_status: newStatus,
+          total_ttc: totalTTC,
+        })
+        .eq('id', paymentDelivery.id)
+
+      setLastPayment(newPayment)
+      setIsPaymentDialogOpen(false)
+      setIsReceiptDialogOpen(true)
+      fetchData()
+    } catch (error) {
+      console.error('Payment error:', error)
+      alert('Erreur lors de l\'enregistrement')
+    }
+  }
+
+  const printReceipt = () => {
+    if (!lastPayment || !paymentDelivery) return
+
+    const totalTTC = (paymentDelivery.total_ht || 0) * 1.2
+    const newBalance = Math.max(0, totalTTC - (paymentDelivery.amount_paid || 0) - lastPayment.amount)
+
+    const printContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Recu ${lastPayment.payment_number}</title>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 20px; max-width: 400px; margin: auto; }
+          .header { text-align: center; border-bottom: 2px solid #228B22; padding-bottom: 10px; margin-bottom: 20px; }
+          .header h1 { color: #228B22; margin: 0; font-size: 20px; }
+          .header p { margin: 5px 0; font-size: 12px; color: #666; }
+          .receipt-number { background: #228B22; color: white; padding: 8px; text-align: center; font-weight: bold; margin: 10px 0; }
+          .section { margin: 15px 0; }
+          .row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dotted #ddd; }
+          .row-label { color: #666; }
+          .row-value { font-weight: bold; }
+          .total { font-size: 18px; background: #f5f5f5; padding: 10px; margin: 15px 0; }
+          .balance { color: ${newBalance > 0 ? '#dc2626' : '#16a34a'}; font-size: 16px; padding: 10px; background: ${newBalance > 0 ? '#fef2f2' : '#f0fdf4'}; }
+          .footer { text-align: center; margin-top: 20px; font-size: 11px; color: #888; }
+          @media print { body { margin: 0; } }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h1>KARAM Olives & Sauces</h1>
+          <p>Zone Industrielle, Marrakech</p>
+          <p>Tel: 05 24 XX XX XX</p>
+        </div>
+        <div class="receipt-number">RECU N ${lastPayment.payment_number}</div>
+        <div class="section">
+          <div class="row">
+            <span class="row-label">Date:</span>
+            <span class="row-value">${format(new Date(lastPayment.payment_date), 'dd/MM/yyyy', { locale: fr })}</span>
+          </div>
+          <div class="row">
+            <span class="row-label">Client:</span>
+            <span class="row-value">${paymentDelivery.client?.code} - ${paymentDelivery.client?.name}</span>
+          </div>
+          <div class="row">
+            <span class="row-label">N BL:</span>
+            <span class="row-value">${paymentDelivery.delivery_number}</span>
+          </div>
+          <div class="row">
+            <span class="row-label">Mode de paiement:</span>
+            <span class="row-value">${paymentMethodLabels[lastPayment.payment_method]}</span>
+          </div>
+          ${lastPayment.reference ? `<div class="row"><span class="row-label">Reference:</span><span class="row-value">${lastPayment.reference}</span></div>` : ''}
+        </div>
+        <div class="total">
+          <div class="row" style="border: none;">
+            <span>Montant recu:</span>
+            <span>${lastPayment.amount.toFixed(2)} MAD</span>
+          </div>
+        </div>
+        <div class="section">
+          <div class="row">
+            <span class="row-label">Total facture:</span>
+            <span class="row-value">${totalTTC.toFixed(2)} MAD</span>
+          </div>
+          <div class="row">
+            <span class="row-label">Total paye:</span>
+            <span class="row-value">${((paymentDelivery.amount_paid || 0) + lastPayment.amount).toFixed(2)} MAD</span>
+          </div>
+        </div>
+        <div class="balance">
+          <div class="row" style="border: none;">
+            <span>Reste a payer:</span>
+            <span style="font-weight: bold;">${newBalance.toFixed(2)} MAD</span>
+          </div>
+        </div>
+        ${lastPayment.notes ? `<div class="section"><p><strong>Notes:</strong> ${lastPayment.notes}</p></div>` : ''}
+        <div class="footer">
+          <p>Merci de votre confiance!</p>
+          <p>Document genere le ${format(new Date(), 'dd/MM/yyyy HH:mm', { locale: fr })}</p>
+        </div>
+      </body>
+      </html>
+    `
+
+    const printWindow = window.open('', '_blank')
+    if (printWindow) {
+      printWindow.document.write(printContent)
+      printWindow.document.close()
+      printWindow.print()
+    }
   }
 
   // Selection handlers
@@ -1049,9 +1300,10 @@ export default function LivraisonsPage() {
                     <TableHead>Client</TableHead>
                     <TableHead>Ville</TableHead>
                     <TableHead>Date</TableHead>
-                    <TableHead>Articles</TableHead>
                     <TableHead>Statut</TableHead>
-                    <TableHead className="text-right">Total HT</TableHead>
+                    <TableHead>Paiement</TableHead>
+                    <TableHead className="text-right">Total TTC</TableHead>
+                    <TableHead className="text-right">Reste</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -1086,20 +1338,34 @@ export default function LivraisonsPage() {
                           : '-'}
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline">
-                          {delivery.delivery_items?.length || 0} articles
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
                         <Badge className={statusColors[delivery.status]}>
                           {statusLabels[delivery.status]}
                         </Badge>
                       </TableCell>
+                      <TableCell>
+                        <Badge className={paymentStatusColors[delivery.payment_status || 'pending']}>
+                          {paymentStatusLabels[delivery.payment_status || 'pending']}
+                        </Badge>
+                      </TableCell>
                       <TableCell className="text-right font-semibold">
-                        {formatPrice(delivery.total_ht)}
+                        {formatPrice((delivery.total_ht || 0) * 1.2)}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <span className={`font-semibold ${(delivery.balance_due || (delivery.total_ht || 0) * 1.2) > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                          {formatPrice(delivery.balance_due ?? (delivery.total_ht || 0) * 1.2)}
+                        </span>
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleOpenPayment(delivery)}
+                            title="Encaisser"
+                            className={delivery.payment_status === 'paid' ? 'opacity-50' : ''}
+                          >
+                            <Wallet className="h-4 w-4 text-green-600" />
+                          </Button>
                           <Button
                             variant="ghost"
                             size="icon"
@@ -1433,14 +1699,14 @@ export default function LivraisonsPage() {
                       Commande associee
                     </Label>
                     <Select
-                      value={editFormData.order_id}
+                      value={editFormData.order_id || 'none'}
                       onValueChange={handleEditOrderChange}
                     >
                       <SelectTrigger>
                         <SelectValue placeholder="Changer de commande" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">Aucune commande</SelectItem>
+                        <SelectItem value="none">Aucune commande</SelectItem>
                         {orders.map((order) => (
                           <SelectItem key={order.id} value={order.id}>
                             {order.order_number} - {order.client?.name} ({formatPrice(order.total_ht)})
@@ -1556,6 +1822,267 @@ export default function LivraisonsPage() {
                     className="bg-green-600 hover:bg-green-700"
                   >
                     Enregistrer
+                  </Button>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+
+        {/* Payment Dialog */}
+        <Dialog open={isPaymentDialogOpen} onOpenChange={setIsPaymentDialogOpen}>
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Wallet className="h-5 w-5 text-green-600" />
+                Encaisser - {paymentDelivery?.delivery_number}
+              </DialogTitle>
+            </DialogHeader>
+            {paymentDelivery && (
+              <div className="space-y-6">
+                {/* Client & Delivery Info */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-gray-50 p-4 rounded-lg">
+                    <h3 className="font-semibold text-gray-700 mb-2">Client</h3>
+                    <p className="font-medium">{paymentDelivery.client?.code} - {paymentDelivery.client?.name}</p>
+                    {paymentDelivery.client?.phone && (
+                      <p className="text-sm text-gray-600">Tel: {paymentDelivery.client.phone}</p>
+                    )}
+                  </div>
+                  <div className="bg-gray-50 p-4 rounded-lg">
+                    <h3 className="font-semibold text-gray-700 mb-2">Montants</h3>
+                    <div className="space-y-1 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Total TTC:</span>
+                        <span className="font-medium">{formatPrice((paymentDelivery.total_ht || 0) * 1.2)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Deja paye:</span>
+                        <span className="font-medium text-green-600">{formatPrice(paymentDelivery.amount_paid || 0)}</span>
+                      </div>
+                      <div className="flex justify-between text-lg font-bold border-t pt-1">
+                        <span className="text-red-600">Reste a payer:</span>
+                        <span className="text-red-600">{formatPrice(paymentDelivery.balance_due ?? (paymentDelivery.total_ht || 0) * 1.2)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Previous payments */}
+                {deliveryPayments.length > 0 && (
+                  <div>
+                    <h3 className="font-semibold text-gray-700 mb-2">Paiements precedents</h3>
+                    <div className="border rounded-lg divide-y max-h-32 overflow-y-auto">
+                      {deliveryPayments.map((payment) => (
+                        <div key={payment.id} className="flex justify-between items-center p-2 text-sm">
+                          <div>
+                            <span className="font-medium">{payment.payment_number}</span>
+                            <span className="text-gray-500 ml-2">
+                              {format(new Date(payment.payment_date), 'dd/MM/yyyy', { locale: fr })}
+                            </span>
+                            <Badge variant="outline" className="ml-2">
+                              {paymentMethodLabels[payment.payment_method]}
+                            </Badge>
+                          </div>
+                          <span className="font-medium text-green-600">{formatPrice(payment.amount)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Payment Form */}
+                <form onSubmit={handleSubmitPayment} className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="payment_amount">Montant *</Label>
+                      <Input
+                        id="payment_amount"
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        value={paymentFormData.amount}
+                        onChange={(e) => setPaymentFormData({ ...paymentFormData, amount: parseFloat(e.target.value) || 0 })}
+                        className="text-lg font-bold"
+                        required
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Mode de paiement *</Label>
+                      <Select
+                        value={paymentFormData.payment_method}
+                        onValueChange={(value) => setPaymentFormData({ ...paymentFormData, payment_method: value })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="cash">
+                            <div className="flex items-center gap-2">
+                              <Banknote className="h-4 w-4" />
+                              Especes
+                            </div>
+                          </SelectItem>
+                          <SelectItem value="check">
+                            <div className="flex items-center gap-2">
+                              <Receipt className="h-4 w-4" />
+                              Cheque
+                            </div>
+                          </SelectItem>
+                          <SelectItem value="transfer">
+                            <div className="flex items-center gap-2">
+                              <Building2 className="h-4 w-4" />
+                              Virement
+                            </div>
+                          </SelectItem>
+                          <SelectItem value="card">
+                            <div className="flex items-center gap-2">
+                              <CreditCard className="h-4 w-4" />
+                              Carte
+                            </div>
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="payment_date">Date</Label>
+                      <Input
+                        id="payment_date"
+                        type="date"
+                        value={paymentFormData.payment_date}
+                        onChange={(e) => setPaymentFormData({ ...paymentFormData, payment_date: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="payment_reference">Reference (N cheque, etc.)</Label>
+                      <Input
+                        id="payment_reference"
+                        value={paymentFormData.reference}
+                        onChange={(e) => setPaymentFormData({ ...paymentFormData, reference: e.target.value })}
+                        placeholder="N cheque, reference virement..."
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="payment_notes">Notes</Label>
+                    <Input
+                      id="payment_notes"
+                      value={paymentFormData.notes}
+                      onChange={(e) => setPaymentFormData({ ...paymentFormData, notes: e.target.value })}
+                      placeholder="Notes sur le paiement"
+                    />
+                  </div>
+
+                  {/* Quick amount buttons */}
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setPaymentFormData({ ...paymentFormData, amount: paymentDelivery.balance_due ?? (paymentDelivery.total_ht || 0) * 1.2 })}
+                    >
+                      Tout payer
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setPaymentFormData({ ...paymentFormData, amount: (paymentDelivery.balance_due ?? (paymentDelivery.total_ht || 0) * 1.2) / 2 })}
+                    >
+                      50%
+                    </Button>
+                  </div>
+
+                  <div className="flex justify-end gap-3 pt-4 border-t">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setIsPaymentDialogOpen(false)}
+                    >
+                      Annuler
+                    </Button>
+                    <Button
+                      type="submit"
+                      className="bg-green-600 hover:bg-green-700 gap-2"
+                    >
+                      <Wallet className="h-4 w-4" />
+                      Enregistrer le paiement
+                    </Button>
+                  </div>
+                </form>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+
+        {/* Receipt Dialog */}
+        <Dialog open={isReceiptDialogOpen} onOpenChange={setIsReceiptDialogOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-green-600">
+                <CheckCircle2 className="h-5 w-5" />
+                Paiement enregistre!
+              </DialogTitle>
+            </DialogHeader>
+            {lastPayment && paymentDelivery && (
+              <div className="space-y-4">
+                <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-center">
+                  <p className="text-sm text-green-700">Recu N</p>
+                  <p className="text-2xl font-bold text-green-800">{lastPayment.payment_number}</p>
+                </div>
+
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Montant recu:</span>
+                    <span className="font-bold text-green-600">{formatPrice(lastPayment.amount)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Mode:</span>
+                    <span>{paymentMethodLabels[lastPayment.payment_method]}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">BL:</span>
+                    <span>{paymentDelivery.delivery_number}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Client:</span>
+                    <span>{paymentDelivery.client?.name}</span>
+                  </div>
+                </div>
+
+                <div className={`p-4 rounded-lg text-center ${
+                  (paymentDelivery.balance_due ?? 0) - lastPayment.amount > 0
+                    ? 'bg-orange-50 border border-orange-200'
+                    : 'bg-green-50 border border-green-200'
+                }`}>
+                  <p className="text-sm text-gray-600">Reste a payer</p>
+                  <p className={`text-2xl font-bold ${
+                    Math.max(0, (paymentDelivery.balance_due ?? (paymentDelivery.total_ht || 0) * 1.2) - lastPayment.amount) > 0
+                      ? 'text-orange-600'
+                      : 'text-green-600'
+                  }`}>
+                    {formatPrice(Math.max(0, (paymentDelivery.balance_due ?? (paymentDelivery.total_ht || 0) * 1.2) - lastPayment.amount))}
+                  </p>
+                </div>
+
+                <div className="flex gap-3 pt-4">
+                  <Button
+                    variant="outline"
+                    onClick={() => setIsReceiptDialogOpen(false)}
+                    className="flex-1"
+                  >
+                    Fermer
+                  </Button>
+                  <Button
+                    onClick={printReceipt}
+                    className="flex-1 bg-blue-600 hover:bg-blue-700 gap-2"
+                  >
+                    <Printer className="h-4 w-4" />
+                    Imprimer recu
                   </Button>
                 </div>
               </div>

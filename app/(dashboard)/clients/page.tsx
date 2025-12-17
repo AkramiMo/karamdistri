@@ -30,7 +30,8 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Search, Edit, Trash2, Users, MapPin, Store, Utensils, ShoppingBag, Package, Eye, DollarSign, Upload, Image, X, Building2 } from 'lucide-react'
+import { Plus, Search, Edit, Trash2, Users, MapPin, Store, Utensils, ShoppingBag, Package, Eye, DollarSign, Upload, Image, X, Building2, FileText, Loader2 } from 'lucide-react'
+import { Progress } from '@/components/ui/progress'
 import Link from 'next/link'
 
 interface Client {
@@ -99,6 +100,10 @@ export default function ClientsPage() {
   const [localImageFile, setLocalImageFile] = useState<File | null>(null)
   const [localImagePreview, setLocalImagePreview] = useState<string | null>(null)
   const [isUploading, setIsUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const [uploadStatus, setUploadStatus] = useState<string>('')
+  const [uploadStartTime, setUploadStartTime] = useState<number>(0)
+  const [estimatedTimeRemaining, setEstimatedTimeRemaining] = useState<string>('')
 
   // Handle image file selection
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>, type: 'logo' | 'local') => {
@@ -131,25 +136,70 @@ export default function ClientsPage() {
     reader.readAsDataURL(file)
   }
 
-  // Upload image to Supabase Storage
+  // Upload image via API route (bypasses RLS) with progress tracking
   const uploadImage = async (file: File, clientId: string, type: 'logo' | 'local'): Promise<string | null> => {
-    const fileExt = file.name.split('.').pop()
-    const fileName = `${clientId}/${type}-${Date.now()}.${fileExt}`
+    return new Promise((resolve) => {
+      const fileExt = file.name.split('.').pop()
+      const fileName = `${clientId}/${type}-${Date.now()}.${fileExt}`
+      const bucketName = 'client-images'
 
-    const { data, error } = await supabase.storage
-      .from('client-images')
-      .upload(fileName, file, { upsert: true })
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('bucket', bucketName)
+      formData.append('path', fileName)
 
-    if (error) {
-      console.error('Error uploading image:', error)
-      return null
-    }
+      const xhr = new XMLHttpRequest()
 
-    const { data: { publicUrl } } = supabase.storage
-      .from('client-images')
-      .getPublicUrl(data.path)
+      // Track upload progress
+      xhr.upload.addEventListener('progress', (event) => {
+        if (event.lengthComputable) {
+          const percentComplete = Math.round((event.loaded / event.total) * 100)
+          setUploadProgress(percentComplete)
 
-    return publicUrl
+          // Calculate estimated time remaining
+          const elapsedTime = (Date.now() - uploadStartTime) / 1000 // seconds
+          if (percentComplete > 0 && elapsedTime > 0) {
+            const totalEstimatedTime = (elapsedTime / percentComplete) * 100
+            const remainingTime = Math.max(0, totalEstimatedTime - elapsedTime)
+
+            if (remainingTime < 60) {
+              setEstimatedTimeRemaining(`${Math.ceil(remainingTime)}s restant`)
+            } else {
+              setEstimatedTimeRemaining(`${Math.ceil(remainingTime / 60)}min restant`)
+            }
+          }
+        }
+      })
+
+      xhr.addEventListener('load', () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const response = JSON.parse(xhr.responseText)
+            if (response.success && response.publicUrl) {
+              resolve(response.publicUrl)
+            } else {
+              console.error('Upload response error:', response.error)
+              resolve(null)
+            }
+          } catch {
+            console.error('Failed to parse upload response')
+            resolve(null)
+          }
+        } else {
+          console.error('Upload failed:', xhr.status, xhr.responseText)
+          resolve(null)
+        }
+      })
+
+      xhr.addEventListener('error', () => {
+        console.error('Upload error')
+        resolve(null)
+      })
+
+      // Use our API route instead of direct Supabase storage
+      xhr.open('POST', '/api/storage/upload', true)
+      xhr.send(formData)
+    })
   }
 
   // Remove image
@@ -185,6 +235,10 @@ export default function ClientsPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsUploading(true)
+    setUploadProgress(0)
+    setUploadStatus('')
+    setEstimatedTimeRemaining('')
+    setUploadStartTime(Date.now())
 
     try {
       const clientData: Record<string, unknown> = {
@@ -204,10 +258,15 @@ export default function ClientsPage() {
       if (editingClient) {
         // Upload new images if selected
         if (logoFile) {
+          setUploadStatus('Upload du logo...')
+          setUploadStartTime(Date.now())
           const logoUrl = await uploadImage(logoFile, editingClient.id, 'logo')
           if (logoUrl) clientData.logo_url = logoUrl
         }
         if (localImageFile) {
+          setUploadStatus('Upload de la photo du local...')
+          setUploadStartTime(Date.now())
+          setUploadProgress(0)
           const localUrl = await uploadImage(localImageFile, editingClient.id, 'local')
           if (localUrl) clientData.local_image_url = localUrl
         }
@@ -240,9 +299,14 @@ export default function ClientsPage() {
         let localUrl = null
 
         if (logoFile) {
+          setUploadStatus('Upload du logo...')
+          setUploadStartTime(Date.now())
           logoUrl = await uploadImage(logoFile, newClient.id, 'logo')
         }
         if (localImageFile) {
+          setUploadStatus('Upload de la photo du local...')
+          setUploadStartTime(Date.now())
+          setUploadProgress(0)
           localUrl = await uploadImage(localImageFile, newClient.id, 'local')
         }
 
@@ -604,12 +668,34 @@ export default function ClientsPage() {
                   </p>
                 </div>
 
+                {/* Upload Progress */}
+                {isUploading && (logoFile || localImageFile) && (
+                  <div className="space-y-2 p-4 bg-blue-50 rounded-lg border border-blue-200">
+                    <div className="flex items-center justify-between text-sm">
+                      <div className="flex items-center gap-2">
+                        <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                        <span className="font-medium text-blue-700">{uploadStatus || 'Upload en cours...'}</span>
+                      </div>
+                      <span className="text-blue-600 font-medium">{uploadProgress}%</span>
+                    </div>
+                    <Progress value={uploadProgress} className="h-2" />
+                    {estimatedTimeRemaining && (
+                      <p className="text-xs text-blue-600 text-right">{estimatedTimeRemaining}</p>
+                    )}
+                  </div>
+                )}
+
                 <div className="flex justify-end gap-2 pt-4">
-                  <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                  <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)} disabled={isUploading}>
                     Annuler
                   </Button>
                   <Button type="submit" className="bg-green-600 hover:bg-green-700" disabled={isUploading}>
-                    {isUploading ? 'Enregistrement...' : editingClient ? 'Modifier' : 'Créer'}
+                    {isUploading ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Enregistrement...
+                      </>
+                    ) : editingClient ? 'Modifier' : 'Créer'}
                   </Button>
                 </div>
               </form>
@@ -774,10 +860,20 @@ export default function ClientsPage() {
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">
+                            <Link href={`/clients/${client.id}`}>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                title="Fiche client complète"
+                              >
+                                <FileText className="h-4 w-4 text-green-600" />
+                              </Button>
+                            </Link>
                             <Button
                               variant="ghost"
                               size="icon"
                               onClick={() => handleView(client)}
+                              title="Aperçu rapide"
                             >
                               <Eye className="h-4 w-4" />
                             </Button>
@@ -859,41 +955,66 @@ export default function ClientsPage() {
                   </div>
                 </div>
 
-                {/* Client Images */}
-                {(viewingClient.logo_url || viewingClient.local_image_url) && (
-                  <div className="border-t pt-4">
-                    <h4 className="font-medium mb-3 flex items-center gap-2">
-                      <Image className="h-4 w-4" />
-                      Images
-                    </h4>
-                    <div className="grid grid-cols-2 gap-4">
-                      {viewingClient.logo_url && (
-                        <div className="space-y-2">
-                          <span className="text-sm text-gray-500">Logo</span>
-                          <div className="border rounded-lg overflow-hidden">
-                            <img
-                              src={viewingClient.logo_url}
-                              alt="Logo du client"
-                              className="w-full h-40 object-contain bg-gray-50"
-                            />
+                {/* Client Images - Always show this section */}
+                <div className="border-t pt-4">
+                  <h4 className="font-medium mb-3 flex items-center gap-2">
+                    <Image className="h-4 w-4" />
+                    Images du client
+                  </h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <span className="text-sm text-gray-500">Logo</span>
+                      {viewingClient.logo_url ? (
+                        <a
+                          href={viewingClient.logo_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="block border rounded-lg overflow-hidden hover:shadow-lg transition-shadow cursor-pointer"
+                        >
+                          <img
+                            src={viewingClient.logo_url}
+                            alt="Logo du client"
+                            className="w-full h-48 object-contain bg-gray-50 hover:scale-105 transition-transform"
+                          />
+                        </a>
+                      ) : (
+                        <div className="border rounded-lg h-48 flex items-center justify-center bg-gray-50">
+                          <div className="text-center text-gray-400">
+                            <Building2 className="h-12 w-12 mx-auto mb-2" />
+                            <span className="text-sm">Pas de logo</span>
                           </div>
                         </div>
                       )}
-                      {viewingClient.local_image_url && (
-                        <div className="space-y-2">
-                          <span className="text-sm text-gray-500">Photo du local</span>
-                          <div className="border rounded-lg overflow-hidden">
-                            <img
-                              src={viewingClient.local_image_url}
-                              alt="Photo du local"
-                              className="w-full h-40 object-contain bg-gray-50"
-                            />
+                    </div>
+                    <div className="space-y-2">
+                      <span className="text-sm text-gray-500">Photo du local</span>
+                      {viewingClient.local_image_url ? (
+                        <a
+                          href={viewingClient.local_image_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="block border rounded-lg overflow-hidden hover:shadow-lg transition-shadow cursor-pointer"
+                        >
+                          <img
+                            src={viewingClient.local_image_url}
+                            alt="Photo du local"
+                            className="w-full h-48 object-contain bg-gray-50 hover:scale-105 transition-transform"
+                          />
+                        </a>
+                      ) : (
+                        <div className="border rounded-lg h-48 flex items-center justify-center bg-gray-50">
+                          <div className="text-center text-gray-400">
+                            <Store className="h-12 w-12 mx-auto mb-2" />
+                            <span className="text-sm">Pas de photo</span>
                           </div>
                         </div>
                       )}
                     </div>
                   </div>
-                )}
+                  {(viewingClient.logo_url || viewingClient.local_image_url) && (
+                    <p className="text-xs text-gray-400 mt-2">Cliquez sur une image pour l&apos;agrandir</p>
+                  )}
+                </div>
 
                 {viewingClient.gps_lat && viewingClient.gps_lng && (
                   <div className="border-t pt-4">

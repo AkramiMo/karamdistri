@@ -24,6 +24,7 @@ import {
   PackageCheck,
   Factory,
   Leaf,
+  Route,
   LucideIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -45,6 +46,7 @@ const iconMap: Record<string, LucideIcon> = {
   PackageCheck,
   Factory,
   Leaf,
+  Route,
 }
 
 interface Module {
@@ -86,6 +88,7 @@ export function Sidebar() {
     { id: '3', code: 'articles', name: 'Articles', icon: 'Package', path: '/articles', sort_order: 2 },
     { id: '4', code: 'commandes', name: 'Commandes', icon: 'ShoppingCart', path: '/commandes', sort_order: 3 },
     { id: '5', code: 'livraisons', name: 'Livraisons', icon: 'Truck', path: '/livraisons', sort_order: 4 },
+    { id: '14', code: 'tournees', name: 'Tournees', icon: 'Route', path: '/tournees', sort_order: 45 },
     { id: '6', code: 'ventes', name: 'Ventes', icon: 'DollarSign', path: '/ventes', sort_order: 5 },
     { id: '7', code: 'stocks', name: 'Stocks', icon: 'Warehouse', path: '/stocks', sort_order: 6 },
     { id: '8', code: 'caisse', name: 'Caisse', icon: 'Wallet', path: '/caisse', sort_order: 7 },
