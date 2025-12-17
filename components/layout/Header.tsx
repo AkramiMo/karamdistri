@@ -15,6 +15,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Bell, LogOut, Settings, User } from 'lucide-react'
+import { ConnectionStatus } from './ConnectionStatus'
 
 export function Header() {
   const [mounted, setMounted] = useState(false)
@@ -52,6 +53,9 @@ export function Header() {
       </div>
 
       <div className="flex items-center gap-4">
+        {/* Connection Status */}
+        <ConnectionStatus />
+
         {/* Notifications */}
         <Button variant="ghost" size="icon" className="relative">
           <Bell size={20} />
