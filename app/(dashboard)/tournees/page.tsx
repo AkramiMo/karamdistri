@@ -125,7 +125,7 @@ interface Delivery {
 const statusColors: Record<string, string> = {
   pending: 'bg-yellow-100 text-yellow-800',
   in_progress: 'bg-blue-100 text-blue-800',
-  completed: 'bg-green-100 text-green-800',
+  completed: 'bg-amber-100 text-[#9A7209]',
   cancelled: 'bg-red-100 text-red-800',
 }
 
@@ -138,7 +138,7 @@ const statusLabels: Record<string, string> = {
 
 const itemStatusColors: Record<string, string> = {
   pending: 'bg-gray-100 text-gray-800',
-  delivered: 'bg-green-100 text-green-800',
+  delivered: 'bg-amber-100 text-[#9A7209]',
   partial: 'bg-orange-100 text-orange-800',
   returned: 'bg-red-100 text-red-800',
   cancelled: 'bg-gray-300 text-gray-600',
@@ -163,6 +163,8 @@ export default function TourneesPage() {
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [viewingRound, setViewingRound] = useState<DeliveryRound | null>(null)
   const [editingRound, setEditingRound] = useState<DeliveryRound | null>(null)
+  const [expandedDeliveryId, setExpandedDeliveryId] = useState<string | null>(null)
+  const [editingItems, setEditingItems] = useState<Record<string, { quantity_returned: number }>>({})
   const supabase = createClient()
   const { companySettings } = useCompanySettings()
 
@@ -188,7 +190,9 @@ export default function TourneesPage() {
             delivery_number,
             client_id,
             total_ht,
-            client:clients(code, name, address, city, gps_lat, gps_lng)
+            status,
+            client:clients(code, name, address, city, gps_lat, gps_lng),
+            delivery_items(id, article_id, quantity_ordered, quantity_delivered, quantity_returned, unit_price, article:articles(code, name, description))
           )
         )
       `)
@@ -380,9 +384,40 @@ export default function TourneesPage() {
     }
   }
 
+  const handleUpdateDeliveryItem = async (itemId: string, quantityReturned: number) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('delivery_items') as any)
+      .update({ quantity_returned: quantityReturned })
+      .eq('id', itemId)
+
+    if (!error) {
+      await fetchRounds()
+      if (viewingRound) {
+        // Refresh viewing round
+        const updated = rounds.find(r => r.id === viewingRound.id)
+        if (updated) setViewingRound(updated)
+      }
+      // Clear editing state for this item
+      setEditingItems(prev => {
+        const newState = { ...prev }
+        delete newState[itemId]
+        return newState
+      })
+    }
+  }
+
+  const handleQuantityReturnedChange = (itemId: string, value: string) => {
+    const numValue = parseInt(value) || 0
+    setEditingItems(prev => ({
+      ...prev,
+      [itemId]: { quantity_returned: numValue }
+    }))
+  }
+
   const handleViewRound = (round: DeliveryRound) => {
     setViewingRound(round)
     setIsViewDialogOpen(true)
+    setExpandedDeliveryId(null) // Reset expanded delivery when opening dialog
   }
 
   const handleAssignDriver = async (roundId: string, driverId: string) => {
@@ -458,7 +493,7 @@ export default function TourneesPage() {
             <DialogTrigger asChild>
               <ProtectedModule module="tournees" action="create">
                 <Button
-                  className="bg-green-600 hover:bg-green-700"
+                  className="bg-[#B8860B] hover:bg-[#9A7209]"
                   onClick={() => {
                     resetForm()
                     setIsDialogOpen(true)
@@ -551,7 +586,7 @@ export default function TourneesPage() {
                           {availableDeliveries.map((delivery) => (
                             <TableRow
                               key={delivery.id}
-                              className={selectedDeliveries.includes(delivery.id) ? 'bg-green-50' : ''}
+                              className={selectedDeliveries.includes(delivery.id) ? 'bg-amber-50' : ''}
                             >
                               <TableCell>
                                 <Checkbox
@@ -571,7 +606,7 @@ export default function TourneesPage() {
                               <TableCell>{delivery.client?.city || '-'}</TableCell>
                               <TableCell>
                                 {delivery.client?.gps_lat && delivery.client?.gps_lng ? (
-                                  <Badge variant="outline" className="text-green-600">
+                                  <Badge variant="outline" className="text-[#B8860B]">
                                     <MapPin className="h-3 w-3 mr-1" />
                                     OK
                                   </Badge>
@@ -596,7 +631,7 @@ export default function TourneesPage() {
                   <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                     Annuler
                   </Button>
-                  <Button type="submit" className="bg-green-600 hover:bg-green-700">
+                  <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
                     Creer la tournee
                   </Button>
                 </div>
@@ -615,7 +650,7 @@ export default function TourneesPage() {
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-2">
-                <Route className="h-8 w-8 text-green-600" />
+                <Route className="h-8 w-8 text-[#B8860B]" />
                 <span className="text-2xl font-bold">{stats.total}</span>
               </div>
             </CardContent>
@@ -647,7 +682,7 @@ export default function TourneesPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <span className="text-2xl font-bold text-green-600">{stats.completed}</span>
+              <span className="text-2xl font-bold text-[#B8860B]">{stats.completed}</span>
             </CardContent>
           </Card>
         </div>
@@ -695,23 +730,48 @@ export default function TourneesPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>N BLT</TableHead>
                       <TableHead>Date</TableHead>
+                      <TableHead>N BLT</TableHead>
+                      <TableHead className="text-right">Val BLT</TableHead>
+                      <TableHead className="text-right">Recette BLT</TableHead>
                       <TableHead>Livreur</TableHead>
                       <TableHead className="text-center">Livraisons</TableHead>
-                      <TableHead>Statut</TableHead>
                       <TableHead>Duree</TableHead>
+                      <TableHead>Statut</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {filteredRounds.map((round) => (
                       <TableRow key={round.id}>
+                        <TableCell>
+                          {format(new Date(round.round_date), 'dd/MM/yyyy', { locale: fr })}
+                        </TableCell>
                         <TableCell className="font-mono font-medium">
                           {round.round_number}
                         </TableCell>
-                        <TableCell>
-                          {format(new Date(round.round_date), 'dd/MM/yyyy', { locale: fr })}
+                        <TableCell className="text-right font-semibold">
+                          {formatPrice(
+                            round.delivery_round_items?.reduce(
+                              (sum, item) => sum + (item.delivery?.total_ht || 0),
+                              0
+                            ) || 0
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right font-semibold text-[#B8860B]">
+                          {formatPrice(
+                            round.delivery_round_items?.reduce(
+                              (sum, item) => {
+                                const deliveryRecette = (item.delivery as any)?.delivery_items?.reduce(
+                                  (itemSum: number, deliveryItem: any) =>
+                                    itemSum + ((deliveryItem.quantity_delivered - deliveryItem.quantity_returned) * deliveryItem.unit_price),
+                                  0
+                                ) || 0
+                                return sum + deliveryRecette
+                              },
+                              0
+                            ) || 0
+                          )}
                         </TableCell>
                         <TableCell>
                           <Select
@@ -739,11 +799,6 @@ export default function TourneesPage() {
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          <Badge className={statusColors[round.status]}>
-                            {statusLabels[round.status]}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
                           {round.start_time && round.end_time ? (
                             <span className="text-sm">
                               {Math.round((new Date(round.end_time).getTime() - new Date(round.start_time).getTime()) / 60000)} min
@@ -753,6 +808,11 @@ export default function TourneesPage() {
                           ) : (
                             '-'
                           )}
+                        </TableCell>
+                        <TableCell>
+                          <Badge className={statusColors[round.status]}>
+                            {statusLabels[round.status]}
+                          </Badge>
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">
@@ -771,7 +831,7 @@ export default function TourneesPage() {
                                 title="Demarrer"
                                 onClick={() => handleStartRound(round.id)}
                               >
-                                <Play className="h-4 w-4 text-green-600" />
+                                <Play className="h-4 w-4 text-[#B8860B]" />
                               </Button>
                             )}
                             {round.status === 'in_progress' && (
@@ -781,7 +841,7 @@ export default function TourneesPage() {
                                 title="Terminer"
                                 onClick={() => handleCompleteRound(round.id)}
                               >
-                                <CheckCircle2 className="h-4 w-4 text-green-600" />
+                                <CheckCircle2 className="h-4 w-4 text-[#B8860B]" />
                               </Button>
                             )}
                             {round.status !== 'completed' && round.status !== 'cancelled' && (
@@ -818,7 +878,7 @@ export default function TourneesPage() {
           <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-3 text-xl">
-                <Route className="h-6 w-6 text-green-600" />
+                <Route className="h-6 w-6 text-[#B8860B]" />
                 Tournee {viewingRound?.round_number}
                 {viewingRound && (
                   <Badge className={`ml-2 ${statusColors[viewingRound.status]}`}>
@@ -830,7 +890,7 @@ export default function TourneesPage() {
             {viewingRound && (
               <div className="space-y-6">
                 {/* Header Info */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
                   <div className="bg-gray-50 rounded-lg p-3">
                     <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
                       <Calendar className="h-4 w-4" />
@@ -858,6 +918,20 @@ export default function TourneesPage() {
                       {viewingRound.delivery_round_items?.length || 0} BL
                     </p>
                   </div>
+                  <div className="bg-amber-50 border border-[#B8860B] rounded-lg p-3">
+                    <div className="flex items-center gap-2 text-[#B8860B] text-sm mb-1">
+                      <Package className="h-4 w-4" />
+                      Val BLT
+                    </div>
+                    <p className="font-semibold text-[#B8860B]">
+                      {formatPrice(
+                        viewingRound.delivery_round_items?.reduce(
+                          (sum, item) => sum + (item.delivery?.total_ht || 0),
+                          0
+                        ) || 0
+                      )}
+                    </p>
+                  </div>
                   <div className="bg-gray-50 rounded-lg p-3">
                     <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
                       <Clock className="h-4 w-4" />
@@ -869,6 +943,17 @@ export default function TourneesPage() {
                         : viewingRound.start_time
                           ? 'En cours...'
                           : 'Non demarre'}
+                    </p>
+                  </div>
+                  <div className={`rounded-lg p-3 border-2 ${statusColors[viewingRound.status].replace('bg-', 'bg-').replace('text-', 'border-')}`}>
+                    <div className="flex items-center gap-2 text-gray-700 text-sm mb-1 font-semibold">
+                      <CheckCircle2 className="h-4 w-4" />
+                      Statut Tournee
+                    </div>
+                    <p className="font-bold">
+                      <Badge className={statusColors[viewingRound.status]}>
+                        {statusLabels[viewingRound.status]}
+                      </Badge>
                     </p>
                   </div>
                 </div>
@@ -909,67 +994,136 @@ export default function TourneesPage() {
                         <TableHead>Adresse</TableHead>
                         <TableHead>GPS</TableHead>
                         <TableHead className="text-right">Total</TableHead>
-                        <TableHead>Statut</TableHead>
+                        <TableHead>Statut BL</TableHead>
+                        <TableHead className="text-center">Articles</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {viewingRound.delivery_round_items?.sort((a, b) => a.sequence_order - b.sequence_order).map((item) => (
-                        <TableRow key={item.id}>
-                          <TableCell className="font-bold text-gray-400">
-                            {item.sequence_order}
-                          </TableCell>
-                          <TableCell className="font-mono font-medium">
-                            {item.delivery?.delivery_number}
-                          </TableCell>
-                          <TableCell>
-                            <div>
-                              <span className="font-medium">{item.delivery?.client?.code}</span>
-                              <span className="text-gray-500 ml-2">{item.delivery?.client?.name}</span>
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-sm text-gray-600">
-                            {item.delivery?.client?.address}
-                            {item.delivery?.client?.city && `, ${item.delivery.client.city}`}
-                          </TableCell>
-                          <TableCell>
-                            {item.delivery?.client?.gps_lat && item.delivery?.client?.gps_lng ? (
+                      {viewingRound.delivery_round_items?.sort((a, b) => a.sequence_order - b.sequence_order).map((item) => {
+                        const delivery = item.delivery as any
+                        return (
+                        <>
+                          <TableRow key={item.id} className={expandedDeliveryId === item.delivery_id ? 'bg-amber-50' : ''}>
+                            <TableCell className="font-bold text-gray-400">
+                              {item.sequence_order}
+                            </TableCell>
+                            <TableCell className="font-mono font-medium">
+                              {delivery?.delivery_number}
+                            </TableCell>
+                            <TableCell>
+                              <div>
+                                <span className="font-medium">{delivery?.client?.code}</span>
+                                <span className="text-gray-500 ml-2">{delivery?.client?.name}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-sm text-gray-600">
+                              {delivery?.client?.address}
+                              {delivery?.client?.city && `, ${delivery.client.city}`}
+                            </TableCell>
+                            <TableCell>
+                              {delivery?.client?.gps_lat && delivery?.client?.gps_lng ? (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-blue-600 p-0 h-auto"
+                                  onClick={() => window.open(`https://www.google.com/maps?q=${delivery?.client?.gps_lat},${delivery?.client?.gps_lng}`, '_blank')}
+                                >
+                                  <MapPin className="h-4 w-4 mr-1" />
+                                  Voir
+                                </Button>
+                              ) : (
+                                <span className="text-gray-400">-</span>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right font-medium">
+                              {formatPrice(delivery?.total_ht || 0)}
+                            </TableCell>
+                            <TableCell>
+                              <Badge className={statusColors[delivery?.status || 'pending']}>
+                                {statusLabels[delivery?.status || 'pending']}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-center">
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                className="text-blue-600 p-0 h-auto"
-                                onClick={() => window.open(`https://www.google.com/maps?q=${item.delivery?.client?.gps_lat},${item.delivery?.client?.gps_lng}`, '_blank')}
+                                onClick={() => setExpandedDeliveryId(expandedDeliveryId === item.delivery_id ? null : item.delivery_id)}
+                                className="text-[#B8860B]"
                               >
-                                <MapPin className="h-4 w-4 mr-1" />
-                                Voir
+                                <Package className="h-4 w-4 mr-1" />
+                                {expandedDeliveryId === item.delivery_id ? 'Masquer' : 'Voir'}
                               </Button>
-                            ) : (
-                              <span className="text-gray-400">-</span>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right font-medium">
-                            {formatPrice(item.delivery?.total_ht || 0)}
-                          </TableCell>
-                          <TableCell>
-                            <Select
-                              value={item.status}
-                              onValueChange={(value) => handleUpdateItemStatus(item.id, value)}
-                            >
-                              <SelectTrigger className="w-32">
-                                <Badge className={itemStatusColors[item.status]}>
-                                  {itemStatusLabels[item.status]}
-                                </Badge>
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="pending">A livrer</SelectItem>
-                                <SelectItem value="delivered">Livre</SelectItem>
-                                <SelectItem value="partial">Partiel</SelectItem>
-                                <SelectItem value="returned">Retourne</SelectItem>
-                                <SelectItem value="cancelled">Annule</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                            </TableCell>
+                          </TableRow>
+                          {expandedDeliveryId === item.delivery_id && delivery?.delivery_items && (
+                            <TableRow>
+                              <TableCell colSpan={8} className="bg-gray-50 p-4">
+                                <div className="border-2 border-[#B8860B] rounded-lg p-4">
+                                  <h4 className="font-semibold text-[#B8860B] mb-3 flex items-center gap-2">
+                                    <Package className="h-4 w-4" />
+                                    Articles du BL {delivery?.delivery_number}
+                                  </h4>
+                                  <Table>
+                                    <TableHeader>
+                                      <TableRow>
+                                        <TableHead>Code</TableHead>
+                                        <TableHead>Article</TableHead>
+                                        <TableHead className="text-right">Qte Commandee</TableHead>
+                                        <TableHead className="text-right">Qte Livree</TableHead>
+                                        <TableHead className="text-right">Qte Retournee</TableHead>
+                                        <TableHead className="text-right">Prix Unit.</TableHead>
+                                        <TableHead className="text-right">Total</TableHead>
+                                        <TableHead className="text-center">Action</TableHead>
+                                      </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                      {delivery.delivery_items.map((deliveryItem: any) => {
+                                        const currentQtyReturned = editingItems[deliveryItem.id]?.quantity_returned ?? deliveryItem.quantity_returned
+                                        const hasChanges = editingItems[deliveryItem.id] !== undefined
+                                        return (
+                                          <TableRow key={deliveryItem.id}>
+                                            <TableCell className="font-mono">{deliveryItem.article?.code}</TableCell>
+                                            <TableCell>{deliveryItem.article?.name}</TableCell>
+                                            <TableCell className="text-right">{deliveryItem.quantity_ordered}</TableCell>
+                                            <TableCell className="text-right font-semibold text-[#B8860B]">
+                                              {deliveryItem.quantity_delivered}
+                                            </TableCell>
+                                            <TableCell className="text-right">
+                                              <Input
+                                                type="number"
+                                                min="0"
+                                                max={deliveryItem.quantity_delivered}
+                                                value={currentQtyReturned}
+                                                onChange={(e) => handleQuantityReturnedChange(deliveryItem.id, e.target.value)}
+                                                className={`w-20 text-right ${hasChanges ? 'border-[#B8860B] border-2' : ''}`}
+                                              />
+                                            </TableCell>
+                                            <TableCell className="text-right">{formatPrice(deliveryItem.unit_price)}</TableCell>
+                                            <TableCell className="text-right font-semibold">
+                                              {formatPrice((deliveryItem.quantity_delivered - currentQtyReturned) * deliveryItem.unit_price)}
+                                            </TableCell>
+                                            <TableCell className="text-center">
+                                              {hasChanges && (
+                                                <Button
+                                                  size="sm"
+                                                  onClick={() => handleUpdateDeliveryItem(deliveryItem.id, currentQtyReturned)}
+                                                  className="bg-[#B8860B] hover:bg-[#9A7209] h-7 px-2"
+                                                >
+                                                  <CheckCircle2 className="h-3 w-3" />
+                                                </Button>
+                                              )}
+                                            </TableCell>
+                                          </TableRow>
+                                        )
+                                      })}
+                                    </TableBody>
+                                  </Table>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </>
+                      )})}
                     </TableBody>
                   </Table>
                 </div>
@@ -982,6 +1136,53 @@ export default function TourneesPage() {
                   </div>
                 )}
 
+                {/* Recette BLT et Diff Val */}
+                <div className="flex justify-end">
+                  <div className="bg-gradient-to-r from-amber-50 to-yellow-50 border-2 border-[#B8860B] rounded-xl p-4 w-auto space-y-2">
+                    <div className="flex items-center gap-4">
+                      <h3 className="text-lg font-bold text-[#B8860B]">Recette BLT</h3>
+                      <p className="text-2xl font-bold text-[#B8860B]">
+                        {formatPrice(
+                          viewingRound.delivery_round_items?.reduce(
+                            (sum, item) => {
+                              const deliveryRecette = (item.delivery as any)?.delivery_items?.reduce(
+                                (itemSum: number, deliveryItem: any) =>
+                                  itemSum + ((deliveryItem.quantity_delivered - deliveryItem.quantity_returned) * deliveryItem.unit_price),
+                                0
+                              ) || 0
+                              return sum + deliveryRecette
+                            },
+                            0
+                          ) || 0
+                        )}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-4 border-t border-[#B8860B] pt-2">
+                      <h3 className="text-lg font-bold text-gray-700">Diff Val</h3>
+                      <p className="text-2xl font-bold text-gray-700">
+                        {(() => {
+                          const valBLT = viewingRound.delivery_round_items?.reduce(
+                            (sum, item) => sum + (item.delivery?.total_ht || 0),
+                            0
+                          ) || 0
+                          const recetteBLT = viewingRound.delivery_round_items?.reduce(
+                            (sum, item) => {
+                              const deliveryRecette = (item.delivery as any)?.delivery_items?.reduce(
+                                (itemSum: number, deliveryItem: any) =>
+                                  itemSum + ((deliveryItem.quantity_delivered - deliveryItem.quantity_returned) * deliveryItem.unit_price),
+                                0
+                              ) || 0
+                              return sum + deliveryRecette
+                            },
+                            0
+                          ) || 0
+                          return formatPrice(valBLT - recetteBLT)
+                        })()}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
                 {/* Actions */}
                 <div className="flex flex-wrap justify-end gap-3 pt-4 border-t">
                   <Button variant="outline" onClick={() => setIsViewDialogOpen(false)}>
@@ -989,7 +1190,7 @@ export default function TourneesPage() {
                   </Button>
                   {viewingRound.status === 'pending' && (
                     <Button
-                      className="bg-green-600 hover:bg-green-700"
+                      className="bg-[#B8860B] hover:bg-[#9A7209]"
                       onClick={() => {
                         handleStartRound(viewingRound.id)
                         setIsViewDialogOpen(false)

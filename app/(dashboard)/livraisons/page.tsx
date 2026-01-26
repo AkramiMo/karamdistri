@@ -55,6 +55,12 @@ import {
   CreditCard,
   Banknote,
   Building2,
+  RotateCcw,
+  Play,
+  XCircle,
+  User,
+  Calendar,
+  Package,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
@@ -150,26 +156,117 @@ interface OptimizedRoute {
   usingGoogle?: boolean
 }
 
+// BLT - Tournée interfaces
+interface DeliveryRoundItem {
+  id: string
+  delivery_id: string
+  sequence_order: number
+  status: string
+  delivered_at: string | null
+  notes: string | null
+  delivery?: {
+    id: string
+    delivery_number: string
+    client_id: string
+    total_ht: number | null
+    client?: {
+      code: string
+      name: string
+      address: string | null
+      city: string | null
+      gps_lat: number | null
+      gps_lng: number | null
+    }
+  }
+}
+
+interface DeliveryRound {
+  id: string
+  round_number: string
+  driver_id: string | null
+  status: string
+  round_date: string
+  start_time: string | null
+  end_time: string | null
+  total_distance: number | null
+  total_duration: number | null
+  depot_lat: number | null
+  depot_lng: number | null
+  notes: string | null
+  created_at: string
+  driver?: {
+    id: string
+    full_name: string
+    email: string
+  }
+  delivery_round_items?: DeliveryRoundItem[]
+}
+
+interface Driver {
+  id: string
+  full_name: string
+  email: string
+}
+
+// RBLT - Retour interfaces
+interface DeliveryReturnItem {
+  id: string
+  return_id: string
+  delivery_item_id: string | null
+  article_id: string
+  quantity_returned: number
+  unit_price: number | null
+  return_reason: string | null
+  article?: {
+    code: string
+    name: string
+  }
+}
+
+interface DeliveryReturn {
+  id: string
+  return_number: string
+  delivery_id: string | null
+  client_id: string
+  return_date: string
+  status: string
+  return_reason: string | null
+  total_ht: number | null
+  notes: string | null
+  user_id: string | null
+  created_at: string
+  delivery?: {
+    delivery_number: string
+  }
+  client?: {
+    code: string
+    name: string
+  }
+  delivery_return_items?: DeliveryReturnItem[]
+}
+
 const statusColors: Record<string, string> = {
   pending: 'bg-gray-100 text-gray-800',
   in_progress: 'bg-yellow-100 text-yellow-800',
-  delivered: 'bg-green-100 text-green-800',
+  delivered: 'bg-emerald-100 text-emerald-800',
   partial: 'bg-orange-100 text-orange-800',
-  returned: 'bg-red-100 text-red-800',
+  returned: 'bg-pink-100 text-pink-800',
+  cancelled: 'bg-red-100 text-red-800',
 }
 
 const statusLabels: Record<string, string> = {
   pending: 'En attente',
   in_progress: 'En cours',
-  delivered: 'Livree',
-  partial: 'Partielle',
-  returned: 'Retournee',
+  delivered: 'Livrée',
+  partial: 'Partiellement livrée',
+  returned: 'Retournée',
+  cancelled: 'Annulée',
 }
 
 const paymentStatusColors: Record<string, string> = {
   pending: 'bg-red-100 text-red-800',
   partial: 'bg-orange-100 text-orange-800',
-  paid: 'bg-green-100 text-green-800',
+  paid: 'bg-amber-100 text-[#9A7209]',
 }
 
 const paymentStatusLabels: Record<string, string> = {
@@ -185,7 +282,63 @@ const paymentMethodLabels: Record<string, string> = {
   card: 'Carte',
 }
 
+// BLT status colors and labels
+const roundStatusColors: Record<string, string> = {
+  pending: 'bg-yellow-100 text-yellow-800',
+  in_progress: 'bg-blue-100 text-blue-800',
+  completed: 'bg-amber-100 text-[#9A7209]',
+  cancelled: 'bg-red-100 text-red-800',
+}
+
+const roundStatusLabels: Record<string, string> = {
+  pending: 'En attente',
+  in_progress: 'En cours',
+  completed: 'Terminee',
+  cancelled: 'Annulee',
+}
+
+const itemStatusColors: Record<string, string> = {
+  pending: 'bg-gray-100 text-gray-800',
+  delivered: 'bg-amber-100 text-[#9A7209]',
+  partial: 'bg-orange-100 text-orange-800',
+  returned: 'bg-red-100 text-red-800',
+  cancelled: 'bg-gray-300 text-gray-600',
+}
+
+const itemStatusLabels: Record<string, string> = {
+  pending: 'A livrer',
+  delivered: 'Livre',
+  partial: 'Partiel',
+  returned: 'Retourne',
+  cancelled: 'Annule',
+}
+
+// RBLT status colors and labels
+const returnStatusColors: Record<string, string> = {
+  pending: 'bg-yellow-100 text-yellow-800',
+  validated: 'bg-amber-100 text-[#9A7209]',
+  cancelled: 'bg-red-100 text-red-800',
+}
+
+const returnStatusLabels: Record<string, string> = {
+  pending: 'En attente',
+  validated: 'Validé',
+  cancelled: 'Annulé',
+}
+
+const returnReasons = [
+  { value: 'damaged', label: 'Produit endommagé' },
+  { value: 'expired', label: 'Produit périmé' },
+  { value: 'wrong_product', label: 'Mauvais produit' },
+  { value: 'excess', label: 'Excédent' },
+  { value: 'quality', label: 'Problème qualité' },
+  { value: 'other', label: 'Autre' },
+]
+
+type TabType = 'bl' | 'blt' | 'rblt'
+
 export default function LivraisonsPage() {
+  const [activeTab, setActiveTab] = useState<TabType>('bl')
   const [deliveries, setDeliveries] = useState<Delivery[]>([])
   const [orders, setOrders] = useState<Order[]>([])
   const [clients, setClients] = useState<ClientSimple[]>([])
@@ -229,6 +382,42 @@ export default function LivraisonsPage() {
   const [deliveryPayments, setDeliveryPayments] = useState<Payment[]>([])
   const [isReceiptDialogOpen, setIsReceiptDialogOpen] = useState(false)
   const [lastPayment, setLastPayment] = useState<Payment | null>(null)
+
+  // BLT - Tournée state
+  const [rounds, setRounds] = useState<DeliveryRound[]>([])
+  const [drivers, setDrivers] = useState<Driver[]>([])
+  const [availableDeliveries, setAvailableDeliveries] = useState<Delivery[]>([])
+  const [isRoundDialogOpen, setIsRoundDialogOpen] = useState(false)
+  const [isViewRoundDialogOpen, setIsViewRoundDialogOpen] = useState(false)
+  const [viewingRound, setViewingRound] = useState<DeliveryRound | null>(null)
+  const [expandedDeliveryId, setExpandedDeliveryId] = useState<string | null>(null)
+  const [editingItems, setEditingItems] = useState<Record<string, { quantity_returned: number }>>({})
+  const [roundSearchTerm, setRoundSearchTerm] = useState('')
+  const [roundStatusFilter, setRoundStatusFilter] = useState<string>('all')
+  const [roundFormData, setRoundFormData] = useState({
+    driver_id: '',
+    round_date: new Date().toISOString().split('T')[0],
+    notes: '',
+  })
+  const [selectedRoundDeliveries, setSelectedRoundDeliveries] = useState<string[]>([])
+
+  // RBLT - Retour state
+  const [returns, setReturns] = useState<DeliveryReturn[]>([])
+  const [isReturnDialogOpen, setIsReturnDialogOpen] = useState(false)
+  const [isViewReturnDialogOpen, setIsViewReturnDialogOpen] = useState(false)
+  const [viewingReturn, setViewingReturn] = useState<DeliveryReturn | null>(null)
+  const [returnSearchTerm, setReturnSearchTerm] = useState('')
+  const [returnStatusFilter, setReturnStatusFilter] = useState<string>('all')
+  const [returnFormData, setReturnFormData] = useState({
+    delivery_id: '',
+    client_id: '',
+    return_date: new Date().toISOString().split('T')[0],
+    return_reason: '',
+    notes: '',
+  })
+  const [returnItems, setReturnItems] = useState<{ article_id: string; quantity: number; reason: string; unit_price: number }[]>([])
+  const [selectedDeliveryForReturn, setSelectedDeliveryForReturn] = useState<Delivery | null>(null)
+  const [selectedRoundForReturn, setSelectedRoundForReturn] = useState<string>('')
 
   const supabase = useSupabase()
   const { companySettings } = useCompanySettings()
@@ -296,6 +485,664 @@ export default function LivraisonsPage() {
   useEffect(() => {
     fetchData()
   }, [fetchData])
+
+  // BLT - Fetch rounds
+  const fetchRounds = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('delivery_rounds')
+      .select(`
+        *,
+        driver:users!delivery_rounds_driver_id_fkey(id, full_name, email),
+        delivery_round_items(
+          *,
+          delivery:deliveries(
+            id,
+            delivery_number,
+            client_id,
+            total_ht,
+            status,
+            client:clients(code, name, address, city, gps_lat, gps_lng),
+            delivery_items(id, article_id, quantity_ordered, quantity_delivered, quantity_returned, unit_price, article:articles(code, name, description))
+          )
+        )
+      `)
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.error('Error fetching rounds:', error)
+    } else {
+      setRounds(data || [])
+    }
+  }, [supabase])
+
+  const fetchDrivers = useCallback(async () => {
+    const { data } = await supabase
+      .from('users')
+      .select('id, full_name, email')
+      .eq('is_active', true)
+      .order('full_name')
+    setDrivers(data || [])
+  }, [supabase])
+
+  const fetchAvailableDeliveries = useCallback(async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await (supabase.from('deliveries') as any)
+      .select(`
+        id,
+        delivery_number,
+        client_id,
+        status,
+        total_ht,
+        delivery_date,
+        client:clients(code, name, address, city, gps_lat, gps_lng)
+      `)
+      .in('status', ['pending', 'in_progress'])
+      .order('delivery_date', { ascending: true })
+
+    const assignedDeliveryIds = rounds
+      .filter(r => r.status !== 'completed' && r.status !== 'cancelled')
+      .flatMap(r => r.delivery_round_items?.map(item => item.delivery_id) || [])
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const available = (data || []).filter((d: any) => !assignedDeliveryIds.includes(d.id))
+    setAvailableDeliveries(available as Delivery[])
+  }, [supabase, rounds])
+
+  useEffect(() => {
+    if (activeTab === 'blt' || activeTab === 'rblt') {
+      fetchRounds()
+      fetchDrivers()
+    }
+  }, [activeTab, fetchRounds, fetchDrivers])
+
+  useEffect(() => {
+    if (isRoundDialogOpen) {
+      fetchAvailableDeliveries()
+    }
+  }, [isRoundDialogOpen, fetchAvailableDeliveries])
+
+  const generateRoundNumber = async (): Promise<string> => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await (supabase.from('delivery_rounds') as any)
+      .select('round_number')
+      .like('round_number', 'BLT%')
+      .order('round_number', { ascending: false })
+      .limit(1)
+
+    if (data && data.length > 0) {
+      const lastNum = parseInt(data[0].round_number.replace('BLT', ''))
+      if (!isNaN(lastNum)) {
+        return `BLT${String(lastNum + 1).padStart(4, '0')}`
+      }
+    }
+    return 'BLT0001'
+  }
+
+  const handleRoundSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+
+    if (selectedRoundDeliveries.length === 0) {
+      alert('Veuillez selectionner au moins une livraison')
+      return
+    }
+
+    const roundNumber = await generateRoundNumber()
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: roundData, error: roundError } = await (supabase.from('delivery_rounds') as any)
+      .insert([{
+        round_number: roundNumber,
+        driver_id: roundFormData.driver_id && roundFormData.driver_id !== 'none' ? roundFormData.driver_id : null,
+        round_date: roundFormData.round_date,
+        status: 'pending',
+        depot_lat: companySettings?.depot_lat || null,
+        depot_lng: companySettings?.depot_lng || null,
+        notes: roundFormData.notes || null,
+      }])
+      .select()
+      .single()
+
+    if (roundError) {
+      console.error('Error creating round:', roundError)
+      alert(`Erreur: ${roundError.message}`)
+      return
+    }
+
+    const roundItems = selectedRoundDeliveries.map((deliveryId, index) => ({
+      round_id: roundData.id,
+      delivery_id: deliveryId,
+      sequence_order: index + 1,
+      status: 'pending',
+    }))
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase.from('delivery_round_items') as any).insert(roundItems)
+
+    fetchRounds()
+    setIsRoundDialogOpen(false)
+    resetRoundForm()
+  }
+
+  const handleStartRound = async (roundId: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('delivery_rounds') as any)
+      .update({ status: 'in_progress', start_time: new Date().toISOString() })
+      .eq('id', roundId)
+    if (!error) fetchRounds()
+  }
+
+  const handleCompleteRound = async (roundId: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('delivery_rounds') as any)
+      .update({ status: 'completed', end_time: new Date().toISOString() })
+      .eq('id', roundId)
+    if (!error) fetchRounds()
+  }
+
+  const handleCancelRound = async (roundId: string) => {
+    if (!confirm('Etes-vous sur de vouloir annuler cette tournee ?')) return
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('delivery_rounds') as any)
+      .update({ status: 'cancelled' })
+      .eq('id', roundId)
+    if (!error) fetchRounds()
+  }
+
+  const handleDeleteRound = async (roundId: string) => {
+    if (!confirm('Etes-vous sur de vouloir supprimer cette tournee ?')) return
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase.from('delivery_round_items') as any).delete().eq('round_id', roundId)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('delivery_rounds') as any).delete().eq('id', roundId)
+    if (!error) fetchRounds()
+  }
+
+  const handleUpdateItemStatus = async (itemId: string, newStatus: string) => {
+    const updateData: Record<string, unknown> = { status: newStatus }
+    if (newStatus === 'delivered') {
+      updateData.delivered_at = new Date().toISOString()
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('delivery_round_items') as any)
+      .update(updateData)
+      .eq('id', itemId)
+
+    if (!error) {
+      // Refresh rounds list
+      const { data: updatedRounds } = await supabase
+        .from('delivery_rounds')
+        .select(`
+          *,
+          driver:users!delivery_rounds_driver_id_fkey(id, full_name, email),
+          delivery_round_items(
+            *,
+            delivery:deliveries(
+              id,
+              delivery_number,
+              client_id,
+              total_ht,
+              client:clients(code, name, address, city, gps_lat, gps_lng)
+            )
+          )
+        `)
+        .order('created_at', { ascending: false })
+
+      if (updatedRounds) {
+        setRounds(updatedRounds)
+        // Update viewingRound if it's currently open
+        if (viewingRound && viewingRound.id) {
+          const updatedViewingRound = updatedRounds.find((r: any) => r.id === viewingRound.id)
+          if (updatedViewingRound) {
+            setViewingRound(updatedViewingRound)
+          }
+        }
+      }
+    }
+  }
+
+  const handleViewRound = (round: DeliveryRound) => {
+    setViewingRound(round)
+    setIsViewRoundDialogOpen(true)
+    setExpandedDeliveryId(null) // Reset expanded delivery when opening dialog
+  }
+
+  const handleAssignDriver = async (roundId: string, driverId: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('delivery_rounds') as any)
+      .update({ driver_id: driverId && driverId !== 'none' ? driverId : null })
+      .eq('id', roundId)
+    if (!error) fetchRounds()
+  }
+
+  const handleUpdateDeliveryItem = async (itemId: string, quantityReturned: number, deliveryId?: string, allDeliveryItems?: any[]) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('delivery_items') as any)
+      .update({ quantity_returned: quantityReturned })
+      .eq('id', itemId)
+
+    if (!error) {
+      // Update delivery status based on returns
+      if (deliveryId && allDeliveryItems) {
+        let totalDelivered = 0
+        let totalReturned = 0
+        for (const di of allDeliveryItems) {
+          totalDelivered += di.quantity_delivered || 0
+          // Use the new value for the item being updated
+          if (di.id === itemId) {
+            totalReturned += quantityReturned
+          } else {
+            totalReturned += di.quantity_returned || 0
+          }
+        }
+
+        let newStatus = 'delivered'
+        if (totalReturned > 0 && totalReturned >= totalDelivered) {
+          newStatus = 'returned'
+        } else if (totalReturned > 0) {
+          newStatus = 'partial'
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabase.from('deliveries') as any)
+          .update({ status: newStatus })
+          .eq('id', deliveryId)
+      }
+
+      await fetchRounds()
+      await fetchData()
+      if (viewingRound) {
+        // Refresh viewing round with fresh data
+        const { data: freshRound } = await supabase
+          .from('delivery_rounds')
+          .select(`
+            *,
+            driver:users!delivery_rounds_driver_id_fkey(id, full_name, email),
+            delivery_round_items(
+              *,
+              delivery:deliveries(
+                id,
+                delivery_number,
+                client_id,
+                total_ht,
+                status,
+                client:clients(code, name, address, city, gps_lat, gps_lng),
+                delivery_items(id, article_id, quantity_ordered, quantity_delivered, quantity_returned, unit_price, article:articles(code, name, description))
+              )
+            )
+          `)
+          .eq('id', viewingRound.id)
+          .single()
+        if (freshRound) setViewingRound(freshRound)
+      }
+      // Clear editing state for this item
+      setEditingItems(prev => {
+        const newState = { ...prev }
+        delete newState[itemId]
+        return newState
+      })
+    }
+  }
+
+  const handleQuantityReturnedChange = (itemId: string, value: string) => {
+    const numValue = parseInt(value) || 0
+    setEditingItems(prev => ({
+      ...prev,
+      [itemId]: { quantity_returned: numValue }
+    }))
+  }
+
+  const handleDeliverBL = async (deliveryId: string, deliveryItems: any[]) => {
+    // Calculate status based on returned quantities
+    let totalDelivered = 0
+    let totalReturned = 0
+    for (const item of deliveryItems) {
+      totalDelivered += item.quantity_delivered || 0
+      totalReturned += item.quantity_returned || 0
+    }
+
+    // Determine status:
+    // - qte retournée = 0 → "delivered" (Livrée)
+    // - qte retournée partielle → "partially_delivered" (Partiellement Livrée)
+    // - qte retournée = qte livrée → "returned" (Retournée)
+    let newStatus = 'delivered'
+    if (totalReturned > 0 && totalReturned >= totalDelivered) {
+      newStatus = 'returned'
+    } else if (totalReturned > 0) {
+      newStatus = 'partial'
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('deliveries') as any)
+      .update({ status: newStatus })
+      .eq('id', deliveryId)
+
+    if (!error) {
+      // Refresh both rounds and deliveries tables
+      await fetchRounds()
+      await fetchData()
+      if (viewingRound) {
+        const updated = rounds.find(r => r.id === viewingRound.id)
+        if (updated) setViewingRound(updated)
+      }
+    }
+  }
+
+  const handleValidateBL = async (roundItemId: string, deliveryId: string, deliveryItems: any[]) => {
+    // Calculate status based on returned quantities
+    let totalDelivered = 0
+    let totalReturned = 0
+    for (const item of deliveryItems) {
+      totalDelivered += item.quantity_delivered || 0
+      totalReturned += item.quantity_returned || 0
+    }
+
+    // Determine status
+    let newStatus = 'delivered'
+    let roundItemStatus = 'delivered'
+    if (totalReturned > 0 && totalReturned >= totalDelivered) {
+      newStatus = 'returned'
+      roundItemStatus = 'returned'
+    } else if (totalReturned > 0) {
+      newStatus = 'partial'
+      roundItemStatus = 'partial'
+    }
+
+    // Update delivery status
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('deliveries') as any)
+      .update({ status: newStatus })
+      .eq('id', deliveryId)
+
+    if (!error) {
+      // Update delivery_round_items status
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase.from('delivery_round_items') as any)
+        .update({ status: roundItemStatus, delivered_at: new Date().toISOString() })
+        .eq('id', roundItemId)
+
+      // Refresh data
+      await fetchRounds()
+      await fetchData()
+      // Refresh viewingRound with fresh data
+      if (viewingRound) {
+        const { data: freshRound } = await supabase
+          .from('delivery_rounds')
+          .select(`
+            *,
+            driver:users!delivery_rounds_driver_id_fkey(id, full_name, email),
+            delivery_round_items(
+              *,
+              delivery:deliveries(
+                id,
+                delivery_number,
+                client_id,
+                total_ht,
+                status,
+                client:clients(code, name, address, city, gps_lat, gps_lng),
+                delivery_items(id, article_id, quantity_ordered, quantity_delivered, quantity_returned, unit_price, article:articles(code, name, description))
+              )
+            )
+          `)
+          .eq('id', viewingRound.id)
+          .single()
+        if (freshRound) setViewingRound(freshRound)
+      }
+    }
+  }
+
+  const resetRoundForm = () => {
+    setRoundFormData({
+      driver_id: '',
+      round_date: new Date().toISOString().split('T')[0],
+      notes: '',
+    })
+    setSelectedRoundDeliveries([])
+  }
+
+  const toggleRoundDeliverySelection = (deliveryId: string) => {
+    setSelectedRoundDeliveries(prev =>
+      prev.includes(deliveryId)
+        ? prev.filter(id => id !== deliveryId)
+        : [...prev, deliveryId]
+    )
+  }
+
+  const selectAllRoundDeliveries = () => {
+    if (selectedRoundDeliveries.length === availableDeliveries.length) {
+      setSelectedRoundDeliveries([])
+    } else {
+      setSelectedRoundDeliveries(availableDeliveries.map(d => d.id))
+    }
+  }
+
+  const filteredRounds = rounds.filter((round) => {
+    const matchesSearch =
+      round.round_number.toLowerCase().includes(roundSearchTerm.toLowerCase()) ||
+      round.driver?.full_name?.toLowerCase().includes(roundSearchTerm.toLowerCase())
+    const matchesStatus = roundStatusFilter === 'all' || round.status === roundStatusFilter
+    return matchesSearch && matchesStatus
+  })
+
+  const roundStats = {
+    total: rounds.length,
+    pending: rounds.filter(r => r.status === 'pending').length,
+    inProgress: rounds.filter(r => r.status === 'in_progress').length,
+    completed: rounds.filter(r => r.status === 'completed').length,
+  }
+
+  // RBLT - Fetch returns
+  const fetchReturns = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('delivery_returns')
+      .select(`
+        *,
+        delivery:deliveries(delivery_number),
+        client:clients(code, name),
+        delivery_return_items(
+          *,
+          article:articles(code, name)
+        )
+      `)
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.error('Error fetching returns:', error)
+    } else {
+      setReturns(data || [])
+    }
+  }, [supabase])
+
+  useEffect(() => {
+    if (activeTab === 'rblt') {
+      fetchReturns()
+    }
+  }, [activeTab, fetchReturns])
+
+  const generateReturnNumber = async (): Promise<string> => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await (supabase.from('delivery_returns') as any)
+      .select('return_number')
+      .like('return_number', 'RBLT%')
+      .order('return_number', { ascending: false })
+      .limit(1)
+
+    if (data && data.length > 0) {
+      const lastNum = parseInt(data[0].return_number.replace('RBLT', ''))
+      if (!isNaN(lastNum)) {
+        return `RBLT${String(lastNum + 1).padStart(4, '0')}`
+      }
+    }
+    return 'RBLT0001'
+  }
+
+  const handleSelectDeliveryForReturn = (delivery: Delivery) => {
+    setSelectedDeliveryForReturn(delivery)
+    setReturnFormData({
+      ...returnFormData,
+      delivery_id: delivery.id,
+      client_id: delivery.client_id,
+    })
+    // Initialize return items from delivery items
+    if (delivery.delivery_items) {
+      setReturnItems(delivery.delivery_items.map(item => ({
+        article_id: item.article_id,
+        quantity: 0,
+        reason: '',
+        unit_price: item.unit_price || 0,
+      })))
+    }
+  }
+
+  const handleReturnSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+
+    const itemsToReturn = returnItems.filter(item => item.quantity > 0)
+    if (itemsToReturn.length === 0) {
+      alert('Veuillez sélectionner au moins un article à retourner')
+      return
+    }
+
+    const returnNumber = await generateReturnNumber()
+    const totalHt = itemsToReturn.reduce((sum, item) => sum + (item.quantity * item.unit_price), 0)
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: returnData, error: returnError } = await (supabase.from('delivery_returns') as any)
+      .insert([{
+        return_number: returnNumber,
+        delivery_id: returnFormData.delivery_id || null,
+        client_id: returnFormData.client_id,
+        return_date: returnFormData.return_date,
+        status: 'pending',
+        return_reason: returnFormData.return_reason || null,
+        total_ht: totalHt,
+        notes: returnFormData.notes || null,
+      }])
+      .select()
+      .single()
+
+    if (returnError) {
+      console.error('Error creating return:', returnError)
+      alert(`Erreur: ${returnError.message}`)
+      return
+    }
+
+    // Add return items
+    const returnItemsData = itemsToReturn.map(item => ({
+      return_id: returnData.id,
+      article_id: item.article_id,
+      quantity_returned: item.quantity,
+      unit_price: item.unit_price,
+      return_reason: item.reason || null,
+    }))
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase.from('delivery_return_items') as any).insert(returnItemsData)
+
+    // Update delivery items with returned quantities
+    if (selectedDeliveryForReturn?.delivery_items) {
+      for (const item of itemsToReturn) {
+        const deliveryItem = selectedDeliveryForReturn.delivery_items.find(di => di.article_id === item.article_id)
+        if (deliveryItem) {
+          const newReturnedQty = (deliveryItem.quantity_returned || 0) + item.quantity
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await (supabase.from('delivery_items') as any)
+            .update({ quantity_returned: newReturnedQty })
+            .eq('id', deliveryItem.id)
+        }
+      }
+
+      // Calculate new delivery status based on returns
+      let totalDelivered = 0
+      let totalReturned = 0
+      for (const deliveryItem of selectedDeliveryForReturn.delivery_items) {
+        const returnedItem = itemsToReturn.find(i => i.article_id === deliveryItem.article_id)
+        const currentReturned = (deliveryItem.quantity_returned || 0) + (returnedItem?.quantity || 0)
+        totalDelivered += deliveryItem.quantity_delivered || 0
+        totalReturned += currentReturned
+      }
+
+      // Update delivery status
+      let newStatus = 'delivered'
+      if (totalReturned > 0 && totalReturned >= totalDelivered) {
+        newStatus = 'returned'
+      } else if (totalReturned > 0) {
+        newStatus = 'partial'
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase.from('deliveries') as any)
+        .update({ status: newStatus })
+        .eq('id', selectedDeliveryForReturn.id)
+    }
+
+    fetchReturns()
+    fetchData()
+    setIsReturnDialogOpen(false)
+    resetReturnForm()
+  }
+
+  const handleValidateReturn = async (returnId: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('delivery_returns') as any)
+      .update({ status: 'validated' })
+      .eq('id', returnId)
+    if (!error) fetchReturns()
+  }
+
+  const handleCancelReturn = async (returnId: string) => {
+    if (!confirm('Êtes-vous sûr de vouloir annuler ce retour ?')) return
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('delivery_returns') as any)
+      .update({ status: 'cancelled' })
+      .eq('id', returnId)
+    if (!error) fetchReturns()
+  }
+
+  const handleDeleteReturn = async (returnId: string) => {
+    if (!confirm('Êtes-vous sûr de vouloir supprimer ce retour ?')) return
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase.from('delivery_return_items') as any).delete().eq('return_id', returnId)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('delivery_returns') as any).delete().eq('id', returnId)
+    if (!error) fetchReturns()
+  }
+
+  const handleViewReturn = (ret: DeliveryReturn) => {
+    setViewingReturn(ret)
+    setIsViewReturnDialogOpen(true)
+  }
+
+  const resetReturnForm = () => {
+    setReturnFormData({
+      delivery_id: '',
+      client_id: '',
+      return_date: new Date().toISOString().split('T')[0],
+      return_reason: '',
+      notes: '',
+    })
+    setReturnItems([])
+    setSelectedDeliveryForReturn(null)
+    setSelectedRoundForReturn('')
+  }
+
+  const filteredReturns = returns.filter((ret) => {
+    const matchesSearch =
+      ret.return_number.toLowerCase().includes(returnSearchTerm.toLowerCase()) ||
+      ret.client?.name?.toLowerCase().includes(returnSearchTerm.toLowerCase()) ||
+      ret.delivery?.delivery_number?.toLowerCase().includes(returnSearchTerm.toLowerCase())
+    const matchesStatus = returnStatusFilter === 'all' || ret.status === returnStatusFilter
+    return matchesSearch && matchesStatus
+  })
+
+  const returnStats = {
+    total: returns.length,
+    pending: returns.filter(r => r.status === 'pending').length,
+    validated: returns.filter(r => r.status === 'validated').length,
+    totalValue: returns.filter(r => r.status !== 'cancelled').reduce((sum, r) => sum + (r.total_ht || 0), 0),
+  }
+
+  // Get delivered deliveries for return selection
+  const deliveredDeliveries = deliveries.filter(d => d.status === 'delivered' || d.status === 'partial')
 
   const generateDeliveryNumber = () => {
     const date = new Date()
@@ -502,9 +1349,21 @@ export default function LivraisonsPage() {
   }
 
   const updateItemQuantity = (itemId: string, field: 'quantity_delivered' | 'quantity_returned', value: number) => {
-    setEditItems(editItems.map(item =>
-      item.id === itemId ? { ...item, [field]: value } : item
-    ))
+    setEditItems(editItems.map(item => {
+      if (item.id !== itemId) return item
+
+      let newValue = value
+
+      if (field === 'quantity_delivered') {
+        // Qte Livrée <= Qte Cmd
+        newValue = Math.min(value, item.quantity_ordered)
+      } else if (field === 'quantity_returned') {
+        // Qte Retour <= Qte Livrée
+        newValue = Math.min(value, item.quantity_delivered)
+      }
+
+      return { ...item, [field]: Math.max(0, newValue) }
+    }))
   }
 
   // Load items from a different order
@@ -608,10 +1467,14 @@ export default function LivraisonsPage() {
   }
 
   // Payment handlers
+  const getRecetteBL = (delivery: Delivery) => {
+    return delivery.delivery_items?.reduce((sum, item) => sum + ((item.quantity_delivered - item.quantity_returned) * item.unit_price), 0) || 0
+  }
+
   const handleOpenPayment = async (delivery: Delivery) => {
     setPaymentDelivery(delivery)
-    const totalTTC = (delivery.total_ht || 0) * 1.2
-    const balanceDue = delivery.balance_due ?? totalTTC
+    const recetteBL = getRecetteBL(delivery)
+    const balanceDue = delivery.balance_due ?? recetteBL
 
     setPaymentFormData({
       amount: balanceDue,
@@ -684,10 +1547,10 @@ export default function LivraisonsPage() {
         return
       }
 
-      // Update delivery payment status
-      const totalTTC = (paymentDelivery.total_ht || 0) * 1.2
+      // Update delivery payment status based on Recette BL
+      const recetteBL = getRecetteBL(paymentDelivery)
       const currentPaid = (paymentDelivery.amount_paid || 0) + paymentFormData.amount
-      const newBalance = Math.max(0, totalTTC - currentPaid)
+      const newBalance = Math.max(0, recetteBL - currentPaid)
       const newStatus = newBalance <= 0 ? 'paid' : currentPaid > 0 ? 'partial' : 'pending'
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -696,7 +1559,7 @@ export default function LivraisonsPage() {
           amount_paid: currentPaid,
           balance_due: newBalance,
           payment_status: newStatus,
-          total_ttc: totalTTC,
+          total_ttc: recetteBL,
         })
         .eq('id', paymentDelivery.id)
 
@@ -1021,73 +1884,100 @@ export default function LivraisonsPage() {
   return (
     <ProtectedModule module="livraisons">
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Livraisons</h1>
-            <p className="text-gray-500">Gerez vos bons de livraison</p>
-          </div>
+        {/* Navigation Tabs */}
+        <div className="flex gap-2 border-b border-gray-200 pb-2">
+          <Button
+            variant={activeTab === 'bl' ? 'default' : 'outline'}
+            onClick={() => setActiveTab('bl')}
+            className={activeTab === 'bl' ? 'bg-[#B8860B] hover:bg-[#9A7209]' : ''}
+          >
+            <Truck className="h-4 w-4 mr-2" />
+            BL - Bons de Livraison
+          </Button>
+          <Button
+            variant={activeTab === 'blt' ? 'default' : 'outline'}
+            onClick={() => setActiveTab('blt')}
+            className={activeTab === 'blt' ? 'bg-[#B8860B] hover:bg-[#9A7209]' : ''}
+          >
+            <Route className="h-4 w-4 mr-2" />
+            BLT - Tournée des Livraisons
+          </Button>
+          <Button
+            variant={activeTab === 'rblt' ? 'default' : 'outline'}
+            onClick={() => setActiveTab('rblt')}
+            className={activeTab === 'rblt' ? 'bg-[#B8860B] hover:bg-[#9A7209]' : ''}
+          >
+            <RotateCcw className="h-4 w-4 mr-2" />
+            RBLT - Retour des Livraisons
+          </Button>
+        </div>
 
-          <div className="flex gap-2">
-            {selectedDeliveries.size > 0 && (
-              <>
-                <Button
-                  variant="outline"
-                  onClick={clearSelection}
-                  className="gap-2"
-                >
-                  Annuler ({selectedDeliveries.size})
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={getCurrentLocation}
-                  disabled={isGettingLocation}
-                  className={`gap-2 ${useCurrentLocation ? 'border-green-500 text-green-600' : ''}`}
-                  title={useCurrentLocation ? 'Position actuelle utilisée' : 'Utiliser ma position'}
-                >
-                  {isGettingLocation ? (
-                    <RefreshCw className="h-4 w-4 animate-spin" />
-                  ) : useCurrentLocation ? (
-                    <Navigation className="h-4 w-4 text-green-600" />
-                  ) : (
-                    <Navigation className="h-4 w-4" />
-                  )}
-                  {useCurrentLocation ? 'Position OK' : 'Ma position'}
-                </Button>
-                {!useCurrentLocation && companySettings?.depot_lat && (
-                  <span className="text-xs text-gray-500 flex items-center gap-1">
-                    <Building className="h-3 w-3" />
-                    Départ: Dépôt
-                  </span>
-                )}
-                <Button
-                  onClick={optimizeRoute}
-                  disabled={isOptimizing}
-                  className="bg-blue-600 hover:bg-blue-700 gap-2"
-                >
-                  {isOptimizing ? (
-                    <RefreshCw className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Route className="h-4 w-4" />
-                  )}
-                  Optimiser trajet
-                </Button>
-              </>
-            )}
+        {activeTab === 'bl' && (
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Livraisons</h1>
+              <p className="text-gray-500">Gerez vos bons de livraison</p>
+            </div>
 
-            <ProtectedModule module="livraisons" action="create">
-              <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-                <DialogTrigger asChild>
+            <div className="flex gap-2">
+              {selectedDeliveries.size > 0 && (
+                <>
                   <Button
-                    className="bg-green-600 hover:bg-green-700"
-                    onClick={() => {
-                      resetForm()
-                      setIsDialogOpen(true)
-                    }}
+                    onClick={clearSelection}
+                    className="gap-2 bg-[#B8860B] hover:bg-[#9A7209]"
                   >
-                    <Plus className="mr-2 h-4 w-4" />
-                    Nouveau BL
+                    Annuler ({selectedDeliveries.size})
                   </Button>
-                </DialogTrigger>
+                  <Button
+                    onClick={getCurrentLocation}
+                    disabled={isGettingLocation}
+                    className={`gap-2 bg-[#B8860B] hover:bg-[#9A7209]`}
+                    title={useCurrentLocation ? 'Position actuelle utilisée' : 'Utiliser ma position'}
+                  >
+                    {isGettingLocation ? (
+                      <RefreshCw className="h-4 w-4 animate-spin" />
+                    ) : useCurrentLocation ? (
+                      <Navigation className="h-4 w-4 text-[#B8860B]" />
+                    ) : (
+                      <Navigation className="h-4 w-4" />
+                    )}
+                    {useCurrentLocation ? 'Position OK' : 'Ma position'}
+                  </Button>
+                  {!useCurrentLocation && companySettings?.depot_lat && (
+                    <span className="text-xs text-gray-500 flex items-center gap-1">
+                      <Building className="h-3 w-3" />
+                      Départ: Dépôt
+                    </span>
+                  )}
+                  <Button
+                    onClick={optimizeRoute}
+                    disabled={isOptimizing}
+                    className="bg-[#B8860B] hover:bg-[#9A7209] gap-2"
+                  >
+                    {isOptimizing ? (
+                      <RefreshCw className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Route className="h-4 w-4" />
+                    )}
+                    Optimiser trajet
+                  </Button>
+                </>
+              )}
+
+              <ProtectedModule module="livraisons" action="create">
+                <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+                  <DialogTrigger asChild>
+                    <Button
+                      className="bg-[#B8860B] hover:bg-[#9A7209]"
+                      onClick={() => {
+                        resetForm()
+                        setIsDialogOpen(true)
+                      }}
+                    >
+                      <Plus className="mr-2 h-4 w-4" />
+                      Nouveau BL
+                    </Button>
+                  </DialogTrigger>
               <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                   <DialogTitle>Nouveau bon de livraison</DialogTitle>
@@ -1152,10 +2042,10 @@ export default function LivraisonsPage() {
                   </div>
 
                   <div className="flex justify-end gap-2 pt-4">
-                    <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                    <Button type="button" onClick={() => setIsDialogOpen(false)} className="bg-[#B8860B] hover:bg-[#9A7209]">
                       Annuler
                     </Button>
-                    <Button type="submit" className="bg-green-600 hover:bg-green-700">
+                    <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
                       Creer le BL
                     </Button>
                   </div>
@@ -1163,65 +2053,69 @@ export default function LivraisonsPage() {
               </DialogContent>
               </Dialog>
             </ProtectedModule>
+            </div>
           </div>
-        </div>
+        )}
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">
-                Total Livraisons
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center gap-2">
-                <Truck className="h-8 w-8 text-purple-600" />
-                <span className="text-2xl font-bold">{deliveries.length}</span>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">
-                En attente
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <span className="text-2xl font-bold text-yellow-600">
-                {pendingCount}
-              </span>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">
-                Livrees
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <span className="text-2xl font-bold text-green-600">
-                {deliveredCount}
-              </span>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">
-                CA Total
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center gap-2">
-                <TrendingUp className="h-6 w-6 text-green-600" />
-                <span className="text-xl font-bold text-green-600">
-                  {formatPrice(totalCA)}
-                </span>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+        {/* BL - Bons de Livraison Tab Content */}
+        {activeTab === 'bl' && (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <Card className="border-2 border-[#B8860B]">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-bold text-gray-600">
+                    Total Livraisons
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center gap-2">
+                    <Truck className="h-8 w-8 text-purple-600" />
+                    <span className="text-2xl font-bold">{deliveries.length}</span>
+                  </div>
+                </CardContent>
+              </Card>
+              <Card className="border-2 border-[#B8860B]">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-bold text-gray-600">
+                    En attente
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <span className="text-2xl font-bold text-yellow-600">
+                    {pendingCount}
+                  </span>
+                </CardContent>
+              </Card>
+              <Card className="border-2 border-[#B8860B]">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-bold text-gray-600">
+                    Livrees
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <span className="text-2xl font-bold text-[#B8860B]">
+                    {deliveredCount}
+                  </span>
+                </CardContent>
+              </Card>
+              <Card className="border-2 border-[#B8860B]">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-bold text-gray-600">
+                    CA Total
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center gap-2">
+                    <TrendingUp className="h-6 w-6 text-[#B8860B]" />
+                    <span className="text-xl font-bold text-[#B8860B]">
+                      {formatPrice(totalCA)}
+                    </span>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
 
-        <Card>
+            <Card className="border-2 border-[#B8860B]">
           <CardHeader>
             <div className="flex flex-col md:flex-row items-start md:items-center gap-4">
               <div className="relative flex-1">
@@ -1230,34 +2124,35 @@ export default function LivraisonsPage() {
                   placeholder="Rechercher par N BL ou client..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10"
+                  className="pl-10 border-2 border-[#B8860B]"
                 />
               </div>
               <Input
                 type="date"
                 value={dateFilter}
                 onChange={(e) => setDateFilter(e.target.value)}
-                className="w-44"
+                className="w-44 border-2 border-[#B8860B]"
                 placeholder="Filtrer par date"
               />
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-48">
+                <SelectTrigger className="w-48 border-2 border-[#B8860B]">
                   <SelectValue placeholder="Filtrer par statut" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Tous les statuts</SelectItem>
                   <SelectItem value="pending">En attente</SelectItem>
                   <SelectItem value="in_progress">En cours</SelectItem>
-                  <SelectItem value="delivered">Livree</SelectItem>
-                  <SelectItem value="partial">Partielle</SelectItem>
-                  <SelectItem value="returned">Retournee</SelectItem>
+                  <SelectItem value="delivered">Livrée</SelectItem>
+                  <SelectItem value="partial">Partiellement livrée</SelectItem>
+                  <SelectItem value="returned">Retournée</SelectItem>
+                  <SelectItem value="cancelled">Annulée</SelectItem>
                 </SelectContent>
               </Select>
-              <Button variant="outline" onClick={selectAllPending} className="gap-2">
+              <Button onClick={selectAllPending} className="gap-2 bg-[#B8860B] hover:bg-[#9A7209]">
                 <CheckCircle2 className="h-4 w-4" />
                 Selectionner en attente
               </Button>
-              <Button variant="ghost" size="icon" onClick={fetchData} title="Actualiser">
+              <Button size="icon" onClick={fetchData} title="Actualiser" className="bg-[#B8860B] hover:bg-[#9A7209]">
                 <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
               </Button>
             </div>
@@ -1267,7 +2162,7 @@ export default function LivraisonsPage() {
               <div className="text-center py-8">
                 <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
                 <p className="text-red-600 mb-4">{loadError}</p>
-                <Button onClick={fetchData} variant="outline">
+                <Button onClick={fetchData} className="bg-[#B8860B] hover:bg-[#9A7209]">
                   Reessayer
                 </Button>
               </div>
@@ -1281,28 +2176,20 @@ export default function LivraisonsPage() {
                 Aucune livraison trouvee
               </div>
             ) : (
+              <div className="overflow-x-auto border-2 border-[#B8860B] rounded-lg">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-10">
-                      <Checkbox
-                        checked={selectedDeliveries.size === filteredDeliveries.length && filteredDeliveries.length > 0}
-                        onCheckedChange={(checked) => {
-                          if (checked) {
-                            setSelectedDeliveries(new Set(filteredDeliveries.map(d => d.id)))
-                          } else {
-                            setSelectedDeliveries(new Set())
-                          }
-                        }}
-                      />
-                    </TableHead>
+                    <TableHead>Date</TableHead>
                     <TableHead>N BL</TableHead>
+                    <TableHead>N BCC</TableHead>
+                    <TableHead className="text-center">Nbr Article</TableHead>
                     <TableHead>Client</TableHead>
                     <TableHead>Ville</TableHead>
-                    <TableHead>Date</TableHead>
                     <TableHead>Statut</TableHead>
                     <TableHead>Paiement</TableHead>
-                    <TableHead className="text-right">Total TTC</TableHead>
+                    <TableHead className="text-right">Val BL</TableHead>
+                    <TableHead className="text-right">Recette BL</TableHead>
                     <TableHead className="text-right">Reste</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
@@ -1314,28 +2201,28 @@ export default function LivraisonsPage() {
                       className={selectedDeliveries.has(delivery.id) ? 'bg-blue-50' : ''}
                     >
                       <TableCell>
-                        <Checkbox
-                          checked={selectedDeliveries.has(delivery.id)}
-                          onCheckedChange={() => toggleDeliverySelection(delivery.id)}
-                        />
+                        {delivery.delivery_date
+                          ? format(new Date(delivery.delivery_date), 'dd/MM/yyyy', { locale: fr })
+                          : '-'}
                       </TableCell>
                       <TableCell className="font-medium">{delivery.delivery_number}</TableCell>
+                      <TableCell className="text-gray-600">{delivery.order?.order_number || '-'}</TableCell>
+                      <TableCell className="text-center">
+                        <Badge variant="outline" className="text-[#B8860B]">
+                          {delivery.delivery_items?.length || 0}
+                        </Badge>
+                      </TableCell>
                       <TableCell>
                         <div>
                           <span className="font-medium">{delivery.client?.code}</span>
                           <span className="text-gray-500 ml-2">{delivery.client?.name}</span>
                           {delivery.client?.gps_lat && (
-                            <span title="GPS disponible"><MapPin className="inline h-3 w-3 text-green-500 ml-1" /></span>
+                            <span title="GPS disponible"><MapPin className="inline h-3 w-3 text-[#DAA520] ml-1" /></span>
                           )}
                         </div>
                       </TableCell>
                       <TableCell className="text-gray-600">
                         {delivery.client?.city || '-'}
-                      </TableCell>
-                      <TableCell>
-                        {delivery.delivery_date
-                          ? format(new Date(delivery.delivery_date), 'dd/MM/yyyy', { locale: fr })
-                          : '-'}
                       </TableCell>
                       <TableCell>
                         <Badge className={statusColors[delivery.status]}>
@@ -1348,55 +2235,57 @@ export default function LivraisonsPage() {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right font-semibold">
-                        {formatPrice((delivery.total_ht || 0) * 1.2)}
+                        {formatPrice(delivery.total_ht || 0)}
+                      </TableCell>
+                      <TableCell className="text-right font-semibold text-[#B8860B]">
+                        {formatPrice(delivery.delivery_items?.reduce((sum, item) => sum + ((item.quantity_delivered - item.quantity_returned) * item.unit_price), 0) || 0)}
                       </TableCell>
                       <TableCell className="text-right">
-                        <span className={`font-semibold ${(delivery.balance_due || (delivery.total_ht || 0) * 1.2) > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                          {formatPrice(delivery.balance_due ?? (delivery.total_ht || 0) * 1.2)}
+                        <span className={`font-semibold ${(getRecetteBL(delivery) - (delivery.amount_paid || 0)) > 0 ? 'text-red-600' : 'text-[#B8860B]'}`}>
+                          {formatPrice(Math.max(0, getRecetteBL(delivery) - (delivery.amount_paid || 0)))}
                         </span>
                       </TableCell>
                       <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
+                        <div className="flex justify-end gap-0.5">
                           <Button
-                            variant="ghost"
-                            size="icon"
+                            size="sm"
                             onClick={() => handleOpenPayment(delivery)}
                             title="Encaisser"
-                            className={delivery.payment_status === 'paid' ? 'opacity-50' : ''}
+                            className={`h-7 w-7 p-0 bg-[#B8860B] hover:bg-[#9A7209] ${delivery.payment_status === 'paid' ? 'opacity-50' : ''}`}
                           >
-                            <Wallet className="h-4 w-4 text-green-600" />
+                            <Wallet className="h-3.5 w-3.5" />
                           </Button>
                           <Button
-                            variant="ghost"
-                            size="icon"
+                            size="sm"
                             onClick={() => handleViewDelivery(delivery)}
                             title="Voir details"
+                            className="h-7 w-7 p-0 bg-[#B8860B] hover:bg-[#9A7209]"
                           >
-                            <Eye className="h-4 w-4" />
+                            <Eye className="h-3.5 w-3.5" />
                           </Button>
                           <Button
-                            variant="ghost"
-                            size="icon"
+                            size="sm"
                             onClick={() => handleEditDelivery(delivery)}
                             title="Modifier"
+                            className="h-7 w-7 p-0 bg-[#B8860B] hover:bg-[#9A7209]"
                           >
-                            <Pencil className="h-4 w-4 text-blue-600" />
+                            <Pencil className="h-3.5 w-3.5" />
                           </Button>
                           <Button
-                            variant="ghost"
-                            size="icon"
+                            size="sm"
                             onClick={() => handleGeneratePDF(delivery)}
                             title="Telecharger BL"
+                            className="h-7 w-7 p-0 bg-[#B8860B] hover:bg-[#9A7209]"
                           >
-                            <FileText className="h-4 w-4 text-purple-600" />
+                            <FileText className="h-3.5 w-3.5" />
                           </Button>
                           <Button
-                            variant="ghost"
-                            size="icon"
+                            size="sm"
                             onClick={() => handleDeleteDelivery(delivery.id, delivery.delivery_number)}
                             title="Supprimer"
+                            className="h-7 w-7 p-0 bg-[#B8860B] hover:bg-[#9A7209]"
                           >
-                            <Trash2 className="h-4 w-4 text-red-600" />
+                            <Trash2 className="h-3.5 w-3.5" />
                           </Button>
                         </div>
                       </TableCell>
@@ -1404,13 +2293,1224 @@ export default function LivraisonsPage() {
                   ))}
                 </TableBody>
               </Table>
+              </div>
             )}
             <div className="mt-4 text-sm text-gray-500 text-right">
               {filteredDeliveries.length} livraison(s) affichee(s)
               {selectedDeliveries.size > 0 && ` - ${selectedDeliveries.size} selectionnee(s)`}
             </div>
           </CardContent>
-        </Card>
+            </Card>
+          </>
+        )}
+
+        {/* BLT - Tournée des Livraisons Tab Content */}
+        {activeTab === 'blt' && (
+          <>
+            {/* Header */}
+            <div className="flex items-center justify-between">
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">Tournée de Livraisons</h1>
+                <p className="text-gray-500">Gérez vos tournées de livraison</p>
+              </div>
+
+              <Dialog open={isRoundDialogOpen} onOpenChange={setIsRoundDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button
+                    className="bg-[#B8860B] hover:bg-[#9A7209]"
+                    onClick={() => {
+                      resetRoundForm()
+                      setIsRoundDialogOpen(true)
+                    }}
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    Nouvelle Tournée
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+                  <DialogHeader>
+                    <DialogTitle>Créer une nouvelle tournée</DialogTitle>
+                  </DialogHeader>
+                  <form onSubmit={handleRoundSubmit} className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label>Livreur</Label>
+                        <Select
+                          value={roundFormData.driver_id}
+                          onValueChange={(value) =>
+                            setRoundFormData({ ...roundFormData, driver_id: value })
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Sélectionner un livreur" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {drivers.map((driver) => (
+                              <SelectItem key={driver.id} value={driver.id}>
+                                {driver.full_name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="round_date">Date de tournée</Label>
+                        <Input
+                          id="round_date"
+                          type="date"
+                          value={roundFormData.round_date}
+                          onChange={(e) =>
+                            setRoundFormData({ ...roundFormData, round_date: e.target.value })
+                          }
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label>Livraisons à inclure</Label>
+                      <div className="border-2 border-[#B8860B] rounded-md p-4 max-h-64 overflow-y-auto space-y-2">
+                        {availableDeliveries.map((delivery) => (
+                          <div key={delivery.id} className="flex items-center space-x-2">
+                            <Checkbox
+                              id={`delivery-${delivery.id}`}
+                              checked={selectedRoundDeliveries.includes(delivery.id)}
+                              onCheckedChange={() => toggleRoundDeliverySelection(delivery.id)}
+                            />
+                            <label
+                              htmlFor={`delivery-${delivery.id}`}
+                              className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                            >
+                              {delivery.delivery_number} - {delivery.client?.name} ({delivery.client?.city})
+                            </label>
+                          </div>
+                        ))}
+                        {availableDeliveries.length === 0 && (
+                          <p className="text-sm text-gray-500">Aucune livraison disponible</p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="round_notes">Notes</Label>
+                      <Input
+                        id="round_notes"
+                        value={roundFormData.notes}
+                        onChange={(e) =>
+                          setRoundFormData({ ...roundFormData, notes: e.target.value })
+                        }
+                        placeholder="Notes sur la tournée"
+                      />
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-4">
+                      <Button
+                        type="button"
+                        onClick={() => setIsRoundDialogOpen(false)}
+                        className="bg-[#B8860B] hover:bg-[#9A7209]"
+                      >
+                        Annuler
+                      </Button>
+                      <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
+                        Créer la tournée
+                      </Button>
+                    </div>
+                  </form>
+                </DialogContent>
+              </Dialog>
+            </div>
+
+            {/* Stats */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <Card className="border-2 border-[#B8860B]">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-bold text-gray-600">
+                    Total Tournées
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center gap-2">
+                    <Route className="h-8 w-8 text-[#B8860B]" />
+                    <span className="text-2xl font-bold">{roundStats.total}</span>
+                  </div>
+                </CardContent>
+              </Card>
+              <Card className="border-2 border-[#B8860B]">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-bold text-gray-600">
+                    En attente
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <span className="text-2xl font-bold text-yellow-600">{roundStats.pending}</span>
+                </CardContent>
+              </Card>
+              <Card className="border-2 border-[#B8860B]">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-bold text-gray-600">
+                    En cours
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <span className="text-2xl font-bold text-blue-600">{roundStats.inProgress}</span>
+                </CardContent>
+              </Card>
+              <Card className="border-2 border-[#B8860B]">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-bold text-gray-600">
+                    Terminées
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <span className="text-2xl font-bold text-[#B8860B]">{roundStats.completed}</span>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Search & Filters */}
+            <Card className="border-2 border-[#B8860B]">
+              <CardHeader>
+                <div className="flex flex-col md:flex-row gap-4">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                    <Input
+                      placeholder="Rechercher par numéro ou livreur..."
+                      value={roundSearchTerm}
+                      onChange={(e) => setRoundSearchTerm(e.target.value)}
+                      className="pl-10 border-2 border-[#B8860B]"
+                    />
+                  </div>
+                  <Select value={roundStatusFilter} onValueChange={setRoundStatusFilter}>
+                    <SelectTrigger className="w-full md:w-48 border-2 border-[#B8860B]">
+                      <SelectValue placeholder="Statut" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Tous les statuts</SelectItem>
+                      <SelectItem value="pending">En attente</SelectItem>
+                      <SelectItem value="in_progress">En cours</SelectItem>
+                      <SelectItem value="completed">Terminée</SelectItem>
+                      <SelectItem value="cancelled">Annulée</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button variant="outline" onClick={fetchRounds}>
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Actualiser
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {filteredRounds.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    Aucune tournée trouvée
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto border-2 border-[#B8860B] rounded-lg">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Date</TableHead>
+                          <TableHead>N° BLT</TableHead>
+                          <TableHead className="text-right">Val BLT</TableHead>
+                          <TableHead className="text-right">Recette BLT</TableHead>
+                          <TableHead>Livreur</TableHead>
+                          <TableHead className="text-center">Livraisons</TableHead>
+                          <TableHead>Durée</TableHead>
+                          <TableHead>Statut</TableHead>
+                          <TableHead className="text-right">Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredRounds.map((round) => (
+                          <TableRow key={round.id}>
+                            <TableCell>
+                              {format(new Date(round.round_date), 'dd/MM/yyyy', { locale: fr })}
+                            </TableCell>
+                            <TableCell className="font-mono font-medium">
+                              {round.round_number}
+                            </TableCell>
+                            <TableCell className="text-right font-semibold">
+                              {formatPrice(
+                                round.delivery_round_items?.reduce(
+                                  (sum, item) => sum + (item.delivery?.total_ht || 0),
+                                  0
+                                ) || 0
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right font-semibold text-[#B8860B]">
+                              {formatPrice(
+                                round.delivery_round_items?.reduce(
+                                  (sum, item) => {
+                                    const deliveryRecette = (item.delivery as any)?.delivery_items?.reduce(
+                                      (itemSum: number, deliveryItem: any) =>
+                                        itemSum + ((deliveryItem.quantity_delivered - deliveryItem.quantity_returned) * deliveryItem.unit_price),
+                                      0
+                                    ) || 0
+                                    return sum + deliveryRecette
+                                  },
+                                  0
+                                ) || 0
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <Select
+                                value={round.driver_id || 'none'}
+                                onValueChange={(value) => handleAssignDriver(round.id, value)}
+                              >
+                                <SelectTrigger className="w-40">
+                                  <SelectValue placeholder="Non assigné">
+                                    {round.driver?.full_name || 'Non assigné'}
+                                  </SelectValue>
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="none">Non assigné</SelectItem>
+                                  {drivers.map((driver) => (
+                                    <SelectItem key={driver.id} value={driver.id}>
+                                      {driver.full_name || driver.email}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </TableCell>
+                            <TableCell className="text-center">
+                              <Badge variant="outline">
+                                {round.delivery_round_items?.length || 0} BL
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              {round.start_time && round.end_time ? (
+                                <span className="text-sm">
+                                  {Math.round((new Date(round.end_time).getTime() - new Date(round.start_time).getTime()) / 60000)} min
+                                </span>
+                              ) : round.start_time ? (
+                                <span className="text-sm text-blue-600">En cours...</span>
+                              ) : (
+                                '-'
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <Badge className={roundStatusColors[round.status]}>
+                                {roundStatusLabels[round.status]}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex justify-end gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  title="Voir détails"
+                                  onClick={() => handleViewRound(round)}
+                                >
+                                  <Eye className="h-4 w-4" />
+                                </Button>
+                                {round.status === 'pending' && (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    title="Démarrer"
+                                    onClick={() => handleStartRound(round.id)}
+                                  >
+                                    <Play className="h-4 w-4 text-[#B8860B]" />
+                                  </Button>
+                                )}
+                                {round.status === 'in_progress' && (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    title="Terminer"
+                                    onClick={() => handleCompleteRound(round.id)}
+                                  >
+                                    <CheckCircle2 className="h-4 w-4 text-[#B8860B]" />
+                                  </Button>
+                                )}
+                                {round.status !== 'completed' && round.status !== 'cancelled' && (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    title="Annuler"
+                                    onClick={() => handleCancelRound(round.id)}
+                                  >
+                                    <XCircle className="h-4 w-4 text-orange-600" />
+                                  </Button>
+                                )}
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  title="Supprimer"
+                                  onClick={() => handleDeleteRound(round.id)}
+                                >
+                                  <Trash2 className="h-4 w-4 text-red-600" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* View Round Dialog */}
+            <Dialog open={isViewRoundDialogOpen} onOpenChange={setIsViewRoundDialogOpen}>
+              <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-3 text-xl">
+                    <Route className="h-6 w-6 text-[#B8860B]" />
+                    Tournée {viewingRound?.round_number}
+                    {viewingRound && (
+                      <Badge className={`ml-2 ${roundStatusColors[viewingRound.status]}`}>
+                        {roundStatusLabels[viewingRound.status]}
+                      </Badge>
+                    )}
+                  </DialogTitle>
+                </DialogHeader>
+                {viewingRound && (
+                  <div className="space-y-6">
+                    {/* Header Info */}
+                    <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+                      <div className="bg-gray-50 rounded-lg p-3">
+                        <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
+                          <Calendar className="h-4 w-4" />
+                          Date
+                        </div>
+                        <p className="font-medium">
+                          {format(new Date(viewingRound.round_date), 'dd MMMM yyyy', { locale: fr })}
+                        </p>
+                      </div>
+                      <div className="bg-gray-50 rounded-lg p-3">
+                        <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
+                          <User className="h-4 w-4" />
+                          Livreur
+                        </div>
+                        <p className="font-medium">
+                          {viewingRound.driver?.full_name || 'Non assigné'}
+                        </p>
+                      </div>
+                      <div className="bg-gray-50 rounded-lg p-3">
+                        <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
+                          <Package className="h-4 w-4" />
+                          Livraisons
+                        </div>
+                        <p className="font-medium">
+                          {viewingRound.delivery_round_items?.length || 0} BL
+                        </p>
+                      </div>
+                      <div className="bg-amber-50 border border-[#B8860B] rounded-lg p-3">
+                        <div className="flex items-center gap-2 text-[#B8860B] text-sm mb-1">
+                          <Package className="h-4 w-4" />
+                          Val BLT
+                        </div>
+                        <p className="font-semibold text-[#B8860B]">
+                          {formatPrice(
+                            viewingRound.delivery_round_items?.reduce(
+                              (sum, item) => sum + (item.delivery?.total_ht || 0),
+                              0
+                            ) || 0
+                          )}
+                        </p>
+                      </div>
+                      <div className="bg-gray-50 rounded-lg p-3">
+                        <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
+                          <Clock className="h-4 w-4" />
+                          Durée
+                        </div>
+                        <p className="font-medium">
+                          {viewingRound.start_time && viewingRound.end_time
+                            ? `${Math.round((new Date(viewingRound.end_time).getTime() - new Date(viewingRound.start_time).getTime()) / 60000)} min`
+                            : viewingRound.start_time
+                              ? 'En cours...'
+                              : 'Non démarré'}
+                        </p>
+                      </div>
+                      <div className={`rounded-lg p-3 border-2 ${roundStatusColors[viewingRound.status].replace('bg-', 'bg-').replace('text-', 'border-')}`}>
+                        <div className="flex items-center gap-2 text-gray-700 text-sm mb-1 font-semibold">
+                          <CheckCircle2 className="h-4 w-4" />
+                          Statut Tournée
+                        </div>
+                        <p className="font-bold">
+                          <Badge className={roundStatusColors[viewingRound.status]}>
+                            {roundStatusLabels[viewingRound.status]}
+                          </Badge>
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Deliveries List */}
+                    <div className="border rounded-xl overflow-hidden">
+                      <div className="bg-gray-50 px-4 py-3 border-b">
+                        <h3 className="font-semibold text-gray-700 flex items-center gap-2">
+                          <Truck className="h-5 w-5" />
+                          Livraisons de la tournée
+                        </h3>
+                      </div>
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="bg-gray-50">
+                            <TableHead className="w-12">#</TableHead>
+                            <TableHead>N° BL</TableHead>
+                            <TableHead>Client</TableHead>
+                            <TableHead>Adresse</TableHead>
+                            <TableHead>GPS</TableHead>
+                            <TableHead className="text-right">Total</TableHead>
+                            <TableHead>Statut BL</TableHead>
+                            <TableHead className="text-center">Articles</TableHead>
+                            <TableHead className="text-center">Actions</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {viewingRound.delivery_round_items?.sort((a, b) => a.sequence_order - b.sequence_order).map((item) => {
+                            const delivery = item.delivery as any
+                            return (
+                            <>
+                              <TableRow key={item.id} className={expandedDeliveryId === item.delivery_id ? 'bg-amber-50' : ''}>
+                                <TableCell className="font-bold text-gray-400">
+                                  {item.sequence_order}
+                                </TableCell>
+                                <TableCell className="font-mono font-medium">
+                                  {delivery?.delivery_number}
+                                </TableCell>
+                                <TableCell>
+                                  <span className="font-medium">{delivery?.client?.code}</span>
+                                  <span className="text-gray-500 ml-2">{delivery?.client?.name}</span>
+                                </TableCell>
+                                <TableCell className="text-sm text-gray-600">
+                                  {delivery?.client?.address}
+                                  {delivery?.client?.city && `, ${delivery.client.city}`}
+                                </TableCell>
+                                <TableCell>
+                                  {delivery?.client?.gps_lat && delivery?.client?.gps_lng ? (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="text-blue-600 p-0 h-auto"
+                                      onClick={() => window.open(`https://www.google.com/maps?q=${delivery?.client?.gps_lat},${delivery?.client?.gps_lng}`, '_blank')}
+                                    >
+                                      <MapPin className="h-4 w-4 mr-1" />
+                                      Voir
+                                    </Button>
+                                  ) : (
+                                    <span className="text-gray-400">-</span>
+                                  )}
+                                </TableCell>
+                                <TableCell className="text-right font-medium">
+                                  {formatPrice(delivery?.total_ht || 0)}
+                                </TableCell>
+                                <TableCell>
+                                  <Badge className={statusColors[delivery?.status || 'pending']}>
+                                    {statusLabels[delivery?.status || 'pending']}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell className="text-center">
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => setExpandedDeliveryId(expandedDeliveryId === item.delivery_id ? null : item.delivery_id)}
+                                    className="text-[#B8860B]"
+                                  >
+                                    <Package className="h-4 w-4 mr-1" />
+                                    Voir
+                                  </Button>
+                                </TableCell>
+                                <TableCell className="text-center">
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleValidateBL(item.id, item.delivery_id, delivery?.delivery_items || [])}
+                                    className="bg-green-600 hover:bg-green-700 h-7 px-2 text-xs"
+                                  >
+                                    <CheckCircle2 className="h-3 w-3 mr-1" />
+                                    Valider
+                                  </Button>
+                                </TableCell>
+                              </TableRow>
+                              {expandedDeliveryId === item.delivery_id && delivery?.delivery_items && (
+                                <TableRow>
+                                  <TableCell colSpan={9} className="bg-gray-50 p-4">
+                                    <div className="border-2 border-[#B8860B] rounded-lg p-4">
+                                      <h4 className="font-semibold text-[#B8860B] mb-3 flex items-center gap-2">
+                                        <Package className="h-4 w-4" />
+                                        Articles du BL {delivery?.delivery_number}
+                                      </h4>
+                                      <Table>
+                                        <TableHeader>
+                                          <TableRow>
+                                            <TableHead>Code</TableHead>
+                                            <TableHead>Article</TableHead>
+                                            <TableHead className="text-right">Qte Commandée</TableHead>
+                                            <TableHead className="text-right">Qte Livrée</TableHead>
+                                            <TableHead className="text-right">Qte Retournée</TableHead>
+                                            <TableHead className="text-right">Prix Unit.</TableHead>
+                                            <TableHead className="text-right">Total</TableHead>
+                                            <TableHead className="text-center">Action</TableHead>
+                                          </TableRow>
+                                        </TableHeader>
+                                        <TableBody>
+                                          {delivery.delivery_items.map((deliveryItem: any) => {
+                                            const currentQtyReturned = editingItems[deliveryItem.id]?.quantity_returned ?? deliveryItem.quantity_returned
+                                            const hasChanges = editingItems[deliveryItem.id] !== undefined
+                                            return (
+                                              <TableRow key={deliveryItem.id}>
+                                                <TableCell className="font-mono">{deliveryItem.article?.code}</TableCell>
+                                                <TableCell>{deliveryItem.article?.name}</TableCell>
+                                                <TableCell className="text-right">{deliveryItem.quantity_ordered}</TableCell>
+                                                <TableCell className="text-right font-semibold text-[#B8860B]">
+                                                  {deliveryItem.quantity_delivered}
+                                                </TableCell>
+                                                <TableCell className="text-right">
+                                                  <Input
+                                                    type="number"
+                                                    min="0"
+                                                    max={deliveryItem.quantity_delivered}
+                                                    value={currentQtyReturned}
+                                                    onChange={(e) => handleQuantityReturnedChange(deliveryItem.id, e.target.value)}
+                                                    className={`w-20 text-right ${hasChanges ? 'border-[#B8860B] border-2' : ''}`}
+                                                  />
+                                                </TableCell>
+                                                <TableCell className="text-right">{formatPrice(deliveryItem.unit_price)}</TableCell>
+                                                <TableCell className="text-right font-semibold">
+                                                  {formatPrice((deliveryItem.quantity_delivered - currentQtyReturned) * deliveryItem.unit_price)}
+                                                </TableCell>
+                                                <TableCell className="text-center">
+                                                  {hasChanges && (
+                                                    <Button
+                                                      size="sm"
+                                                      onClick={() => handleUpdateDeliveryItem(deliveryItem.id, currentQtyReturned, item.delivery_id, delivery.delivery_items)}
+                                                      className="bg-[#B8860B] hover:bg-[#9A7209] h-7 px-2"
+                                                    >
+                                                      <CheckCircle2 className="h-3 w-3" />
+                                                    </Button>
+                                                  )}
+                                                </TableCell>
+                                              </TableRow>
+                                            )
+                                          })}
+                                        </TableBody>
+                                      </Table>
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
+                              )}
+                            </>
+                          )})}
+                        </TableBody>
+                      </Table>
+                    </div>
+
+                    {/* Notes */}
+                    {viewingRound.notes && (
+                      <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
+                        <h3 className="font-semibold text-yellow-800 mb-2">Notes</h3>
+                        <p className="text-sm text-gray-700">{viewingRound.notes}</p>
+                      </div>
+                    )}
+
+                    {/* Recette BLT et Diff Val */}
+                    <div className="flex justify-end">
+                      <div className="bg-gradient-to-r from-amber-50 to-yellow-50 border-2 border-[#B8860B] rounded-xl p-4 w-auto space-y-2">
+                        <div className="flex items-center gap-4">
+                          <h3 className="text-lg font-bold text-[#B8860B]">Recette BLT</h3>
+                          <p className="text-2xl font-bold text-[#B8860B]">
+                            {formatPrice(
+                              viewingRound.delivery_round_items?.reduce(
+                                (sum, item) => {
+                                  const deliveryRecette = (item.delivery as any)?.delivery_items?.reduce(
+                                    (itemSum: number, deliveryItem: any) =>
+                                      itemSum + ((deliveryItem.quantity_delivered - deliveryItem.quantity_returned) * deliveryItem.unit_price),
+                                    0
+                                  ) || 0
+                                  return sum + deliveryRecette
+                                },
+                                0
+                              ) || 0
+                            )}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-4 border-t border-[#B8860B] pt-2">
+                          <h3 className="text-lg font-bold text-gray-700">Diff Val</h3>
+                          <p className="text-2xl font-bold text-gray-700">
+                            {(() => {
+                              const valBLT = viewingRound.delivery_round_items?.reduce(
+                                (sum, item) => sum + (item.delivery?.total_ht || 0),
+                                0
+                              ) || 0
+                              const recetteBLT = viewingRound.delivery_round_items?.reduce(
+                                (sum, item) => {
+                                  const deliveryRecette = (item.delivery as any)?.delivery_items?.reduce(
+                                    (itemSum: number, deliveryItem: any) =>
+                                      itemSum + ((deliveryItem.quantity_delivered - deliveryItem.quantity_returned) * deliveryItem.unit_price),
+                                    0
+                                  ) || 0
+                                  return sum + deliveryRecette
+                                },
+                                0
+                              ) || 0
+                              return formatPrice(valBLT - recetteBLT)
+                            })()}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex flex-wrap justify-end gap-3 pt-4 border-t">
+                      <Button className="bg-[#B8860B] hover:bg-[#9A7209]" onClick={() => setIsViewRoundDialogOpen(false)}>
+                        Fermer
+                      </Button>
+                      {viewingRound.status === 'pending' && (
+                        <Button
+                          className="bg-[#B8860B] hover:bg-[#9A7209]"
+                          onClick={() => {
+                            handleStartRound(viewingRound.id)
+                            setIsViewRoundDialogOpen(false)
+                          }}
+                        >
+                          <Play className="h-4 w-4 mr-2" />
+                          Démarrer la tournée
+                        </Button>
+                      )}
+                      {viewingRound.status === 'in_progress' && (
+                        <Button
+                          className="bg-blue-600 hover:bg-blue-700"
+                          onClick={() => {
+                            handleCompleteRound(viewingRound.id)
+                            setIsViewRoundDialogOpen(false)
+                          }}
+                        >
+                          <CheckCircle2 className="h-4 w-4 mr-2" />
+                          Terminer la tournée
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </DialogContent>
+            </Dialog>
+          </>
+        )}
+
+        {/* RBLT - Retour des Livraisons Tab Content */}
+        {activeTab === 'rblt' && (
+          <>
+            {/* Header */}
+            <div className="flex items-center justify-between">
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">Retour de Livraisons</h1>
+                <p className="text-gray-500">Gérez les retours de marchandises</p>
+              </div>
+
+              <Dialog open={isReturnDialogOpen} onOpenChange={setIsReturnDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button
+                    className="bg-[#B8860B] hover:bg-[#9A7209]"
+                    onClick={() => {
+                      resetReturnForm()
+                      setIsReturnDialogOpen(true)
+                    }}
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    Nouveau Retour
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+                  <DialogHeader>
+                    <DialogTitle>Créer un bon de retour (RBLT)</DialogTitle>
+                  </DialogHeader>
+                  <form onSubmit={handleReturnSubmit} className="space-y-4">
+                    <div className="space-y-2">
+                      <Label>BLT (Tournée) *</Label>
+                      <Select
+                        value={selectedRoundForReturn}
+                        onValueChange={(value) => {
+                          setSelectedRoundForReturn(value)
+                          setReturnFormData({ ...returnFormData, delivery_id: '', client_id: '' })
+                          setSelectedDeliveryForReturn(null)
+                          setReturnItems([])
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Sélectionner une tournée terminée" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {rounds.filter(r => r.status === 'completed').map((round) => (
+                            <SelectItem key={round.id} value={round.id}>
+                              {round.round_number} - {format(new Date(round.round_date), 'dd/MM/yyyy', { locale: fr })} - {round.driver?.full_name || 'Non assigné'}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {selectedRoundForReturn && (
+                    <div className="space-y-2">
+                      <Label>Livraison source *</Label>
+                      <Select
+                        value={returnFormData.delivery_id}
+                        onValueChange={(value) => {
+                          const round = rounds.find(r => r.id === selectedRoundForReturn)
+                          const roundItem = round?.delivery_round_items?.find(ri => ri.delivery_id === value)
+                          const delivery = roundItem?.delivery as any
+                          if (delivery) {
+                            const fullDelivery = deliveries.find(d => d.id === value)
+                            if (fullDelivery) handleSelectDeliveryForReturn(fullDelivery)
+                          }
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Sélectionner une livraison" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(() => {
+                            const round = rounds.find(r => r.id === selectedRoundForReturn)
+                            return round?.delivery_round_items?.map((ri) => {
+                              const delivery = ri.delivery as any
+                              return (
+                                <SelectItem key={ri.delivery_id} value={ri.delivery_id}>
+                                  {delivery?.delivery_number} - {delivery?.client?.name}
+                                </SelectItem>
+                              )
+                            }) || []
+                          })()}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    )}
+
+                    <div className="space-y-2">
+                      <Label htmlFor="return_date">Date de retour</Label>
+                      <Input
+                        id="return_date"
+                        type="date"
+                        value={returnFormData.return_date}
+                        onChange={(e) =>
+                          setReturnFormData({ ...returnFormData, return_date: e.target.value })
+                        }
+                        required
+                      />
+                    </div>
+
+                    {selectedDeliveryForReturn && (
+                      <div className="border-t pt-4">
+                        <h3 className="font-medium mb-3">Articles à retourner</h3>
+                        <div className="space-y-2">
+                          {selectedDeliveryForReturn.delivery_items?.map((item, index) => (
+                            <div key={item.id} className="flex items-center gap-4 p-3 border rounded-lg">
+                              <div className="flex-1">
+                                <p className="font-medium">
+                                  {item.article?.code} - {item.article?.name}
+                                </p>
+                                <p className="text-sm text-gray-500">
+                                  Quantité livrée: {item.quantity_delivered}
+                                </p>
+                              </div>
+                              <div className="w-32">
+                                <Label htmlFor={`qty-${item.id}`} className="text-xs">
+                                  Qté retour
+                                </Label>
+                                <Input
+                                  id={`qty-${item.id}`}
+                                  type="number"
+                                  min="0"
+                                  max={item.quantity_delivered}
+                                  value={returnItems[index]?.quantity || 0}
+                                  onChange={(e) => {
+                                    const newQty = parseInt(e.target.value) || 0
+                                    const newItems = [...returnItems]
+                                    newItems[index] = {
+                                      ...newItems[index],
+                                      quantity: newQty,
+                                    }
+                                    setReturnItems(newItems)
+                                  }}
+                                  className="text-center"
+                                />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      <Label htmlFor="return_notes">Notes</Label>
+                      <Input
+                        id="return_notes"
+                        value={returnFormData.notes}
+                        onChange={(e) =>
+                          setReturnFormData({ ...returnFormData, notes: e.target.value })
+                        }
+                        placeholder="Raison du retour"
+                      />
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-4">
+                      <Button
+                        type="button"
+                        onClick={() => setIsReturnDialogOpen(false)}
+                        className="bg-[#B8860B] hover:bg-[#9A7209]"
+                      >
+                        Annuler
+                      </Button>
+                      <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
+                        Créer le retour
+                      </Button>
+                    </div>
+                  </form>
+                </DialogContent>
+              </Dialog>
+            </div>
+
+            {/* Stats */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <Card className="border-2 border-[#B8860B]">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-bold text-gray-600">
+                    Total Retours
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center gap-2">
+                    <RotateCcw className="h-8 w-8 text-red-600" />
+                    <span className="text-2xl font-bold">{returnStats.total}</span>
+                  </div>
+                </CardContent>
+              </Card>
+              <Card className="border-2 border-[#B8860B]">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-bold text-gray-600">
+                    En attente
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <span className="text-2xl font-bold text-yellow-600">{returnStats.pending}</span>
+                </CardContent>
+              </Card>
+              <Card className="border-2 border-[#B8860B]">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-bold text-gray-600">
+                    Validés
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <span className="text-2xl font-bold text-[#B8860B]">{returnStats.validated}</span>
+                </CardContent>
+              </Card>
+              <Card className="border-2 border-[#B8860B]">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-bold text-gray-600">
+                    Valeur Retours
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center gap-2">
+                    <TrendingUp className="h-6 w-6 text-red-600" />
+                    <span className="text-xl font-bold text-red-600">
+                      {formatPrice(returnStats.totalValue)}
+                    </span>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Search & Filters */}
+            <Card className="border-2 border-[#B8860B]">
+              <CardHeader>
+                <div className="flex flex-col md:flex-row gap-4">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                    <Input
+                      placeholder="Rechercher par numéro, client ou BL..."
+                      value={returnSearchTerm}
+                      onChange={(e) => setReturnSearchTerm(e.target.value)}
+                      className="pl-10 border-2 border-[#B8860B]"
+                    />
+                  </div>
+                  <Select value={returnStatusFilter} onValueChange={setReturnStatusFilter}>
+                    <SelectTrigger className="w-full md:w-48 border-2 border-[#B8860B]">
+                      <SelectValue placeholder="Statut" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Tous les statuts</SelectItem>
+                      <SelectItem value="pending">En attente</SelectItem>
+                      <SelectItem value="validated">Validé</SelectItem>
+                      <SelectItem value="cancelled">Annulé</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button variant="outline" onClick={fetchReturns}>
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Actualiser
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {filteredReturns.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    Aucun retour trouvé
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto border-2 border-[#B8860B] rounded-lg">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Date</TableHead>
+                          <TableHead>N° RBLT</TableHead>
+                          <TableHead>N° BLT</TableHead>
+                          <TableHead className="text-center">Nombre BL</TableHead>
+                          <TableHead className="text-center">Nombre articles</TableHead>
+                          <TableHead className="text-right">Valeur BLT</TableHead>
+                          <TableHead className="text-right">Recette BLT</TableHead>
+                          <TableHead className="text-center">Articles retour</TableHead>
+                          <TableHead className="text-right">Valeur retour</TableHead>
+                          <TableHead className="text-right">Différence</TableHead>
+                          <TableHead>Statut</TableHead>
+                          <TableHead className="text-right">Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredReturns.map((ret) => {
+                          const linkedRound = rounds.find(r => r.delivery_round_items?.some(ri => ri.delivery_id === ret.delivery_id))
+                          const roundItems = linkedRound?.delivery_round_items || []
+                          const nbBL = roundItems.length
+                          const nbArticles = roundItems.reduce((sum, ri) => sum + ((ri.delivery as any)?.delivery_items?.length || 0), 0)
+                          const valeurBLT = roundItems.reduce((sum, ri) => sum + ((ri.delivery as any)?.total_ht || 0), 0)
+                          const recetteBLT = roundItems.reduce((sum, ri) => {
+                            const items = (ri.delivery as any)?.delivery_items || []
+                            return sum + items.reduce((s: number, di: any) => s + ((di.quantity_delivered - di.quantity_returned) * di.unit_price), 0)
+                          }, 0)
+                          const articlesRetour = ret.delivery_return_items?.filter(item => item.quantity_returned > 0).length || 0
+                          const valeurRetour = ret.total_ht || 0
+                          const difference = valeurBLT - recetteBLT
+
+                          return (
+                          <TableRow key={ret.id}>
+                            <TableCell>
+                              {format(new Date(ret.return_date), 'dd/MM/yyyy', { locale: fr })}
+                            </TableCell>
+                            <TableCell className="font-mono font-medium">
+                              {ret.return_number}
+                            </TableCell>
+                            <TableCell className="font-mono">
+                              {linkedRound?.round_number || '-'}
+                            </TableCell>
+                            <TableCell className="text-center">
+                              <Badge variant="outline">{nbBL}</Badge>
+                            </TableCell>
+                            <TableCell className="text-center">
+                              {nbArticles}
+                            </TableCell>
+                            <TableCell className="text-right font-semibold">
+                              {formatPrice(valeurBLT)}
+                            </TableCell>
+                            <TableCell className="text-right font-semibold text-[#B8860B]">
+                              {formatPrice(recetteBLT)}
+                            </TableCell>
+                            <TableCell className="text-center">
+                              <Badge variant="outline" className="text-red-600 border-red-300">
+                                {articlesRetour}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-right font-semibold text-red-600">
+                              {formatPrice(valeurRetour)}
+                            </TableCell>
+                            <TableCell className="text-right font-semibold">
+                              {formatPrice(difference)}
+                            </TableCell>
+                            <TableCell>
+                              <Badge className={returnStatusColors[ret.status]}>
+                                {returnStatusLabels[ret.status]}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex justify-end gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  title="Voir détails"
+                                  onClick={() => handleViewReturn(ret)}
+                                >
+                                  <Eye className="h-4 w-4" />
+                                </Button>
+                                {ret.status === 'pending' && (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    title="Valider"
+                                    onClick={() => handleValidateReturn(ret.id)}
+                                  >
+                                    <CheckCircle2 className="h-4 w-4 text-[#B8860B]" />
+                                  </Button>
+                                )}
+                                {ret.status === 'pending' && (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    title="Annuler"
+                                    onClick={() => handleCancelReturn(ret.id)}
+                                  >
+                                    <XCircle className="h-4 w-4 text-orange-600" />
+                                  </Button>
+                                )}
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  title="Supprimer"
+                                  onClick={() => handleDeleteReturn(ret.id)}
+                                >
+                                  <Trash2 className="h-4 w-4 text-red-600" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                          )
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* View Return Dialog */}
+            <Dialog open={isViewReturnDialogOpen} onOpenChange={setIsViewReturnDialogOpen}>
+              <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-3 text-xl">
+                    <RotateCcw className="h-6 w-6 text-red-600" />
+                    Bon de Retour {viewingReturn?.return_number}
+                    {viewingReturn && (
+                      <Badge className={`ml-2 ${returnStatusColors[viewingReturn.status]}`}>
+                        {returnStatusLabels[viewingReturn.status]}
+                      </Badge>
+                    )}
+                  </DialogTitle>
+                </DialogHeader>
+                {viewingReturn && (
+                  <div className="space-y-6">
+                    {/* Header Info */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div className="bg-gray-50 rounded-lg p-3">
+                        <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
+                          <Calendar className="h-4 w-4" />
+                          Date
+                        </div>
+                        <p className="font-medium">
+                          {format(new Date(viewingReturn.return_date), 'dd MMMM yyyy', { locale: fr })}
+                        </p>
+                      </div>
+                      <div className="bg-gray-50 rounded-lg p-3">
+                        <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
+                          <User className="h-4 w-4" />
+                          Client
+                        </div>
+                        <p className="font-medium">
+                          {viewingReturn.client?.code} - {viewingReturn.client?.name}
+                        </p>
+                      </div>
+                      <div className="bg-gray-50 rounded-lg p-3">
+                        <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
+                          <Truck className="h-4 w-4" />
+                          BL Origine
+                        </div>
+                        <p className="font-medium">
+                          {viewingReturn.delivery?.delivery_number || '-'}
+                        </p>
+                      </div>
+                      <div className="bg-gray-50 rounded-lg p-3">
+                        <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
+                          <TrendingUp className="h-4 w-4" />
+                          Total HT
+                        </div>
+                        <p className="font-medium text-red-600">
+                          {formatPrice(viewingReturn.total_ht || 0)}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Return Reason */}
+                    {viewingReturn.return_reason && (
+                      <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                        <span className="font-medium text-red-800">Motif: </span>
+                        <span className="text-red-700">
+                          {returnReasons.find(r => r.value === viewingReturn.return_reason)?.label || viewingReturn.return_reason}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Return Items */}
+                    <div className="border rounded-xl overflow-hidden">
+                      <div className="bg-gray-50 px-4 py-3 border-b">
+                        <h3 className="font-semibold text-gray-700 flex items-center gap-2">
+                          <Package className="h-5 w-5" />
+                          Articles retournés
+                        </h3>
+                      </div>
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="bg-gray-50">
+                            <TableHead>Article</TableHead>
+                            <TableHead className="text-center">Quantité</TableHead>
+                            <TableHead>Motif</TableHead>
+                            <TableHead className="text-right">Prix unitaire</TableHead>
+                            <TableHead className="text-right">Total</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {viewingReturn.delivery_return_items?.map((item) => (
+                            <TableRow key={item.id}>
+                              <TableCell>
+                                <span className="font-medium">{item.article?.code}</span>
+                                <span className="text-gray-500 ml-2">{item.article?.name}</span>
+                              </TableCell>
+                              <TableCell className="text-center font-medium">
+                                {item.quantity_returned}
+                              </TableCell>
+                              <TableCell>
+                                {returnReasons.find(r => r.value === item.return_reason)?.label || item.return_reason || '-'}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                {formatPrice(item.unit_price || 0)}
+                              </TableCell>
+                              <TableCell className="text-right font-medium text-red-600">
+                                {formatPrice((item.quantity_returned || 0) * (item.unit_price || 0))}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+
+                    {/* Notes */}
+                    {viewingReturn.notes && (
+                      <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
+                        <h3 className="font-semibold text-yellow-800 mb-2">Notes</h3>
+                        <p className="text-sm text-gray-700">{viewingReturn.notes}</p>
+                      </div>
+                    )}
+
+                    {/* Actions */}
+                    <div className="flex flex-wrap justify-end gap-3 pt-4 border-t">
+                      <Button className="bg-[#B8860B] hover:bg-[#9A7209]" onClick={() => setIsViewReturnDialogOpen(false)}>
+                        Fermer
+                      </Button>
+                      {viewingReturn.status === 'pending' && (
+                        <Button
+                          className="bg-[#B8860B] hover:bg-[#9A7209]"
+                          onClick={() => {
+                            handleValidateReturn(viewingReturn.id)
+                            setIsViewReturnDialogOpen(false)
+                          }}
+                        >
+                          <CheckCircle2 className="h-4 w-4 mr-2" />
+                          Valider le retour
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </DialogContent>
+            </Dialog>
+          </>
+        )}
 
         {/* View Delivery Dialog */}
         <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
@@ -1466,9 +3566,11 @@ export default function LivraisonsPage() {
                       <TableRow>
                         <TableHead>Code</TableHead>
                         <TableHead>Designation</TableHead>
-                        <TableHead className="text-center">Qte</TableHead>
-                        <TableHead className="text-right">Prix Unit.</TableHead>
-                        <TableHead className="text-right">Total</TableHead>
+                        <TableHead className="text-center">Qte Cmd</TableHead>
+                        <TableHead className="text-center">Qte Livree</TableHead>
+                        <TableHead className="text-center">Qte Retour</TableHead>
+                        <TableHead className="text-right">Prix U</TableHead>
+                        <TableHead className="text-right">Total HT</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -1481,13 +3583,19 @@ export default function LivraisonsPage() {
                             {item.article?.description || item.article?.name}
                           </TableCell>
                           <TableCell className="text-center">
+                            {item.quantity_ordered || '-'}
+                          </TableCell>
+                          <TableCell className="text-center">
                             {item.quantity_delivered}
+                          </TableCell>
+                          <TableCell className="text-center text-red-600">
+                            {item.quantity_returned || 0}
                           </TableCell>
                           <TableCell className="text-right">
                             {formatPrice(item.unit_price)}
                           </TableCell>
                           <TableCell className="text-right font-medium">
-                            {formatPrice(item.quantity_delivered * item.unit_price)}
+                            {formatPrice((item.quantity_delivered - (item.quantity_returned || 0)) * item.unit_price)}
                           </TableCell>
                         </TableRow>
                       ))}
@@ -1498,17 +3606,13 @@ export default function LivraisonsPage() {
 
                 <div className="flex justify-end">
                   <div className="w-64 space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-600">Total HT:</span>
-                      <span className="font-medium">{formatPrice(viewDelivery.total_ht)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-600">TVA (20%):</span>
-                      <span className="font-medium">{formatPrice((viewDelivery.total_ht || 0) * 0.2)}</span>
+                    <div className="flex justify-between text-lg font-bold">
+                      <span>Total HT:</span>
+                      <span className="text-[#B8860B]">{formatPrice(viewDelivery.total_ht)}</span>
                     </div>
                     <div className="flex justify-between text-lg font-bold border-t pt-2">
-                      <span>Total TTC:</span>
-                      <span className="text-green-600">{formatPrice((viewDelivery.total_ht || 0) * 1.2)}</span>
+                      <span>Recette BL:</span>
+                      <span className="text-green-600">{formatPrice(viewDelivery.delivery_items?.reduce((sum, item) => sum + ((item.quantity_delivered - (item.quantity_returned || 0)) * item.unit_price), 0) || 0)}</span>
                     </div>
                   </div>
                 </div>
@@ -1526,24 +3630,24 @@ export default function LivraisonsPage() {
                       <SelectContent>
                         <SelectItem value="pending">En attente</SelectItem>
                         <SelectItem value="in_progress">En cours</SelectItem>
-                        <SelectItem value="delivered">Livree</SelectItem>
-                        <SelectItem value="partial">Partielle</SelectItem>
-                        <SelectItem value="returned">Retournee</SelectItem>
+                        <SelectItem value="delivered">Livrée</SelectItem>
+                        <SelectItem value="partial">Partiellement livrée</SelectItem>
+                        <SelectItem value="returned">Retournée</SelectItem>
+                        <SelectItem value="cancelled">Annulée</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                   <div className="flex gap-2">
                     <Button
-                      variant="outline"
                       onClick={() => handleGeneratePDF(viewDelivery)}
-                      className="gap-2"
+                      className="gap-2 bg-[#B8860B] hover:bg-[#9A7209]"
                     >
                       <FileText className="h-4 w-4" />
                       Telecharger BL
                     </Button>
                     <Button
-                      variant="outline"
                       onClick={() => setIsViewDialogOpen(false)}
+                      className="bg-[#B8860B] hover:bg-[#9A7209]"
                     >
                       Fermer
                     </Button>
@@ -1572,9 +3676,9 @@ export default function LivraisonsPage() {
                     <p className="text-2xl font-bold text-blue-600">{optimizedRoute.deliveries.length}</p>
                     <p className="text-sm text-gray-600">Livraisons</p>
                   </div>
-                  <div className="bg-green-50 p-4 rounded-lg text-center">
-                    <MapPin className="h-8 w-8 text-green-600 mx-auto mb-2" />
-                    <p className="text-2xl font-bold text-green-600">{optimizedRoute.totalDistance} km</p>
+                  <div className="bg-amber-50 p-4 rounded-lg text-center">
+                    <MapPin className="h-8 w-8 text-[#B8860B] mx-auto mb-2" />
+                    <p className="text-2xl font-bold text-[#B8860B]">{optimizedRoute.totalDistance} km</p>
                     <p className="text-sm text-gray-600">Distance</p>
                   </div>
                   <div className="bg-orange-50 p-4 rounded-lg text-center">
@@ -1594,7 +3698,7 @@ export default function LivraisonsPage() {
                 </div>
 
                 {/* Google API indicator */}
-                <div className={`text-center text-sm py-2 px-4 rounded-lg ${optimizedRoute.usingGoogle ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                <div className={`text-center text-sm py-2 px-4 rounded-lg ${optimizedRoute.usingGoogle ? 'bg-amber-100 text-[#9A7209]' : 'bg-yellow-100 text-yellow-700'}`}>
                   {optimizedRoute.usingGoogle ? (
                     <span>Calcul precis via Google Maps API</span>
                   ) : (
@@ -1625,7 +3729,7 @@ export default function LivraisonsPage() {
                           </p>
                         </div>
                         <div className="text-right">
-                          <p className="font-semibold text-green-600">{formatPrice(delivery.total_ht)}</p>
+                          <p className="font-semibold text-[#B8860B]">{formatPrice(delivery.total_ht)}</p>
                         </div>
                       </div>
                     ))}
@@ -1635,14 +3739,14 @@ export default function LivraisonsPage() {
                 {/* Actions */}
                 <div className="flex justify-end gap-3 pt-4 border-t">
                   <Button
-                    variant="outline"
                     onClick={() => setIsRouteDialogOpen(false)}
+                    className="bg-[#B8860B] hover:bg-[#9A7209]"
                   >
                     Fermer
                   </Button>
                   <Button
                     onClick={generateRouteSheet}
-                    className="bg-blue-600 hover:bg-blue-700 gap-2"
+                    className="bg-[#B8860B] hover:bg-[#9A7209] gap-2"
                   >
                     <Printer className="h-4 w-4" />
                     Imprimer Fiche du Jour
@@ -1687,9 +3791,10 @@ export default function LivraisonsPage() {
                       <SelectContent>
                         <SelectItem value="pending">En attente</SelectItem>
                         <SelectItem value="in_progress">En cours</SelectItem>
-                        <SelectItem value="delivered">Livree</SelectItem>
-                        <SelectItem value="partial">Partielle</SelectItem>
-                        <SelectItem value="returned">Retournee</SelectItem>
+                        <SelectItem value="delivered">Livrée</SelectItem>
+                        <SelectItem value="partial">Partiellement livrée</SelectItem>
+                        <SelectItem value="returned">Retournée</SelectItem>
+                        <SelectItem value="cancelled">Annulée</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -1777,7 +3882,7 @@ export default function LivraisonsPage() {
                           </TableCell>
                           <TableCell className="text-right">{formatPrice(item.unit_price)}</TableCell>
                           <TableCell className="text-right font-medium">
-                            {formatPrice(item.quantity_delivered * item.unit_price)}
+                            {formatPrice((item.quantity_delivered - item.quantity_returned) * item.unit_price)}
                           </TableCell>
                         </TableRow>
                       ))}
@@ -1787,23 +3892,17 @@ export default function LivraisonsPage() {
 
                 {/* Totals */}
                 <div className="flex justify-end">
-                  <div className="w-64 space-y-2 bg-gray-50 p-4 rounded-lg">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-600">Total HT:</span>
-                      <span className="font-medium">
-                        {formatPrice(editItems.reduce((sum, item) => sum + (item.quantity_delivered * item.unit_price), 0))}
-                      </span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-600">TVA (20%):</span>
-                      <span className="font-medium">
-                        {formatPrice(editItems.reduce((sum, item) => sum + (item.quantity_delivered * item.unit_price), 0) * 0.2)}
+                  <div className="w-72 space-y-2 bg-gray-50 p-4 rounded-lg">
+                    <div className="flex justify-between text-sm text-gray-600 pb-2">
+                      <span>Total HT (Cmd):</span>
+                      <span>
+                        {formatPrice(editItems.reduce((sum, item) => sum + (item.quantity_ordered * item.unit_price), 0))}
                       </span>
                     </div>
                     <div className="flex justify-between text-lg font-bold border-t pt-2">
-                      <span>Total TTC:</span>
-                      <span className="text-green-600">
-                        {formatPrice(editItems.reduce((sum, item) => sum + (item.quantity_delivered * item.unit_price), 0) * 1.2)}
+                      <span>Recette BL:</span>
+                      <span className="text-[#B8860B]">
+                        {formatPrice(editItems.reduce((sum, item) => sum + ((item.quantity_delivered - item.quantity_returned) * item.unit_price), 0))}
                       </span>
                     </div>
                   </div>
@@ -1812,14 +3911,14 @@ export default function LivraisonsPage() {
                 {/* Actions */}
                 <div className="flex justify-end gap-3 pt-4 border-t">
                   <Button
-                    variant="outline"
                     onClick={() => setIsEditDialogOpen(false)}
+                    className="bg-[#B8860B] hover:bg-[#9A7209]"
                   >
                     Annuler
                   </Button>
                   <Button
                     onClick={handleSaveEdit}
-                    className="bg-green-600 hover:bg-green-700"
+                    className="bg-[#B8860B] hover:bg-[#9A7209]"
                   >
                     Enregistrer
                   </Button>
@@ -1834,7 +3933,7 @@ export default function LivraisonsPage() {
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
-                <Wallet className="h-5 w-5 text-green-600" />
+                <Wallet className="h-5 w-5 text-[#B8860B]" />
                 Encaisser - {paymentDelivery?.delivery_number}
               </DialogTitle>
             </DialogHeader>
@@ -1853,16 +3952,16 @@ export default function LivraisonsPage() {
                     <h3 className="font-semibold text-gray-700 mb-2">Montants</h3>
                     <div className="space-y-1 text-sm">
                       <div className="flex justify-between">
-                        <span className="text-gray-600">Total TTC:</span>
-                        <span className="font-medium">{formatPrice((paymentDelivery.total_ht || 0) * 1.2)}</span>
+                        <span className="text-gray-600">Recette BL:</span>
+                        <span className="font-medium">{formatPrice(getRecetteBL(paymentDelivery))}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-gray-600">Deja paye:</span>
-                        <span className="font-medium text-green-600">{formatPrice(paymentDelivery.amount_paid || 0)}</span>
+                        <span className="font-medium text-[#B8860B]">{formatPrice(paymentDelivery.amount_paid || 0)}</span>
                       </div>
                       <div className="flex justify-between text-lg font-bold border-t pt-1">
                         <span className="text-red-600">Reste a payer:</span>
-                        <span className="text-red-600">{formatPrice(paymentDelivery.balance_due ?? (paymentDelivery.total_ht || 0) * 1.2)}</span>
+                        <span className="text-red-600">{formatPrice(Math.max(0, getRecetteBL(paymentDelivery) - (paymentDelivery.amount_paid || 0)))}</span>
                       </div>
                     </div>
                   </div>
@@ -1884,7 +3983,7 @@ export default function LivraisonsPage() {
                               {paymentMethodLabels[payment.payment_method]}
                             </Badge>
                           </div>
-                          <span className="font-medium text-green-600">{formatPrice(payment.amount)}</span>
+                          <span className="font-medium text-[#B8860B]">{formatPrice(payment.amount)}</span>
                         </div>
                       ))}
                     </div>
@@ -1981,17 +4080,17 @@ export default function LivraisonsPage() {
                   <div className="flex gap-2">
                     <Button
                       type="button"
-                      variant="outline"
                       size="sm"
-                      onClick={() => setPaymentFormData({ ...paymentFormData, amount: paymentDelivery.balance_due ?? (paymentDelivery.total_ht || 0) * 1.2 })}
+                      onClick={() => setPaymentFormData({ ...paymentFormData, amount: Math.max(0, getRecetteBL(paymentDelivery) - (paymentDelivery.amount_paid || 0)) })}
+                      className="bg-[#B8860B] hover:bg-[#9A7209]"
                     >
                       Tout payer
                     </Button>
                     <Button
                       type="button"
-                      variant="outline"
                       size="sm"
-                      onClick={() => setPaymentFormData({ ...paymentFormData, amount: (paymentDelivery.balance_due ?? (paymentDelivery.total_ht || 0) * 1.2) / 2 })}
+                      onClick={() => setPaymentFormData({ ...paymentFormData, amount: Math.max(0, getRecetteBL(paymentDelivery) - (paymentDelivery.amount_paid || 0)) / 2 })}
+                      className="bg-[#B8860B] hover:bg-[#9A7209]"
                     >
                       50%
                     </Button>
@@ -2000,14 +4099,14 @@ export default function LivraisonsPage() {
                   <div className="flex justify-end gap-3 pt-4 border-t">
                     <Button
                       type="button"
-                      variant="outline"
                       onClick={() => setIsPaymentDialogOpen(false)}
+                      className="bg-[#B8860B] hover:bg-[#9A7209]"
                     >
                       Annuler
                     </Button>
                     <Button
                       type="submit"
-                      className="bg-green-600 hover:bg-green-700 gap-2"
+                      className="bg-[#B8860B] hover:bg-[#9A7209] gap-2"
                     >
                       <Wallet className="h-4 w-4" />
                       Enregistrer le paiement
@@ -2023,22 +4122,22 @@ export default function LivraisonsPage() {
         <Dialog open={isReceiptDialogOpen} onOpenChange={setIsReceiptDialogOpen}>
           <DialogContent className="max-w-md">
             <DialogHeader>
-              <DialogTitle className="flex items-center gap-2 text-green-600">
+              <DialogTitle className="flex items-center gap-2 text-[#B8860B]">
                 <CheckCircle2 className="h-5 w-5" />
                 Paiement enregistre!
               </DialogTitle>
             </DialogHeader>
             {lastPayment && paymentDelivery && (
               <div className="space-y-4">
-                <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-center">
-                  <p className="text-sm text-green-700">Recu N</p>
-                  <p className="text-2xl font-bold text-green-800">{lastPayment.payment_number}</p>
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-center">
+                  <p className="text-sm text-[#9A7209]">Recu N</p>
+                  <p className="text-2xl font-bold text-[#9A7209]">{lastPayment.payment_number}</p>
                 </div>
 
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-gray-600">Montant recu:</span>
-                    <span className="font-bold text-green-600">{formatPrice(lastPayment.amount)}</span>
+                    <span className="font-bold text-[#B8860B]">{formatPrice(lastPayment.amount)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-600">Mode:</span>
@@ -2055,31 +4154,30 @@ export default function LivraisonsPage() {
                 </div>
 
                 <div className={`p-4 rounded-lg text-center ${
-                  (paymentDelivery.balance_due ?? 0) - lastPayment.amount > 0
+                  Math.max(0, (paymentDelivery.total_ht || 0) * 1.2 - (paymentDelivery.amount_paid || 0) - lastPayment.amount) > 0
                     ? 'bg-orange-50 border border-orange-200'
-                    : 'bg-green-50 border border-green-200'
+                    : 'bg-amber-50 border border-amber-200'
                 }`}>
                   <p className="text-sm text-gray-600">Reste a payer</p>
                   <p className={`text-2xl font-bold ${
-                    Math.max(0, (paymentDelivery.balance_due ?? (paymentDelivery.total_ht || 0) * 1.2) - lastPayment.amount) > 0
+                    Math.max(0, (paymentDelivery.total_ht || 0) * 1.2 - (paymentDelivery.amount_paid || 0) - lastPayment.amount) > 0
                       ? 'text-orange-600'
-                      : 'text-green-600'
+                      : 'text-[#B8860B]'
                   }`}>
-                    {formatPrice(Math.max(0, (paymentDelivery.balance_due ?? (paymentDelivery.total_ht || 0) * 1.2) - lastPayment.amount))}
+                    {formatPrice(Math.max(0, (paymentDelivery.total_ht || 0) * 1.2 - (paymentDelivery.amount_paid || 0) - lastPayment.amount))}
                   </p>
                 </div>
 
                 <div className="flex gap-3 pt-4">
                   <Button
-                    variant="outline"
                     onClick={() => setIsReceiptDialogOpen(false)}
-                    className="flex-1"
+                    className="flex-1 bg-[#B8860B] hover:bg-[#9A7209]"
                   >
                     Fermer
                   </Button>
                   <Button
                     onClick={printReceipt}
-                    className="flex-1 bg-blue-600 hover:bg-blue-700 gap-2"
+                    className="flex-1 bg-[#B8860B] hover:bg-[#9A7209] gap-2"
                   >
                     <Printer className="h-4 w-4" />
                     Imprimer recu
