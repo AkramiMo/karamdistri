@@ -227,6 +227,7 @@ interface DeliveryReturn {
   id: string
   return_number: string
   delivery_id: string | null
+  round_id: string | null
   client_id: string
   return_date: string
   status: string
@@ -237,6 +238,30 @@ interface DeliveryReturn {
   created_at: string
   delivery?: {
     delivery_number: string
+  }
+  round?: {
+    id: string
+    round_number: string
+    round_date: string
+    status: string
+    driver?: { full_name: string }
+    delivery_round_items?: {
+      id: string
+      delivery_id: string
+      delivery?: {
+        id: string
+        delivery_number: string
+        total_ht: number | null
+        status: string
+        delivery_items?: {
+          id: string
+          quantity_ordered: number
+          quantity_delivered: number
+          quantity_returned: number
+          unit_price: number
+        }[]
+      }
+    }[]
   }
   client?: {
     code: string
@@ -938,6 +963,23 @@ export default function LivraisonsPage() {
         *,
         delivery:deliveries(delivery_number),
         client:clients(code, name),
+        round:delivery_rounds(
+          id,
+          round_number,
+          round_date,
+          status,
+          driver:users!delivery_rounds_driver_id_fkey(full_name),
+          delivery_round_items(
+            *,
+            delivery:deliveries(
+              id,
+              delivery_number,
+              total_ht,
+              status,
+              delivery_items(id, quantity_ordered, quantity_delivered, quantity_returned, unit_price)
+            )
+          )
+        ),
         delivery_return_items(
           *,
           article:articles(code, name)
@@ -1010,6 +1052,7 @@ export default function LivraisonsPage() {
       .insert([{
         return_number: returnNumber,
         delivery_id: returnFormData.delivery_id || null,
+        round_id: selectedRoundForReturn || null,
         client_id: returnFormData.client_id,
         return_date: returnFormData.return_date,
         status: 'pending',
@@ -3268,13 +3311,13 @@ export default function LivraisonsPage() {
                       </TableHeader>
                       <TableBody>
                         {filteredReturns.map((ret) => {
-                          const linkedRound = rounds.find(r => r.delivery_round_items?.some(ri => ri.delivery_id === ret.delivery_id))
+                          const linkedRound = ret.round as any
                           const roundItems = linkedRound?.delivery_round_items || []
                           const nbBL = roundItems.length
-                          const nbArticles = roundItems.reduce((sum, ri) => sum + ((ri.delivery as any)?.delivery_items?.length || 0), 0)
-                          const valeurBLT = roundItems.reduce((sum, ri) => sum + ((ri.delivery as any)?.total_ht || 0), 0)
-                          const recetteBLT = roundItems.reduce((sum, ri) => {
-                            const items = (ri.delivery as any)?.delivery_items || []
+                          const nbArticles = roundItems.reduce((sum: number, ri: any) => sum + (ri.delivery?.delivery_items?.length || 0), 0)
+                          const valeurBLT = roundItems.reduce((sum: number, ri: any) => sum + (ri.delivery?.total_ht || 0), 0)
+                          const recetteBLT = roundItems.reduce((sum: number, ri: any) => {
+                            const items = ri.delivery?.delivery_items || []
                             return sum + items.reduce((s: number, di: any) => s + ((di.quantity_delivered - di.quantity_returned) * di.unit_price), 0)
                           }, 0)
                           const articlesRetour = ret.delivery_return_items?.filter(item => item.quantity_returned > 0).length || 0
@@ -3290,7 +3333,7 @@ export default function LivraisonsPage() {
                               {ret.return_number}
                             </TableCell>
                             <TableCell className="font-mono">
-                              {linkedRound?.round_number || '-'}
+                              {ret.round?.round_number || '-'}
                             </TableCell>
                             <TableCell className="text-center">
                               <Badge variant="outline">{nbBL}</Badge>
