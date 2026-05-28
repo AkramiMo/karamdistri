@@ -54,6 +54,14 @@ interface Client {
   created_at: string
 }
 
+interface DeliveryRoundWithClients {
+  delivery_round_items: {
+    delivery?: {
+      client?: Client
+    }
+  }[] | null
+}
+
 const categoryLabels: Record<string, string> = {
   'FOD': 'Restaurant',
   'EPC': 'Epicerie',
@@ -239,8 +247,9 @@ export default function ClientsPage() {
       } else {
         // Extraire les clients uniques des tournées
         const clientsMap = new Map<string, Client>()
-        roundItems?.forEach(round => {
-          round.delivery_round_items?.forEach((item: { delivery?: { client?: Client } }) => {
+        const rounds = roundItems as DeliveryRoundWithClients[] | null
+        rounds?.forEach(round => {
+          round.delivery_round_items?.forEach((item) => {
             const client = item.delivery?.client
             if (client && !clientsMap.has(client.id)) {
               clientsMap.set(client.id, client as Client)
