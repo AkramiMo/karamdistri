@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { useSupabase } from '@/hooks/useSupabase'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -15,6 +16,7 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Loader2,
+  Warehouse,
 } from 'lucide-react'
 import {
   BarChart,
@@ -32,6 +34,7 @@ import {
 } from 'recharts'
 import { format, subMonths, startOfMonth, endOfMonth } from 'date-fns'
 import { fr } from 'date-fns/locale'
+import { useAuth } from '@/hooks/useAuth'
 
 interface DashboardStats {
   clients: number
@@ -75,26 +78,37 @@ interface OrdersByStatus {
   [key: string]: string | number
 }
 
+interface ArticleSales {
+  article: string
+  quantity: number
+}
+
 const statusColors: Record<string, string> = {
-  draft: '#9CA3AF',
-  confirmed: '#3B82F6',
-  in_progress: '#F59E0B',
-  delivered: '#10B981',
-  cancelled: '#EF4444',
   pending: '#9CA3AF',
+  confirmed: '#3B82F6',
+  in_preparation: '#F59E0B',
+  ready: '#10B981',
+  in_delivery: '#8B5CF6',
+  delivered: '#059669',
   partial: '#F97316',
-  returned: '#EF4444',
+  returned: '#EC4899',
+  cancelled: '#EF4444',
+  out_of_stock: '#64748B',
+  in_progress: '#06B6D4',
 }
 
 const statusLabels: Record<string, string> = {
-  draft: 'Brouillon',
-  confirmed: 'Confirmée',
-  in_progress: 'En cours',
-  delivered: 'Livrée',
-  cancelled: 'Annulée',
   pending: 'En attente',
+  confirmed: 'Confirmée',
+  in_preparation: 'En préparation',
+  ready: 'Prête',
+  in_delivery: 'En livraison',
+  delivered: 'Livrée',
   partial: 'Partielle',
   returned: 'Retournée',
+  cancelled: 'Annulée',
+  out_of_stock: 'Rupture de stock',
+  in_progress: 'En cours',
 }
 
 const CHART_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899']
@@ -116,8 +130,12 @@ export default function DashboardPage() {
   const [recentDeliveries, setRecentDeliveries] = useState<RecentDelivery[]>([])
   const [monthlySales, setMonthlySales] = useState<MonthlySales[]>([])
   const [ordersByStatus, setOrdersByStatus] = useState<OrdersByStatus[]>([])
+  const [articleSales, setArticleSales] = useState<ArticleSales[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const supabase = useSupabase()
+  const { profile } = useAuth()
+  const isLivreur = profile?.role?.name === 'livreur'
+  const isCommercial = profile?.role?.name === 'commercial'
 
   useEffect(() => {
     fetchDashboardData()
@@ -260,6 +278,9 @@ export default function DashboardPage() {
 
       // Fetch monthly sales for the last 6 months
       await fetchMonthlySales()
+
+      // Fetch article sales
+      await fetchArticleSales()
     } catch (error) {
       console.error('Error fetching dashboard data:', error)
     } finally {
@@ -270,9 +291,12 @@ export default function DashboardPage() {
   const fetchMonthlySales = async () => {
     const months: MonthlySales[] = []
     const now = new Date()
+    const currentYear = 2026
+    const currentMonth = now.getMonth() // 0-indexed (0 = January)
 
-    for (let i = 5; i >= 0; i--) {
-      const monthDate = subMonths(now, i)
+    // Parcourir seulement les mois terminés de l'année 2026
+    for (let monthIndex = 0; monthIndex < currentMonth; monthIndex++) {
+      const monthDate = new Date(currentYear, monthIndex, 1)
       const monthStart = startOfMonth(monthDate).toISOString().split('T')[0]
       const monthEnd = endOfMonth(monthDate).toISOString().split('T')[0]
 
@@ -294,6 +318,31 @@ export default function DashboardPage() {
     setMonthlySales(months)
   }
 
+  const fetchArticleSales = async () => {
+    // Récupérer les ventes par article (top 10)
+    const { data } = await supabase
+      .from('articles_vendus')
+      .select('article_code, quantity_sold')
+
+    if (data && data.length > 0) {
+      // Grouper par article et sommer les quantités
+      const articleTotals: Record<string, number> = {}
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      data.forEach((item: any) => {
+        const code = item.article_code || 'N/A'
+        articleTotals[code] = (articleTotals[code] || 0) + (item.quantity_sold || 0)
+      })
+
+      // Convertir en tableau et trier par quantité décroissante
+      const sortedArticles = Object.entries(articleTotals)
+        .map(([article, quantity]) => ({ article, quantity }))
+        .sort((a, b) => b.quantity - a.quantity)
+        .slice(0, 10) // Top 10
+
+      setArticleSales(sortedArticles)
+    }
+  }
+
   const formatPrice = (price: number) => {
     return new Intl.NumberFormat('fr-MA', {
       style: 'currency',
@@ -310,7 +359,7 @@ export default function DashboardPage() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-96">
-        <Loader2 className="h-8 w-8 animate-spin text-green-600" />
+        <Loader2 className="h-8 w-8 animate-spin text-[#B8860B]" />
         <span className="ml-2 text-gray-600">Chargement du tableau de bord...</span>
       </div>
     )
@@ -341,7 +390,7 @@ export default function DashboardPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium text-gray-600">Articles</CardTitle>
-            <div className="p-2 rounded-lg bg-green-500">
+            <div className="p-2 rounded-lg bg-amber-500">
               <Package className="h-4 w-4 text-white" />
             </div>
           </CardHeader>
@@ -351,73 +400,102 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-gray-600">Commandes</CardTitle>
-            <div className="p-2 rounded-lg bg-orange-500">
-              <ShoppingCart className="h-4 w-4 text-white" />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats.ordersThisMonth}</div>
-            <p className="text-xs text-gray-500">ce mois ({stats.orders} total)</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-gray-600">Livraisons</CardTitle>
-            <div className="p-2 rounded-lg bg-purple-500">
-              <Truck className="h-4 w-4 text-white" />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats.deliveriesPending}</div>
-            <p className="text-xs text-gray-500">en attente ({stats.deliveries} total)</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-gray-600">Ventes (mois)</CardTitle>
-            <div className="p-2 rounded-lg bg-teal-500">
-              <TrendingUp className="h-4 w-4 text-white" />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{formatPrice(stats.salesThisMonth)}</div>
-            <div className="flex items-center text-xs">
-              {salesGrowth >= 0 ? (
-                <ArrowUpRight className="h-3 w-3 text-green-500 mr-1" />
+        <Link href="/stocks/articles">
+          <Card className="cursor-pointer hover:shadow-md transition-shadow">
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium text-gray-600">Stock</CardTitle>
+              <div className="p-2 rounded-lg bg-green-500">
+                <Warehouse className="h-4 w-4 text-white" />
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats.lowStockItems > 0 ? (
+                <span className="text-orange-500">{stats.lowStockItems}</span>
               ) : (
-                <ArrowDownRight className="h-3 w-3 text-red-500 mr-1" />
-              )}
-              <span className={salesGrowth >= 0 ? 'text-green-500' : 'text-red-500'}>
-                {Math.abs(salesGrowth).toFixed(1)}%
-              </span>
-              <span className="text-gray-500 ml-1">vs mois dernier</span>
-            </div>
-          </CardContent>
-        </Card>
+                <span className="text-green-600">OK</span>
+              )}</div>
+              <p className="text-xs text-gray-500">
+                {stats.lowStockItems > 0 ? 'articles en alerte' : 'stock normal'}
+              </p>
+            </CardContent>
+          </Card>
+        </Link>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-gray-600">Caisse</CardTitle>
-            <div className="p-2 rounded-lg bg-yellow-500">
-              <DollarSign className="h-4 w-4 text-white" />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className={`text-2xl font-bold ${stats.cashBalance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-              {formatPrice(stats.cashBalance)}
-            </div>
-            <p className="text-xs text-gray-500">solde actuel</p>
-          </CardContent>
-        </Card>
+        {!isCommercial && (
+          <>
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600">Commandes</CardTitle>
+                <div className="p-2 rounded-lg bg-orange-500">
+                  <ShoppingCart className="h-4 w-4 text-white" />
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{stats.ordersThisMonth}</div>
+                <p className="text-xs text-gray-500">ce mois ({stats.orders} total)</p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600">Livraisons</CardTitle>
+                <div className="p-2 rounded-lg bg-purple-500">
+                  <Truck className="h-4 w-4 text-white" />
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{stats.deliveriesPending}</div>
+                <p className="text-xs text-gray-500">en attente ({stats.deliveries} total)</p>
+              </CardContent>
+            </Card>
+          </>
+        )}
+
+        {!isLivreur && !isCommercial && (
+          <>
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600">Ventes (mois)</CardTitle>
+                <div className="p-2 rounded-lg bg-teal-500">
+                  <TrendingUp className="h-4 w-4 text-white" />
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{formatPrice(stats.salesThisMonth)}</div>
+                <div className="flex items-center text-xs">
+                  {salesGrowth >= 0 ? (
+                    <ArrowUpRight className="h-3 w-3 text-[#DAA520] mr-1" />
+                  ) : (
+                    <ArrowDownRight className="h-3 w-3 text-red-500 mr-1" />
+                  )}
+                  <span className={salesGrowth >= 0 ? 'text-[#DAA520]' : 'text-red-500'}>
+                    {Math.abs(salesGrowth).toFixed(1)}%
+                  </span>
+                  <span className="text-gray-500 ml-1">vs mois dernier</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600">Caisse</CardTitle>
+                <div className="p-2 rounded-lg bg-yellow-500">
+                  <DollarSign className="h-4 w-4 text-white" />
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className={`text-2xl font-bold ${stats.cashBalance >= 0 ? 'text-[#B8860B]' : 'text-red-600'}`}>
+                  {formatPrice(stats.cashBalance)}
+                </div>
+                <p className="text-xs text-gray-500">solde actuel</p>
+              </CardContent>
+            </Card>
+          </>
+        )}
       </div>
 
       {/* Low Stock Alert */}
-      {stats.lowStockItems > 0 && (
+      {stats.lowStockItems > 0 && !isCommercial && (
         <Card className="border-orange-200 bg-orange-50">
           <CardContent className="flex items-center gap-3 py-4">
             <AlertTriangle className="h-5 w-5 text-orange-500" />
@@ -429,161 +507,201 @@ export default function DashboardPage() {
       )}
 
       {/* Charts Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Monthly Sales Chart */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Évolution des ventes (6 derniers mois)</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {monthlySales.length > 0 ? (
-              <ResponsiveContainer width="100%" height={250}>
-                <BarChart data={monthlySales}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="month" />
-                  <YAxis tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`} />
-                  <Tooltip
-                    formatter={(value) => [formatPrice(Number(value) || 0), 'Ventes']}
-                    labelStyle={{ color: '#374151' }}
-                  />
-                  <Bar dataKey="total" fill="#10B981" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="flex items-center justify-center h-[250px] text-gray-500">
-                Aucune donnée de ventes
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Orders by Status Pie Chart */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Répartition des commandes</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {ordersByStatus.length > 0 ? (
-              <div className="flex items-center">
-                <ResponsiveContainer width="60%" height={250}>
-                  <PieChart>
-                    <Pie
-                      data={ordersByStatus}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={60}
-                      outerRadius={90}
-                      paddingAngle={2}
-                      dataKey="count"
-                    >
-                      {ordersByStatus.map((entry, index) => (
-                        <Cell
-                          key={`cell-${index}`}
-                          fill={statusColors[entry.status] || CHART_COLORS[index % CHART_COLORS.length]}
-                        />
-                      ))}
-                    </Pie>
-                    <Tooltip formatter={(value, name) => [value, statusLabels[String(name)] || name]} />
-                  </PieChart>
-                </ResponsiveContainer>
-                <div className="w-[40%] space-y-2">
-                  {ordersByStatus.map((entry, index) => (
-                    <div key={entry.status} className="flex items-center gap-2 text-sm">
-                      <div
-                        className="w-3 h-3 rounded-full"
-                        style={{ backgroundColor: statusColors[entry.status] || CHART_COLORS[index % CHART_COLORS.length] }}
+      {!isLivreur && !isCommercial && (
+        <>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Monthly Sales Chart */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Évolution des ventes (6 derniers mois)</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {monthlySales.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={250}>
+                    <LineChart data={monthlySales}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="month" />
+                      <YAxis tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`} />
+                      <Tooltip
+                        formatter={(value) => [formatPrice(Number(value) || 0), 'Ventes']}
+                        labelStyle={{ color: '#374151' }}
                       />
-                      <span className="text-gray-600">{entry.label}</span>
-                      <span className="font-medium ml-auto">{entry.count}</span>
+                      <Line
+                        type="monotone"
+                        dataKey="total"
+                        stroke="#B8860B"
+                        strokeWidth={3}
+                        dot={{ fill: '#B8860B', strokeWidth: 2, r: 5 }}
+                        activeDot={{ r: 7, fill: '#9A7209' }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="flex items-center justify-center h-[250px] text-gray-500">
+                    Aucune donnée de ventes
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Orders by Status Pie Chart */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Répartition des commandes</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {ordersByStatus.length > 0 ? (
+                  <div className="flex items-center">
+                    <ResponsiveContainer width="60%" height={250}>
+                      <PieChart>
+                        <Pie
+                          data={ordersByStatus}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={60}
+                          outerRadius={90}
+                          paddingAngle={2}
+                          dataKey="count"
+                        >
+                          {ordersByStatus.map((entry, index) => (
+                            <Cell
+                              key={`cell-${index}`}
+                              fill={statusColors[entry.status] || CHART_COLORS[index % CHART_COLORS.length]}
+                            />
+                          ))}
+                        </Pie>
+                        <Tooltip formatter={(value, name) => [value, statusLabels[String(name)] || name]} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                    <div className="w-[40%] space-y-2">
+                      {ordersByStatus.map((entry, index) => (
+                        <div key={entry.status} className="flex items-center gap-2 text-sm">
+                          <div
+                            className="w-3 h-3 rounded-full"
+                            style={{ backgroundColor: statusColors[entry.status] || CHART_COLORS[index % CHART_COLORS.length] }}
+                          />
+                          <span className="text-gray-600">{entry.label}</span>
+                          <span className="font-medium ml-auto">{entry.count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center h-[250px] text-gray-500">
+                    Aucune commande
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Article Sales Chart */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Ventes par article (Top 10)</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {articleSales.length > 0 ? (
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={articleSales} layout="vertical" margin={{ left: 80 }}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis type="number" />
+                    <YAxis type="category" dataKey="article" width={80} tick={{ fontSize: 12 }} />
+                    <Tooltip
+                      formatter={(value) => [`${value} unités`, 'Quantité']}
+                      labelStyle={{ color: '#374151' }}
+                    />
+                    <Bar dataKey="quantity" fill="#B8860B" radius={[0, 4, 4, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex items-center justify-center h-[300px] text-gray-500">
+                  Aucune donnée de ventes par article
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </>
+      )}
+
+      {/* Recent Activity */}
+      {!isLivreur && !isCommercial && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Recent Orders */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Dernières commandes</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {recentOrders.length > 0 ? (
+                <div className="space-y-4">
+                  {recentOrders.map((order) => (
+                    <div key={order.id} className="flex items-center justify-between py-2 border-b last:border-0">
+                      <div>
+                        <p className="font-medium">{order.order_number}</p>
+                        <p className="text-sm text-gray-500">{order.client_name}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-medium">{formatPrice(order.total_ttc)}</p>
+                        <Badge
+                          variant="secondary"
+                          className="text-xs"
+                          style={{ backgroundColor: `${statusColors[order.status]}20`, color: statusColors[order.status] }}
+                        >
+                          {statusLabels[order.status] || order.status}
+                        </Badge>
+                      </div>
                     </div>
                   ))}
                 </div>
-              </div>
-            ) : (
-              <div className="flex items-center justify-center h-[250px] text-gray-500">
-                Aucune commande
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+              ) : (
+                <p className="text-gray-500 text-center py-8">
+                  Aucune commande pour le moment
+                </p>
+              )}
+            </CardContent>
+          </Card>
 
-      {/* Recent Activity */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Recent Orders */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Dernières commandes</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {recentOrders.length > 0 ? (
-              <div className="space-y-4">
-                {recentOrders.map((order) => (
-                  <div key={order.id} className="flex items-center justify-between py-2 border-b last:border-0">
-                    <div>
-                      <p className="font-medium">{order.order_number}</p>
-                      <p className="text-sm text-gray-500">{order.client_name}</p>
+          {/* Recent Deliveries */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Livraisons récentes</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {recentDeliveries.length > 0 ? (
+                <div className="space-y-4">
+                  {recentDeliveries.map((delivery) => (
+                    <div key={delivery.id} className="flex items-center justify-between py-2 border-b last:border-0">
+                      <div>
+                        <p className="font-medium">{delivery.delivery_number}</p>
+                        <p className="text-sm text-gray-500">{delivery.client_name}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm text-gray-500">
+                          {delivery.delivery_date
+                            ? format(new Date(delivery.delivery_date), 'dd/MM/yyyy', { locale: fr })
+                            : 'N/A'}
+                        </p>
+                        <Badge
+                          variant="secondary"
+                          className="text-xs"
+                          style={{ backgroundColor: `${statusColors[delivery.status]}20`, color: statusColors[delivery.status] }}
+                        >
+                          {statusLabels[delivery.status] || delivery.status}
+                        </Badge>
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <p className="font-medium">{formatPrice(order.total_ttc)}</p>
-                      <Badge
-                        variant="secondary"
-                        className="text-xs"
-                        style={{ backgroundColor: `${statusColors[order.status]}20`, color: statusColors[order.status] }}
-                      >
-                        {statusLabels[order.status] || order.status}
-                      </Badge>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-gray-500 text-center py-8">
-                Aucune commande pour le moment
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Recent Deliveries */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Livraisons récentes</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {recentDeliveries.length > 0 ? (
-              <div className="space-y-4">
-                {recentDeliveries.map((delivery) => (
-                  <div key={delivery.id} className="flex items-center justify-between py-2 border-b last:border-0">
-                    <div>
-                      <p className="font-medium">{delivery.delivery_number}</p>
-                      <p className="text-sm text-gray-500">{delivery.client_name}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-sm text-gray-500">
-                        {delivery.delivery_date
-                          ? format(new Date(delivery.delivery_date), 'dd/MM/yyyy', { locale: fr })
-                          : 'N/A'}
-                      </p>
-                      <Badge
-                        variant="secondary"
-                        className="text-xs"
-                        style={{ backgroundColor: `${statusColors[delivery.status]}20`, color: statusColors[delivery.status] }}
-                      >
-                        {statusLabels[delivery.status] || delivery.status}
-                      </Badge>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-gray-500 text-center py-8">
-                Aucune livraison récente
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-gray-500 text-center py-8">
+                  Aucune livraison récente
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   )
 }

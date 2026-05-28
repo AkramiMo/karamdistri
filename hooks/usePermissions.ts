@@ -70,6 +70,9 @@ export function usePermissions() {
         canDelete: rp.can_delete,
       }))
 
+      // Debug: afficher les permissions chargées
+      console.log('Permissions chargées:', formattedPermissions.map(p => ({ code: p.moduleCode, canView: p.canView })))
+
       setPermissions(formattedPermissions)
     } catch (error) {
       console.error('Error in fetchPermissions:', error)

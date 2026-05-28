@@ -30,8 +30,8 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Wallet, ArrowUpCircle, ArrowDownCircle } from 'lucide-react'
-import { format } from 'date-fns'
+import { Plus, Wallet, ArrowUpCircle, ArrowDownCircle, ChevronDown, ChevronRight, Calendar, CalendarDays } from 'lucide-react'
+import { format, startOfWeek, startOfMonth, isWithinInterval, endOfWeek, endOfMonth, getWeek, getYear, getMonth } from 'date-fns'
 import { fr } from 'date-fns/locale'
 
 interface CashEntry {
@@ -49,6 +49,9 @@ export default function CaissePage() {
   const [entries, setEntries] = useState<CashEntry[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [expandedMonths, setExpandedMonths] = useState<Set<string>>(new Set())
+  const [expandedWeeks, setExpandedWeeks] = useState<Set<string>>(new Set())
+  const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set())
   const supabase = createClient()
 
   const [formData, setFormData] = useState({
@@ -124,6 +127,41 @@ export default function CaissePage() {
     .filter(e => e.operation_type === 'out')
     .reduce((sum, e) => sum + e.amount, 0)
 
+  // Calcul des entrées/sorties de la semaine
+  const now = new Date()
+  const weekStart = startOfWeek(now, { weekStartsOn: 1 }) // Lundi
+  const weekEnd = endOfWeek(now, { weekStartsOn: 1 })
+
+  const weekEntries = entries.filter(e => {
+    const entryDate = new Date(e.transaction_date)
+    return isWithinInterval(entryDate, { start: weekStart, end: weekEnd })
+  })
+
+  const weekIn = weekEntries
+    .filter(e => e.operation_type === 'in')
+    .reduce((sum, e) => sum + e.amount, 0)
+
+  const weekOut = weekEntries
+    .filter(e => e.operation_type === 'out')
+    .reduce((sum, e) => sum + e.amount, 0)
+
+  // Calcul des entrées/sorties du mois
+  const monthStart = startOfMonth(now)
+  const monthEnd = endOfMonth(now)
+
+  const monthEntries = entries.filter(e => {
+    const entryDate = new Date(e.transaction_date)
+    return isWithinInterval(entryDate, { start: monthStart, end: monthEnd })
+  })
+
+  const monthIn = monthEntries
+    .filter(e => e.operation_type === 'in')
+    .reduce((sum, e) => sum + e.amount, 0)
+
+  const monthOut = monthEntries
+    .filter(e => e.operation_type === 'out')
+    .reduce((sum, e) => sum + e.amount, 0)
+
   const formatPrice = (price: number) => {
     return new Intl.NumberFormat('fr-MA', {
       style: 'currency',
@@ -143,7 +181,7 @@ export default function CaissePage() {
           <ProtectedModule module="caisse" action="create">
             <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
               <DialogTrigger asChild>
-                <Button className="bg-green-600 hover:bg-green-700">
+                <Button className="bg-[#B8860B] hover:bg-[#9A7209]">
                   <Plus className="mr-2 h-4 w-4" />
                   Nouvelle opération
                 </Button>
@@ -224,7 +262,7 @@ export default function CaissePage() {
                   <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                     Annuler
                   </Button>
-                  <Button type="submit" className="bg-green-600 hover:bg-green-700">
+                  <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
                     Enregistrer
                   </Button>
                 </div>
@@ -234,8 +272,9 @@ export default function CaissePage() {
           </ProtectedModule>
         </div>
 
+        {/* Solde actuel */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <Card>
+          <Card className="border-2 border-[#B8860B]">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-gray-600">
                 Solde actuel
@@ -243,8 +282,8 @@ export default function CaissePage() {
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-2">
-                <Wallet className="h-8 w-8 text-green-600" />
-                <span className={`text-2xl font-bold ${balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                <Wallet className="h-8 w-8 text-[#B8860B]" />
+                <span className={`text-2xl font-bold ${balance >= 0 ? 'text-[#B8860B]' : 'text-red-600'}`}>
                   {formatPrice(balance)}
                 </span>
               </div>
@@ -258,8 +297,8 @@ export default function CaissePage() {
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-2">
-                <ArrowUpCircle className="h-6 w-6 text-green-600" />
-                <span className="text-2xl font-bold text-green-600">{formatPrice(todayIn)}</span>
+                <ArrowUpCircle className="h-6 w-6 text-[#B8860B]" />
+                <span className="text-2xl font-bold text-[#B8860B]">{formatPrice(todayIn)}</span>
               </div>
             </CardContent>
           </Card>
@@ -288,6 +327,79 @@ export default function CaissePage() {
           </Card>
         </div>
 
+        {/* Soldes par semaine et mois */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Semaine */}
+          <Card className="border-2 border-blue-200">
+            <CardHeader className="pb-2 bg-blue-50">
+              <CardTitle className="text-sm font-bold text-blue-800">
+                Cette semaine ({format(weekStart, 'dd/MM', { locale: fr })} - {format(weekEnd, 'dd/MM', { locale: fr })})
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-green-50 rounded-lg p-3">
+                  <div className="flex items-center gap-2 text-green-700 text-sm mb-1">
+                    <ArrowUpCircle className="h-4 w-4" />
+                    Entrées
+                  </div>
+                  <p className="text-xl font-bold text-green-700">{formatPrice(weekIn)}</p>
+                </div>
+                <div className="bg-red-50 rounded-lg p-3">
+                  <div className="flex items-center gap-2 text-red-700 text-sm mb-1">
+                    <ArrowDownCircle className="h-4 w-4" />
+                    Sorties
+                  </div>
+                  <p className="text-xl font-bold text-red-700">{formatPrice(weekOut)}</p>
+                </div>
+              </div>
+              <div className="mt-3 pt-3 border-t">
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-600 font-medium">Solde semaine</span>
+                  <span className={`text-xl font-bold ${weekIn - weekOut >= 0 ? 'text-[#B8860B]' : 'text-red-600'}`}>
+                    {formatPrice(weekIn - weekOut)}
+                  </span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Mois */}
+          <Card className="border-2 border-purple-200">
+            <CardHeader className="pb-2 bg-purple-50">
+              <CardTitle className="text-sm font-bold text-purple-800">
+                Ce mois ({format(monthStart, 'MMMM yyyy', { locale: fr })})
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-green-50 rounded-lg p-3">
+                  <div className="flex items-center gap-2 text-green-700 text-sm mb-1">
+                    <ArrowUpCircle className="h-4 w-4" />
+                    Entrées
+                  </div>
+                  <p className="text-xl font-bold text-green-700">{formatPrice(monthIn)}</p>
+                </div>
+                <div className="bg-red-50 rounded-lg p-3">
+                  <div className="flex items-center gap-2 text-red-700 text-sm mb-1">
+                    <ArrowDownCircle className="h-4 w-4" />
+                    Sorties
+                  </div>
+                  <p className="text-xl font-bold text-red-700">{formatPrice(monthOut)}</p>
+                </div>
+              </div>
+              <div className="mt-3 pt-3 border-t">
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-600 font-medium">Solde mois</span>
+                  <span className={`text-xl font-bold ${monthIn - monthOut >= 0 ? 'text-[#B8860B]' : 'text-red-600'}`}>
+                    {formatPrice(monthIn - monthOut)}
+                  </span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
         <Card>
           <CardHeader>
             <CardTitle>Historique des opérations</CardTitle>
@@ -300,36 +412,243 @@ export default function CaissePage() {
                 Aucune opération pour le moment
               </div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Catégorie</TableHead>
-                    <TableHead>Référence</TableHead>
-                    <TableHead className="text-right">Montant</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {entries.map((entry) => (
-                    <TableRow key={entry.id}>
-                      <TableCell>
-                        {format(new Date(entry.transaction_date), 'dd/MM/yyyy', { locale: fr })}
-                      </TableCell>
-                      <TableCell>
-                        <Badge className={entry.operation_type === 'in' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}>
-                          {entry.operation_type === 'in' ? 'Entrée' : 'Sortie'}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="capitalize">{entry.category || '-'}</TableCell>
-                      <TableCell>{entry.reference || '-'}</TableCell>
-                      <TableCell className={`text-right font-medium ${entry.operation_type === 'in' ? 'text-green-600' : 'text-red-600'}`}>
-                        {entry.operation_type === 'in' ? '+' : '-'}{formatPrice(entry.amount)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <div className="space-y-2">
+                {(() => {
+                  // Grouper par mois
+                  const groupedByMonth: Record<string, CashEntry[]> = {}
+                  entries.forEach(entry => {
+                    const date = new Date(entry.transaction_date)
+                    const monthKey = `${getYear(date)}-${String(getMonth(date) + 1).padStart(2, '0')}`
+                    if (!groupedByMonth[monthKey]) {
+                      groupedByMonth[monthKey] = []
+                    }
+                    groupedByMonth[monthKey].push(entry)
+                  })
+
+                  // Trier les mois (plus récent en premier)
+                  const sortedMonths = Object.keys(groupedByMonth).sort((a, b) => b.localeCompare(a))
+
+                  return sortedMonths.map(monthKey => {
+                    const monthEntries = groupedByMonth[monthKey]
+                    const [year, month] = monthKey.split('-').map(Number)
+                    const monthDate = new Date(year, month - 1, 1)
+                    const isMonthExpanded = expandedMonths.has(monthKey)
+
+                    // Calcul des totaux du mois
+                    const monthTotalIn = monthEntries.filter(e => e.operation_type === 'in').reduce((sum, e) => sum + e.amount, 0)
+                    const monthTotalOut = monthEntries.filter(e => e.operation_type === 'out').reduce((sum, e) => sum + e.amount, 0)
+
+                    // Grouper par semaine
+                    const groupedByWeek: Record<string, CashEntry[]> = {}
+                    monthEntries.forEach(entry => {
+                      const date = new Date(entry.transaction_date)
+                      const weekNum = getWeek(date, { weekStartsOn: 1 })
+                      const weekKey = `${monthKey}-W${weekNum}`
+                      if (!groupedByWeek[weekKey]) {
+                        groupedByWeek[weekKey] = []
+                      }
+                      groupedByWeek[weekKey].push(entry)
+                    })
+
+                    const sortedWeeks = Object.keys(groupedByWeek).sort((a, b) => b.localeCompare(a))
+
+                    return (
+                      <div key={monthKey} className="border rounded-lg overflow-hidden">
+                        {/* Mois Header */}
+                        <button
+                          onClick={() => {
+                            setExpandedMonths(prev => {
+                              const next = new Set(prev)
+                              if (next.has(monthKey)) {
+                                next.delete(monthKey)
+                              } else {
+                                next.add(monthKey)
+                              }
+                              return next
+                            })
+                          }}
+                          className="w-full flex items-center justify-between p-4 bg-purple-50 hover:bg-purple-100 transition-colors"
+                        >
+                          <div className="flex items-center gap-3">
+                            {isMonthExpanded ? (
+                              <ChevronDown className="h-5 w-5 text-purple-700" />
+                            ) : (
+                              <ChevronRight className="h-5 w-5 text-purple-700" />
+                            )}
+                            <Calendar className="h-5 w-5 text-purple-700" />
+                            <span className="font-bold text-purple-800 capitalize">
+                              {format(monthDate, 'MMMM yyyy', { locale: fr })}
+                            </span>
+                            <Badge variant="outline" className="ml-2">
+                              {monthEntries.length} opération(s)
+                            </Badge>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <span className="text-green-700 font-semibold">+{formatPrice(monthTotalIn)}</span>
+                            <span className="text-red-600 font-semibold">-{formatPrice(monthTotalOut)}</span>
+                            <span className={`font-bold ${monthTotalIn - monthTotalOut >= 0 ? 'text-[#B8860B]' : 'text-red-600'}`}>
+                              = {formatPrice(monthTotalIn - monthTotalOut)}
+                            </span>
+                          </div>
+                        </button>
+
+                        {/* Mois Content */}
+                        {isMonthExpanded && (
+                          <div className="border-t">
+                            {sortedWeeks.map(weekKey => {
+                              const weekEntries = groupedByWeek[weekKey]
+                              const weekNum = weekKey.split('-W')[1]
+                              const isWeekExpanded = expandedWeeks.has(weekKey)
+
+                              // Calcul des totaux de la semaine
+                              const weekTotalIn = weekEntries.filter(e => e.operation_type === 'in').reduce((sum, e) => sum + e.amount, 0)
+                              const weekTotalOut = weekEntries.filter(e => e.operation_type === 'out').reduce((sum, e) => sum + e.amount, 0)
+
+                              // Grouper par jour
+                              const groupedByDay: Record<string, CashEntry[]> = {}
+                              weekEntries.forEach(entry => {
+                                const dayKey = entry.transaction_date
+                                if (!groupedByDay[dayKey]) {
+                                  groupedByDay[dayKey] = []
+                                }
+                                groupedByDay[dayKey].push(entry)
+                              })
+
+                              const sortedDays = Object.keys(groupedByDay).sort((a, b) => b.localeCompare(a))
+
+                              return (
+                                <div key={weekKey} className="border-b last:border-b-0">
+                                  {/* Semaine Header */}
+                                  <button
+                                    onClick={() => {
+                                      setExpandedWeeks(prev => {
+                                        const next = new Set(prev)
+                                        if (next.has(weekKey)) {
+                                          next.delete(weekKey)
+                                        } else {
+                                          next.add(weekKey)
+                                        }
+                                        return next
+                                      })
+                                    }}
+                                    className="w-full flex items-center justify-between p-3 pl-8 bg-blue-50 hover:bg-blue-100 transition-colors"
+                                  >
+                                    <div className="flex items-center gap-3">
+                                      {isWeekExpanded ? (
+                                        <ChevronDown className="h-4 w-4 text-blue-700" />
+                                      ) : (
+                                        <ChevronRight className="h-4 w-4 text-blue-700" />
+                                      )}
+                                      <CalendarDays className="h-4 w-4 text-blue-700" />
+                                      <span className="font-semibold text-blue-800">
+                                        Semaine {weekNum}
+                                      </span>
+                                      <Badge variant="outline" className="ml-2 text-xs">
+                                        {weekEntries.length} op.
+                                      </Badge>
+                                    </div>
+                                    <div className="flex items-center gap-3 text-sm">
+                                      <span className="text-green-700">+{formatPrice(weekTotalIn)}</span>
+                                      <span className="text-red-600">-{formatPrice(weekTotalOut)}</span>
+                                    </div>
+                                  </button>
+
+                                  {/* Semaine Content */}
+                                  {isWeekExpanded && (
+                                    <div className="bg-white">
+                                      {sortedDays.map(dayKey => {
+                                        const dayEntries = groupedByDay[dayKey]
+                                        const dayDate = new Date(dayKey)
+                                        const isDayExpanded = expandedDays.has(dayKey)
+
+                                        // Calcul des totaux du jour
+                                        const dayTotalIn = dayEntries.filter(e => e.operation_type === 'in').reduce((sum, e) => sum + e.amount, 0)
+                                        const dayTotalOut = dayEntries.filter(e => e.operation_type === 'out').reduce((sum, e) => sum + e.amount, 0)
+
+                                        return (
+                                          <div key={dayKey} className="border-b last:border-b-0">
+                                            {/* Jour Header */}
+                                            <button
+                                              onClick={() => {
+                                                setExpandedDays(prev => {
+                                                  const next = new Set(prev)
+                                                  if (next.has(dayKey)) {
+                                                    next.delete(dayKey)
+                                                  } else {
+                                                    next.add(dayKey)
+                                                  }
+                                                  return next
+                                                })
+                                              }}
+                                              className="w-full flex items-center justify-between p-2 pl-14 bg-gray-50 hover:bg-gray-100 transition-colors"
+                                            >
+                                              <div className="flex items-center gap-2">
+                                                {isDayExpanded ? (
+                                                  <ChevronDown className="h-4 w-4 text-gray-600" />
+                                                ) : (
+                                                  <ChevronRight className="h-4 w-4 text-gray-600" />
+                                                )}
+                                                <span className="font-medium text-gray-700">
+                                                  {format(dayDate, 'EEEE dd MMMM', { locale: fr })}
+                                                </span>
+                                                <Badge variant="outline" className="ml-2 text-xs">
+                                                  {dayEntries.length}
+                                                </Badge>
+                                              </div>
+                                              <div className="flex items-center gap-3 text-sm">
+                                                {dayTotalIn > 0 && <span className="text-green-700">+{formatPrice(dayTotalIn)}</span>}
+                                                {dayTotalOut > 0 && <span className="text-red-600">-{formatPrice(dayTotalOut)}</span>}
+                                              </div>
+                                            </button>
+
+                                            {/* Jour Content - Table des entrées */}
+                                            {isDayExpanded && (
+                                              <div className="pl-14 pr-4 pb-2">
+                                                <Table>
+                                                  <TableHeader>
+                                                    <TableRow>
+                                                      <TableHead>Type</TableHead>
+                                                      <TableHead>Catégorie</TableHead>
+                                                      <TableHead>Référence</TableHead>
+                                                      <TableHead>Notes</TableHead>
+                                                      <TableHead className="text-right">Montant</TableHead>
+                                                    </TableRow>
+                                                  </TableHeader>
+                                                  <TableBody>
+                                                    {dayEntries.map((entry) => (
+                                                      <TableRow key={entry.id}>
+                                                        <TableCell>
+                                                          <Badge className={entry.operation_type === 'in' ? 'bg-amber-100 text-[#9A7209]' : 'bg-red-100 text-red-800'}>
+                                                            {entry.operation_type === 'in' ? 'Entrée' : 'Sortie'}
+                                                          </Badge>
+                                                        </TableCell>
+                                                        <TableCell className="capitalize">{entry.category || '-'}</TableCell>
+                                                        <TableCell>{entry.reference || '-'}</TableCell>
+                                                        <TableCell className="text-gray-500 text-sm">{entry.notes || '-'}</TableCell>
+                                                        <TableCell className={`text-right font-medium ${entry.operation_type === 'in' ? 'text-[#B8860B]' : 'text-red-600'}`}>
+                                                          {entry.operation_type === 'in' ? '+' : '-'}{formatPrice(entry.amount)}
+                                                        </TableCell>
+                                                      </TableRow>
+                                                    ))}
+                                                  </TableBody>
+                                                </Table>
+                                              </div>
+                                            )}
+                                          </div>
+                                        )
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })
+                })()}
+              </div>
             )}
           </CardContent>
         </Card>

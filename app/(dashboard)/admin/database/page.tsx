@@ -23,7 +23,7 @@ export default function DatabasePage() {
 
       const tables = [
         { name: 'Utilisateurs', table: 'users', icon: Users, color: 'bg-blue-500' },
-        { name: 'Clients', table: 'clients', icon: Users, color: 'bg-green-500' },
+        { name: 'Clients', table: 'clients', icon: Users, color: 'bg-amber-500' },
         { name: 'Articles', table: 'articles', icon: Package, color: 'bg-purple-500' },
         { name: 'Commandes', table: 'orders', icon: ShoppingCart, color: 'bg-orange-500' },
         { name: 'Livraisons', table: 'deliveries', icon: Truck, color: 'bg-teal-500' },
@@ -91,7 +91,7 @@ export default function DatabasePage() {
             </div>
             <div>
               <span className="text-gray-500">Statut:</span>
-              <p className="font-medium text-green-600">Connecté</p>
+              <p className="font-medium text-[#B8860B]">Connecté</p>
             </div>
           </div>
         </CardContent>
@@ -133,7 +133,7 @@ export default function DatabasePage() {
               href="https://supabase.com/dashboard/project/jiqhqngmwktujbzppfhk"
               target="_blank"
               rel="noopener noreferrer"
-              className="block text-green-600 hover:underline"
+              className="block text-[#B8860B] hover:underline"
             >
               Dashboard Supabase
             </a>
@@ -141,7 +141,7 @@ export default function DatabasePage() {
               href="https://supabase.com/dashboard/project/jiqhqngmwktujbzppfhk/editor"
               target="_blank"
               rel="noopener noreferrer"
-              className="block text-green-600 hover:underline"
+              className="block text-[#B8860B] hover:underline"
             >
               Table Editor
             </a>
@@ -149,7 +149,7 @@ export default function DatabasePage() {
               href="https://supabase.com/dashboard/project/jiqhqngmwktujbzppfhk/sql/new"
               target="_blank"
               rel="noopener noreferrer"
-              className="block text-green-600 hover:underline"
+              className="block text-[#B8860B] hover:underline"
             >
               SQL Editor
             </a>

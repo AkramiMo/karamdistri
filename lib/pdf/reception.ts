@@ -35,21 +35,59 @@ interface Reception {
   reception_items: ReceptionItem[]
 }
 
-export function generateReceptionPDF(reception: Reception, company?: CompanySettings): void {
+export async function generateReceptionPDF(reception: Reception, company?: CompanySettings): Promise<void> {
   const doc = new jsPDF()
   const settings = company || defaultCompanySettings
 
-  // Header - Company info
-  doc.setFontSize(24)
-  doc.setFont('helvetica', 'bold')
-  doc.setTextColor(34, 139, 34) // Green color
-  doc.text(settings.company_name, 20, 25)
+  // Header - Logo
+  try {
+    const logoUrl = '/logo.jpg'
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => {
+        // Calculate aspect ratio to fit logo
+        const maxWidth = 50
+        const maxHeight = 25
+        let width = img.width
+        let height = img.height
+
+        if (width > maxWidth) {
+          height = (maxWidth / width) * height
+          width = maxWidth
+        }
+        if (height > maxHeight) {
+          width = (maxHeight / height) * width
+          height = maxHeight
+        }
+
+        doc.addImage(img, 'JPEG', 20, 10, width, height)
+        resolve()
+      }
+      img.onerror = () => {
+        // If logo fails to load, use text fallback
+        doc.setFontSize(24)
+        doc.setFont('helvetica', 'bold')
+        doc.setTextColor(34, 139, 34)
+        doc.text(settings.company_name, 20, 25)
+        resolve()
+      }
+      img.src = logoUrl
+    })
+  } catch {
+    // Fallback to text if logo fails
+    doc.setFontSize(24)
+    doc.setFont('helvetica', 'bold')
+    doc.setTextColor(34, 139, 34)
+    doc.text(settings.company_name, 20, 25)
+  }
 
   doc.setFontSize(10)
   doc.setFont('helvetica', 'normal')
   doc.setTextColor(100, 100, 100)
 
-  let headerY = 32
+  let headerY = 38
   const companyAddress = formatCompanyAddress(settings)
   if (companyAddress) {
     doc.text(companyAddress, 20, headerY)
@@ -127,7 +165,7 @@ export function generateReceptionPDF(reception: Reception, company?: CompanySett
     body: tableData,
     theme: 'striped',
     headStyles: {
-      fillColor: [34, 139, 34],
+      fillColor: [76, 175, 80],
       textColor: [255, 255, 255],
       fontStyle: 'bold',
       halign: 'center',
@@ -152,65 +190,99 @@ export function generateReceptionPDF(reception: Reception, company?: CompanySett
 
   // Get the Y position after the table
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const finalY = (doc as any).lastAutoTable.finalY + 10
+  let finalY = (doc as any).lastAutoTable.finalY + 10
 
   // Totals
-  const totalsX = 130
-  doc.setDrawColor(200, 200, 200)
-  doc.setFillColor(255, 255, 255)
-  doc.roundedRect(totalsX, finalY, 65, 20, 2, 2, 'D')
-
-  doc.setFontSize(12)
+  const totalsX = 145
+  doc.setFontSize(11)
   doc.setFont('helvetica', 'bold')
-  doc.setTextColor(34, 139, 34)
-  doc.text('Total HT:', totalsX + 5, finalY + 13)
-  doc.text(formatPrice(reception.total_ht), totalsX + 55, finalY + 13, { align: 'right' })
+  doc.setTextColor(0, 0, 0)
+  doc.text('Total HT:', totalsX, finalY + 8)
+  doc.text(formatPrice(reception.total_ht), totalsX + 45, finalY + 8, { align: 'right' })
 
   // Notes
   if (reception.notes) {
     doc.setFontSize(10)
     doc.setFont('helvetica', 'normal')
     doc.setTextColor(100, 100, 100)
-    doc.text('Notes:', 20, finalY + 10)
-    doc.text(reception.notes, 20, finalY + 16)
+    doc.text('Notes:', 20, finalY + 30)
+    doc.text(reception.notes, 20, finalY + 36)
   }
 
-  // Signature boxes
-  const sigY = finalY + 40
-  doc.setFontSize(10)
-  doc.setFont('helvetica', 'bold')
-  doc.setTextColor(0, 0, 0)
+  // Signature - position below totals box
+  const signatureY = finalY + 15
+  try {
+    const signatureUrl = '/signature.png'
+    const signatureImg = new Image()
+    signatureImg.crossOrigin = 'anonymous'
 
-  // Receiver signature
-  doc.text('Signature Recepteur:', 20, sigY)
-  doc.setDrawColor(200, 200, 200)
-  doc.rect(20, sigY + 5, 60, 25)
+    await new Promise<void>((resolve) => {
+      signatureImg.onload = () => {
+        // Calculate aspect ratio for signature
+        const maxSigWidth = 50
+        const maxSigHeight = 30
+        let sigWidth = signatureImg.width
+        let sigHeight = signatureImg.height
 
-  // Warehouse manager signature
-  doc.text('Signature Magasinier:', 120, sigY)
-  doc.rect(120, sigY + 5, 60, 25)
+        if (sigWidth > maxSigWidth) {
+          sigHeight = (maxSigWidth / sigWidth) * sigHeight
+          sigWidth = maxSigWidth
+        }
+        if (sigHeight > maxSigHeight) {
+          sigWidth = (maxSigHeight / sigHeight) * sigWidth
+          sigHeight = maxSigHeight
+        }
+
+        // Position signature on the right side, below the totals
+        const sigX = 140
+
+        doc.setFontSize(10)
+        doc.setFont('helvetica', 'bold')
+        doc.setTextColor(0, 0, 0)
+        doc.text('Signature:', sigX, signatureY)
+
+        // White background for signature
+        doc.setFillColor(255, 255, 255)
+        doc.rect(sigX, signatureY + 2, sigWidth + 4, sigHeight + 4, 'F')
+
+        doc.addImage(signatureImg, 'PNG', sigX + 2, signatureY + 4, sigWidth, sigHeight)
+        resolve()
+      }
+      signatureImg.onerror = () => {
+        resolve()
+      }
+      signatureImg.src = signatureUrl
+    })
+  } catch {
+    // Signature not available, skip
+  }
 
   // Footer with company identifiers
   const pageHeight = doc.internal.pageSize.height
+  const pageWidth = doc.internal.pageSize.width
+
+  // Top border for footer
+  doc.setDrawColor(200, 200, 200)
+  doc.line(20, pageHeight - 25, pageWidth - 20, pageHeight - 25)
+
   doc.setFontSize(8)
   doc.setFont('helvetica', 'normal')
-  doc.setTextColor(150, 150, 150)
+  doc.setTextColor(80, 80, 80)
 
   const identifiers = formatCompanyIdentifiers(settings)
   if (identifiers) {
     doc.text(
       `${settings.company_name} - ${identifiers}`,
-      doc.internal.pageSize.width / 2,
-      pageHeight - 15,
+      pageWidth / 2,
+      pageHeight - 18,
       { align: 'center' }
     )
   }
 
   doc.text(
     `Document genere le ${new Date().toLocaleDateString('fr-FR')}`,
-    doc.internal.pageSize.width / 2,
-    pageHeight - 10,
-    { align: 'center' }
+    20,
+    pageHeight - 10
   )
 
   // Save the PDF

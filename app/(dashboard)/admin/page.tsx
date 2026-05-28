@@ -33,7 +33,7 @@ export default function AdminPage() {
       description: 'Voir les statistiques de la base',
       icon: Database,
       href: '/admin/database',
-      color: 'bg-green-500',
+      color: 'bg-amber-500',
     },
   ]
 

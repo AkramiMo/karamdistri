@@ -82,6 +82,48 @@ export async function POST(request: NextRequest) {
   }
 }
 
+export async function PATCH(request: NextRequest) {
+  try {
+    const { userId, newPassword } = await request.json()
+
+    if (!userId || !newPassword) {
+      return NextResponse.json(
+        { error: 'ID utilisateur et nouveau mot de passe requis' },
+        { status: 400 }
+      )
+    }
+
+    if (newPassword.length < 6) {
+      return NextResponse.json(
+        { error: 'Le mot de passe doit contenir au moins 6 caractères' },
+        { status: 400 }
+      )
+    }
+
+    // Update password using admin API
+    const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+      password: newPassword
+    })
+
+    if (error) {
+      console.error('Password update error:', error)
+      return NextResponse.json(
+        { error: error.message },
+        { status: 400 }
+      )
+    }
+
+    return NextResponse.json({ success: true })
+
+  } catch (error) {
+    console.error('API error:', error)
+    return NextResponse.json(
+      { error: 'Erreur serveur' },
+      { status: 500 }
+    )
+  }
+}
+
 export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
@@ -94,8 +136,29 @@ export async function DELETE(request: NextRequest) {
       )
     }
 
+    // First, remove references to this user in other tables
+    // Set user references to NULL to avoid foreign key constraint errors
+    await supabaseAdmin.from('clients').update({ commercial_id: null }).eq('commercial_id', userId)
+    await supabaseAdmin.from('orders').update({ commercial_id: null }).eq('commercial_id', userId)
+    await supabaseAdmin.from('deliveries').update({ driver_id: null }).eq('driver_id', userId)
+    await supabaseAdmin.from('sales').update({ user_id: null }).eq('user_id', userId)
+    await supabaseAdmin.from('cash_register').update({ user_id: null }).eq('user_id', userId)
+    await supabaseAdmin.from('stock_movements').update({ user_id: null }).eq('user_id', userId)
+    await supabaseAdmin.from('purchase_orders').update({ user_id: null }).eq('user_id', userId)
+    await supabaseAdmin.from('receptions').update({ user_id: null }).eq('user_id', userId)
+    await supabaseAdmin.from('fiches_trajet').update({ driver_id: null }).eq('driver_id', userId)
+    await supabaseAdmin.from('delivery_rounds').update({ driver_id: null }).eq('driver_id', userId)
+
     // Delete from public.users first
-    await supabaseAdmin.from('users').delete().eq('id', userId)
+    const { error: userError } = await supabaseAdmin.from('users').delete().eq('id', userId)
+
+    if (userError) {
+      console.error('User delete error:', userError)
+      return NextResponse.json(
+        { error: `Erreur suppression utilisateur: ${userError.message}` },
+        { status: 400 }
+      )
+    }
 
     // Delete from auth
     const { error } = await supabaseAdmin.auth.admin.deleteUser(userId)

@@ -172,7 +172,7 @@ export default function SettingsPage() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-green-600" />
+        <Loader2 className="h-8 w-8 animate-spin text-[#B8860B]" />
       </div>
     )
   }
@@ -185,7 +185,7 @@ export default function SettingsPage() {
           <p className="text-gray-500">Configuration des informations pour les factures et documents</p>
         </div>
         <Button
-          className="bg-green-600 hover:bg-green-700"
+          className="bg-[#B8860B] hover:bg-[#9A7209]"
           onClick={handleSave}
           disabled={isSaving}
         >
@@ -199,7 +199,7 @@ export default function SettingsPage() {
       </div>
 
       {message && (
-        <div className={`p-4 rounded-lg ${message.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
+        <div className={`p-4 rounded-lg ${message.type === 'success' ? 'bg-amber-50 text-[#9A7209] border border-amber-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
           {message.text}
         </div>
       )}

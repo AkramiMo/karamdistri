@@ -1,0 +1,11 @@
+{
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "supabase"
+  ],
+  "permissions": {
+    "allow": [
+      "Bash(dir \"D:\\\\Karam\\\\ERP\\\\karam-erp\\\\mobile\" /b)"
+    ]
+  }
+}

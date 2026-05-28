@@ -33,6 +33,7 @@ import { Badge } from '@/components/ui/badge'
 import { Plus, Search, Edit, Trash2, Users, MapPin, Store, Utensils, ShoppingBag, Package, Eye, DollarSign, Upload, Image, X, Building2, FileText, Loader2 } from 'lucide-react'
 import { Progress } from '@/components/ui/progress'
 import Link from 'next/link'
+import { useAuth } from '@/hooks/useAuth'
 
 interface Client {
   id: string
@@ -66,7 +67,7 @@ const categoryColors: Record<string, string> = {
   'EPC': 'bg-blue-100 text-blue-800',
   'DEP': 'bg-purple-100 text-purple-800',
   'AUT': 'bg-gray-100 text-gray-800',
-  'MGZ': 'bg-green-100 text-green-800',
+  'MGZ': 'bg-amber-100 text-[#9A7209]',
 }
 
 export default function ClientsPage() {
@@ -79,6 +80,9 @@ export default function ClientsPage() {
   const [viewingClient, setViewingClient] = useState<Client | null>(null)
   const [editingClient, setEditingClient] = useState<Client | null>(null)
   const supabase = createClient()
+  const { profile } = useAuth()
+  const isLivreur = profile?.role?.name === 'livreur'
+  const isCommercial = profile?.role?.name === 'commercial'
 
   const [formData, setFormData] = useState({
     code: '',
@@ -215,22 +219,58 @@ export default function ClientsPage() {
 
   const fetchClients = async () => {
     setIsLoading(true)
-    const { data, error } = await supabase
-      .from('clients')
-      .select('*')
-      .order('created_at', { ascending: false })
 
-    if (error) {
-      console.error('Error fetching clients:', error)
+    if (isLivreur && profile?.id) {
+      // Pour le livreur: récupérer les clients via ses tournées assignées
+      const { data: roundItems, error: roundError } = await supabase
+        .from('delivery_rounds')
+        .select(`
+          delivery_round_items(
+            delivery:deliveries(
+              client:clients(*)
+            )
+          )
+        `)
+        .eq('driver_id', profile.id)
+
+      if (roundError) {
+        console.error('Error fetching livreur clients:', roundError.message, roundError.code, roundError.details)
+        setClients([])
+      } else {
+        // Extraire les clients uniques des tournées
+        const clientsMap = new Map<string, Client>()
+        roundItems?.forEach(round => {
+          round.delivery_round_items?.forEach((item: { delivery?: { client?: Client } }) => {
+            const client = item.delivery?.client
+            if (client && !clientsMap.has(client.id)) {
+              clientsMap.set(client.id, client as Client)
+            }
+          })
+        })
+        setClients(Array.from(clientsMap.values()))
+      }
     } else {
-      setClients(data || [])
+      // Pour les autres rôles: requête normale
+      const { data, error } = await supabase
+        .from('clients')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        console.error('Error fetching clients:', error.message, error.code, error.details)
+      } else {
+        setClients(data || [])
+      }
     }
     setIsLoading(false)
   }
 
   useEffect(() => {
-    fetchClients()
-  }, [])
+    // Attendre que le profil soit chargé pour le livreur
+    if (profile !== undefined) {
+      fetchClients()
+    }
+  }, [profile?.id, isLivreur])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -430,31 +470,39 @@ export default function ClientsPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Clients</h1>
-            <p className="text-gray-500">Gérez vos clients ({clients.length} total)</p>
+            <p className="text-gray-500">
+              {isLivreur
+                ? `Clients de vos tournées (${clients.length})`
+                : `Gérez vos clients (${clients.length} total)`
+              }
+            </p>
           </div>
 
           <div className="flex gap-2">
-            <Link href="/clients/prix">
-              <Button variant="outline" className="border-green-600 text-green-600 hover:bg-green-50">
-                <DollarSign className="mr-2 h-4 w-4" />
-                Prix par Client
-              </Button>
-            </Link>
+            {!isLivreur && (
+              <Link href="/clients/prix">
+                <Button variant="outline" className="border-[#B8860B] text-[#B8860B] hover:bg-amber-50">
+                  <DollarSign className="mr-2 h-4 w-4" />
+                  Prix par Client
+                </Button>
+              </Link>
+            )}
 
-            <ProtectedModule module="clients" action="create">
-              <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-                <DialogTrigger asChild>
-                  <Button
-                    className="bg-green-600 hover:bg-green-700"
-                    onClick={() => {
-                      resetForm()
-                      setIsDialogOpen(true)
-                    }}
-                  >
-                    <Plus className="mr-2 h-4 w-4" />
-                    Nouveau client
-                  </Button>
-                </DialogTrigger>
+            {!isLivreur && (
+              <ProtectedModule module="clients" action="create" fallback={null}>
+                <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+                  <DialogTrigger asChild>
+                    <Button
+                      className="bg-[#B8860B] hover:bg-[#9A7209]"
+                      onClick={() => {
+                        resetForm()
+                        setIsDialogOpen(true)
+                      }}
+                    >
+                      <Plus className="mr-2 h-4 w-4" />
+                      Nouveau client
+                    </Button>
+                  </DialogTrigger>
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>
@@ -688,7 +736,7 @@ export default function ClientsPage() {
                   <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)} disabled={isUploading}>
                     Annuler
                   </Button>
-                  <Button type="submit" className="bg-green-600 hover:bg-green-700" disabled={isUploading}>
+                  <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]" disabled={isUploading}>
                     {isUploading ? (
                       <>
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -699,77 +747,80 @@ export default function ClientsPage() {
                 </div>
               </form>
             </DialogContent>
-            </Dialog>
-          </ProtectedModule>
+              </Dialog>
+            </ProtectedModule>
+            )}
           </div>
         </div>
 
         {/* Stats by category */}
-        <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">Total</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center gap-2">
-                <Users className="h-6 w-6 text-green-600" />
-                <span className="text-2xl font-bold">{stats.total}</span>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">Restaurants</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center gap-2">
-                <Utensils className="h-6 w-6 text-orange-600" />
-                <span className="text-2xl font-bold">{stats.FOD}</span>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">Epiceries</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center gap-2">
-                <ShoppingBag className="h-6 w-6 text-blue-600" />
-                <span className="text-2xl font-bold">{stats.EPC}</span>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">Dépôts</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center gap-2">
-                <Package className="h-6 w-6 text-purple-600" />
-                <span className="text-2xl font-bold">{stats.DEP}</span>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">Magasins</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center gap-2">
-                <Store className="h-6 w-6 text-green-600" />
-                <span className="text-2xl font-bold">{stats.MGZ}</span>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">Autres</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <span className="text-2xl font-bold text-gray-600">{stats.AUT}</span>
-            </CardContent>
-          </Card>
-        </div>
+        {!isLivreur && !isCommercial && (
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600">Total</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  <Users className="h-6 w-6 text-[#B8860B]" />
+                  <span className="text-2xl font-bold">{stats.total}</span>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600">Restaurants</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  <Utensils className="h-6 w-6 text-orange-600" />
+                  <span className="text-2xl font-bold">{stats.FOD}</span>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600">Epiceries</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  <ShoppingBag className="h-6 w-6 text-blue-600" />
+                  <span className="text-2xl font-bold">{stats.EPC}</span>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600">Dépôts</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  <Package className="h-6 w-6 text-purple-600" />
+                  <span className="text-2xl font-bold">{stats.DEP}</span>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600">Magasins</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  <Store className="h-6 w-6 text-[#B8860B]" />
+                  <span className="text-2xl font-bold">{stats.MGZ}</span>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600">Autres</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <span className="text-2xl font-bold text-gray-600">{stats.AUT}</span>
+              </CardContent>
+            </Card>
+          </div>
+        )}
 
         {/* Search & Filters */}
         <Card>
@@ -803,7 +854,16 @@ export default function ClientsPage() {
             {isLoading ? (
               <div className="text-center py-8 text-gray-500">Chargement...</div>
             ) : filteredClients.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">Aucun client trouvé</div>
+              <div className="text-center py-8 text-gray-500">
+                {isLivreur ? (
+                  <div>
+                    <p className="font-medium">Aucun client trouvé</p>
+                    <p className="text-sm mt-1">Vous verrez ici les clients de vos tournées assignées.</p>
+                  </div>
+                ) : (
+                  'Aucun client trouvé'
+                )}
+              </div>
             ) : (
               <div className="overflow-x-auto">
                 <Table>
@@ -860,15 +920,17 @@ export default function ClientsPage() {
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">
-                            <Link href={`/clients/${client.id}`}>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                title="Fiche client complète"
-                              >
-                                <FileText className="h-4 w-4 text-green-600" />
-                              </Button>
-                            </Link>
+                            {!isLivreur && (
+                              <Link href={`/clients/${client.id}`}>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  title="Fiche client complète"
+                                >
+                                  <FileText className="h-4 w-4 text-[#B8860B]" />
+                                </Button>
+                              </Link>
+                            )}
                             <Button
                               variant="ghost"
                               size="icon"
@@ -877,25 +939,29 @@ export default function ClientsPage() {
                             >
                               <Eye className="h-4 w-4" />
                             </Button>
-                            <ProtectedModule module="clients" action="edit">
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => handleEdit(client)}
-                              >
-                                <Edit className="h-4 w-4" />
-                              </Button>
-                            </ProtectedModule>
-                            <ProtectedModule module="clients" action="delete">
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="text-red-600"
-                                onClick={() => handleDelete(client.id)}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </ProtectedModule>
+                            {!isLivreur && (
+                              <ProtectedModule module="clients" action="edit" fallback={null}>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => handleEdit(client)}
+                                >
+                                  <Edit className="h-4 w-4" />
+                                </Button>
+                              </ProtectedModule>
+                            )}
+                            {!isLivreur && (
+                              <ProtectedModule module="clients" action="delete" fallback={null}>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="text-red-600"
+                                  onClick={() => handleDelete(client.id)}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </ProtectedModule>
+                            )}
                           </div>
                         </TableCell>
                       </TableRow>

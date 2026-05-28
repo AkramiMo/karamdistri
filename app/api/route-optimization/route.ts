@@ -25,8 +25,8 @@ interface OptimizedRoute {
 
 // Default depot location (fallback)
 const DEFAULT_DEPOT: Location = {
-  latitude: 31.6295,
-  longitude: -7.9811
+  latitude: 34.001605,
+  longitude: -5.060824
 }
 
 // Calculate distance between two points using Haversine formula (fallback)

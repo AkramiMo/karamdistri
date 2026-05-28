@@ -33,7 +33,6 @@ import { Badge } from '@/components/ui/badge'
 import { Plus, Search, Package, AlertTriangle, ArrowUpCircle, ArrowDownCircle } from 'lucide-react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
-import Link from 'next/link'
 
 interface SupplyStockItem {
   id: string
@@ -202,20 +201,8 @@ export default function StockFournituresPage() {
   const outOfStock = stocks.filter(s => s.quantity <= 0).length
 
   return (
-    <ProtectedModule module="stocks">
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Stock Fournitures</h1>
-            <p className="text-gray-500">Gérez votre stock interne de fournitures</p>
-          </div>
-
-          <div className="flex gap-2">
-            <Link href="/stocks">
-              <Button variant="outline">
-                Stock Articles
-              </Button>
-            </Link>
+        <div className="flex items-center justify-end">
             <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
               <DialogTrigger asChild>
                 <ProtectedModule module="stocks" action="create">
@@ -324,7 +311,6 @@ export default function StockFournituresPage() {
                 </form>
               </DialogContent>
             </Dialog>
-          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -421,7 +407,7 @@ export default function StockFournituresPage() {
                             ) : isLow ? (
                               <Badge className="bg-yellow-100 text-yellow-800">Stock faible</Badge>
                             ) : (
-                              <Badge className="bg-green-100 text-green-800">OK</Badge>
+                              <Badge className="bg-amber-100 text-[#9A7209]">OK</Badge>
                             )}
                           </TableCell>
                         </TableRow>
@@ -448,7 +434,7 @@ export default function StockFournituresPage() {
                     <div key={movement.id} className="flex items-center justify-between py-2 border-b last:border-0">
                       <div className="flex items-center gap-3">
                         {movement.movement_type === 'in' ? (
-                          <ArrowUpCircle className="h-5 w-5 text-green-600" />
+                          <ArrowUpCircle className="h-5 w-5 text-[#B8860B]" />
                         ) : movement.movement_type === 'out' ? (
                           <ArrowDownCircle className="h-5 w-5 text-red-600" />
                         ) : (
@@ -461,7 +447,7 @@ export default function StockFournituresPage() {
                           </div>
                         </div>
                       </div>
-                      <div className={`font-medium ${movement.movement_type === 'in' ? 'text-green-600' : movement.movement_type === 'out' ? 'text-red-600' : 'text-orange-600'}`}>
+                      <div className={`font-medium ${movement.movement_type === 'in' ? 'text-[#B8860B]' : movement.movement_type === 'out' ? 'text-red-600' : 'text-orange-600'}`}>
                         {movement.movement_type === 'in' ? '+' : movement.movement_type === 'out' ? '-' : ''}
                         {Math.abs(movement.quantity)}
                       </div>
@@ -473,6 +459,5 @@ export default function StockFournituresPage() {
           </Card>
         </div>
       </div>
-    </ProtectedModule>
   )
 }

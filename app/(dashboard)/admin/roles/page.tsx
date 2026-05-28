@@ -149,7 +149,7 @@ export default function RolesPage() {
           <Button
             onClick={handleSave}
             disabled={isSaving}
-            className="bg-green-600 hover:bg-green-700"
+            className="bg-[#B8860B] hover:bg-[#9A7209]"
           >
             <Save className="mr-2 h-4 w-4" />
             {isSaving ? 'Sauvegarde...' : 'Sauvegarder'}
@@ -176,7 +176,7 @@ export default function RolesPage() {
                       variant={selectedRole === role.id ? 'default' : 'outline'}
                       className={`w-full justify-start ${
                         selectedRole === role.id
-                          ? 'bg-green-600 hover:bg-green-700'
+                          ? 'bg-[#B8860B] hover:bg-[#9A7209]'
                           : ''
                       }`}
                       onClick={() => setSelectedRole(role.id)}
@@ -192,7 +192,7 @@ export default function RolesPage() {
             <Card className="lg:col-span-3">
               <CardHeader>
                 <CardTitle className="text-lg">
-                  Permissions du rôle : <span className="text-green-600 capitalize">{selectedRoleName}</span>
+                  Permissions du rôle : <span className="text-[#B8860B] capitalize">{selectedRoleName}</span>
                 </CardTitle>
               </CardHeader>
               <CardContent>

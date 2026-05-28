@@ -22,7 +22,7 @@ export default function DashboardPage() {
       title: 'Articles',
       value: '0',
       icon: Package,
-      color: 'bg-green-500',
+      color: 'bg-amber-500',
     },
     {
       title: 'Commandes',

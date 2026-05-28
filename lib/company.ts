@@ -46,8 +46,8 @@ export const defaultCompanySettings: CompanySettings = {
   bank_rib: null,
   logo_url: null,
   invoice_footer: 'Merci pour votre confiance!',
-  depot_lat: null,
-  depot_lng: null,
+  depot_lat: 34.001605,
+  depot_lng: -5.060824,
   depot_address: null,
 }
 

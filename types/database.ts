@@ -348,6 +348,8 @@ export interface Database {
           sale_date: string
           total_ht: number | null
           total_ttc: number | null
+          amount_paid: number | null
+          balance_due: number | null
           payment_method: string | null
           payment_status: string
           created_at: string
@@ -360,6 +362,8 @@ export interface Database {
           sale_date?: string
           total_ht?: number | null
           total_ttc?: number | null
+          amount_paid?: number | null
+          balance_due?: number | null
           payment_method?: string | null
           payment_status?: string
           created_at?: string
@@ -372,9 +376,61 @@ export interface Database {
           sale_date?: string
           total_ht?: number | null
           total_ttc?: number | null
+          amount_paid?: number | null
+          balance_due?: number | null
           payment_method?: string | null
           payment_status?: string
           created_at?: string
+        }
+      }
+      factures: {
+        Row: {
+          id: string
+          facture_number: string
+          facture_date: string
+          client_id: string
+          delivery_id: string | null
+          total_ht: number
+          total_tva: number
+          total_ttc: number
+          due_date: string | null
+          status: string
+          notes: string | null
+          user_id: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          facture_number: string
+          facture_date?: string
+          client_id: string
+          delivery_id?: string | null
+          total_ht?: number
+          total_tva?: number
+          total_ttc?: number
+          due_date?: string | null
+          status?: string
+          notes?: string | null
+          user_id?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          facture_number?: string
+          facture_date?: string
+          client_id?: string
+          delivery_id?: string | null
+          total_ht?: number
+          total_tva?: number
+          total_ttc?: number
+          due_date?: string | null
+          status?: string
+          notes?: string | null
+          user_id?: string | null
+          created_at?: string
+          updated_at?: string
         }
       }
       cash_register: {
@@ -438,6 +494,101 @@ export interface Database {
           updated_at?: string
         }
       }
+      fiches_trajet: {
+        Row: {
+          id: string
+          ft_number: string
+          ft_date: string
+          round_id: string | null
+          driver_id: string | null
+          notes: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          ft_number: string
+          ft_date?: string
+          round_id?: string | null
+          driver_id?: string | null
+          notes?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          ft_number?: string
+          ft_date?: string
+          round_id?: string | null
+          driver_id?: string | null
+          notes?: string | null
+          created_at?: string
+        }
+      }
+      lots: {
+        Row: {
+          id: string
+          lot_number: string
+          supplier_id: string | null
+          origin: string | null
+          olive_type: string
+          caliber: string | null
+          purchase_date: string
+          reception_id: string | null
+          quantity_kg: number
+          purchase_price_kg: number
+          total_amount: number
+          remaining_quantity_kg: number | null
+          state: 'brut' | 'fermente' | 'pret_a_conditionner' | 'conditionne' | 'epuise'
+          salt_rate: number | null
+          brine_density: number | null
+          quality_grade: 'A' | 'B' | 'C' | 'D' | null
+          quality_remarks: string | null
+          is_active: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          lot_number: string
+          supplier_id?: string | null
+          origin?: string | null
+          olive_type: string
+          caliber?: string | null
+          purchase_date?: string
+          reception_id?: string | null
+          quantity_kg: number
+          purchase_price_kg: number
+          remaining_quantity_kg?: number | null
+          state?: 'brut' | 'fermente' | 'pret_a_conditionner' | 'conditionne' | 'epuise'
+          salt_rate?: number | null
+          brine_density?: number | null
+          quality_grade?: 'A' | 'B' | 'C' | 'D' | null
+          quality_remarks?: string | null
+          is_active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          lot_number?: string
+          supplier_id?: string | null
+          origin?: string | null
+          olive_type?: string
+          caliber?: string | null
+          purchase_date?: string
+          reception_id?: string | null
+          quantity_kg?: number
+          purchase_price_kg?: number
+          remaining_quantity_kg?: number | null
+          state?: 'brut' | 'fermente' | 'pret_a_conditionner' | 'conditionne' | 'epuise'
+          salt_rate?: number | null
+          brine_density?: number | null
+          quality_grade?: 'A' | 'B' | 'C' | 'D' | null
+          quality_remarks?: string | null
+          is_active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+      }
     }
   }
 }
@@ -463,3 +614,6 @@ export type Delivery = Tables<'deliveries'>
 export type Sale = Tables<'sales'>
 export type CashRegister = Tables<'cash_register'>
 export type Stock = Tables<'stock'>
+export type Facture = Tables<'factures'>
+export type FicheTrajet = Tables<'fiches_trajet'>
+export type Lot = Tables<'lots'>

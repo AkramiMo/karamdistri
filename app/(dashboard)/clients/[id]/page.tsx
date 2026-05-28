@@ -101,11 +101,31 @@ interface Payment {
   delivery?: { delivery_number: string }
 }
 
+interface Facture {
+  id: string
+  facture_number: string
+  facture_date: string
+  total_ht: number
+  total_tva: number
+  total_ttc: number
+  status: string
+  due_date: string | null
+  notes: string | null
+  delivery?: { delivery_number: string }
+  amount_paid?: number
+}
+
 interface ClientBalance {
-  total_deliveries: number
-  total_due: number
-  total_paid: number
-  balance: number
+  // Section BL
+  nb_bl: number
+  total_bl: number
+  reglement_bl: number
+  reste_bl: number
+  // Section Factures
+  nb_factures: number
+  total_factures: number
+  reglement_factures: number
+  reste_factures: number
 }
 
 const categoryLabels: Record<string, string> = {
@@ -119,7 +139,7 @@ const categoryLabels: Record<string, string> = {
 const statusColors: Record<string, string> = {
   pending: 'bg-gray-100 text-gray-800',
   in_progress: 'bg-yellow-100 text-yellow-800',
-  delivered: 'bg-green-100 text-green-800',
+  delivered: 'bg-amber-100 text-[#9A7209]',
   partial: 'bg-orange-100 text-orange-800',
   returned: 'bg-red-100 text-red-800',
 }
@@ -135,7 +155,7 @@ const statusLabels: Record<string, string> = {
 const paymentStatusColors: Record<string, string> = {
   pending: 'bg-red-100 text-red-800',
   partial: 'bg-orange-100 text-orange-800',
-  paid: 'bg-green-100 text-green-800',
+  paid: 'bg-amber-100 text-[#9A7209]',
 }
 
 const paymentStatusLabels: Record<string, string> = {
@@ -158,6 +178,24 @@ const paymentMethodIcons: Record<string, React.ReactNode> = {
   card: <CreditCard className="h-4 w-4" />,
 }
 
+const factureStatusColors: Record<string, string> = {
+  draft: 'bg-gray-100 text-gray-800',
+  sent: 'bg-blue-100 text-blue-800',
+  paid: 'bg-amber-100 text-[#9A7209]',
+  partial: 'bg-orange-100 text-orange-800',
+  overdue: 'bg-red-100 text-red-800',
+  cancelled: 'bg-red-200 text-red-900',
+}
+
+const factureStatusLabels: Record<string, string> = {
+  draft: 'Brouillon',
+  sent: 'Envoyee',
+  paid: 'Payee',
+  partial: 'Partielle',
+  overdue: 'En retard',
+  cancelled: 'Annulee',
+}
+
 export default function ClientDetailPage() {
   const params = useParams()
   const router = useRouter()
@@ -166,11 +204,18 @@ export default function ClientDetailPage() {
   const [client, setClient] = useState<Client | null>(null)
   const [deliveries, setDeliveries] = useState<Delivery[]>([])
   const [payments, setPayments] = useState<Payment[]>([])
+  const [factures, setFactures] = useState<Facture[]>([])
   const [balance, setBalance] = useState<ClientBalance>({
-    total_deliveries: 0,
-    total_due: 0,
-    total_paid: 0,
-    balance: 0,
+    // Section BL
+    nb_bl: 0,
+    total_bl: 0,
+    reglement_bl: 0,
+    reste_bl: 0,
+    // Section Factures
+    nb_factures: 0,
+    total_factures: 0,
+    reglement_factures: 0,
+    reste_factures: 0,
   })
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('info')
@@ -211,16 +256,55 @@ export default function ClientDetailPage() {
 
       setPayments(paymentsData || [])
 
-      // Calculate balance
-      const deliveredDeliveries = (deliveriesData || []).filter((d: Delivery) => d.status === 'delivered')
-      const totalDue = deliveredDeliveries.reduce((sum: number, d: Delivery) => sum + ((d.total_ht || 0) * 1.2), 0)
-      const totalPaid = (paymentsData || []).reduce((sum: number, p: Payment) => sum + p.amount, 0)
+      // Fetch factures with details
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: facturesData } = await (supabase.from('factures') as any)
+        .select('id, facture_number, facture_date, total_ht, total_tva, total_ttc, status, due_date, notes, delivery:deliveries(delivery_number)')
+        .eq('client_id', clientId)
+        .order('facture_date', { ascending: false })
+
+      // Fetch facture payments
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: facturePaymentsData } = await (supabase.from('facture_payments') as any)
+        .select('amount, facture_id')
+
+      // Calculate amount paid per facture
+      const facturePaymentsMap: Record<string, number> = {}
+      ;(facturePaymentsData || []).forEach((p: { amount: number; facture_id: string }) => {
+        facturePaymentsMap[p.facture_id] = (facturePaymentsMap[p.facture_id] || 0) + (p.amount || 0)
+      })
+
+      // Add amount_paid to each facture
+      const facturesWithPayments = (facturesData || []).map((f: Facture) => ({
+        ...f,
+        amount_paid: facturePaymentsMap[f.id] || 0,
+      }))
+
+      setFactures(facturesWithPayments)
+
+      // === Section BL ===
+      const nbBL = (deliveriesData || []).length
+      const totalBL = (deliveriesData || []).reduce((sum: number, d: Delivery) => sum + (d.total_ht || 0), 0)
+      const reglementBL = (deliveriesData || []).reduce((sum: number, d: Delivery) => sum + (d.amount_paid || 0), 0)
+      const resteBL = totalBL - reglementBL
+
+      // === Section Factures ===
+      const nbFactures = (facturesData || []).length
+      const totalFactures = (facturesData || []).reduce((sum: number, f: { total_ttc: number }) => sum + (f.total_ttc || 0), 0)
+      const reglementFactures = (facturePaymentsData || []).reduce((sum: number, p: { amount: number }) => sum + (p.amount || 0), 0)
+      const resteFactures = totalFactures - reglementFactures
 
       setBalance({
-        total_deliveries: deliveredDeliveries.length,
-        total_due: totalDue,
-        total_paid: totalPaid,
-        balance: totalDue - totalPaid,
+        // Section BL
+        nb_bl: nbBL,
+        total_bl: totalBL,
+        reglement_bl: reglementBL,
+        reste_bl: resteBL,
+        // Section Factures
+        nb_factures: nbFactures,
+        total_factures: totalFactures,
+        reglement_factures: reglementFactures,
+        reste_factures: resteFactures,
       })
     } catch (error) {
       console.error('Error fetching client data:', error)
@@ -232,6 +316,85 @@ export default function ClientDetailPage() {
   useEffect(() => {
     fetchClientData()
   }, [fetchClientData])
+
+  // Souscription en temps réel pour les paiements
+  useEffect(() => {
+    if (!clientId) return
+
+    const paymentsChannel = supabase
+      .channel(`payments-client-${clientId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'payments',
+          filter: `client_id=eq.${clientId}`,
+        },
+        () => {
+          // Rafraîchir les données quand un paiement est ajouté/modifié/supprimé
+          fetchClientData()
+        }
+      )
+      .subscribe()
+
+    // Souscription aussi pour les livraisons (pour les mises à jour de amount_paid, balance_due)
+    const deliveriesChannel = supabase
+      .channel(`deliveries-client-${clientId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'deliveries',
+          filter: `client_id=eq.${clientId}`,
+        },
+        () => {
+          fetchClientData()
+        }
+      )
+      .subscribe()
+
+    // Souscription pour les factures
+    const facturesChannel = supabase
+      .channel(`factures-client-${clientId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'factures',
+          filter: `client_id=eq.${clientId}`,
+        },
+        () => {
+          fetchClientData()
+        }
+      )
+      .subscribe()
+
+    // Souscription pour les paiements de factures
+    const facturePaymentsChannel = supabase
+      .channel(`facture-payments-client-${clientId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'facture_payments',
+        },
+        () => {
+          fetchClientData()
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(paymentsChannel)
+      supabase.removeChannel(deliveriesChannel)
+      supabase.removeChannel(facturesChannel)
+      supabase.removeChannel(facturePaymentsChannel)
+    }
+  }, [clientId, supabase, fetchClientData])
 
   const formatPrice = (price: number | null) => {
     if (price === null) return '-'
@@ -398,7 +561,7 @@ export default function ClientDetailPage() {
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-2xl font-bold text-gray-900">{client.code}</h1>
-                <Badge className={client.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}>
+                <Badge className={client.is_active ? 'bg-amber-100 text-[#9A7209]' : 'bg-red-100 text-red-800'}>
                   {client.is_active ? 'Actif' : 'Inactif'}
                 </Badge>
               </div>
@@ -417,63 +580,129 @@ export default function ClientDetailPage() {
           </div>
         </div>
 
-        {/* Balance Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">Livraisons</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center gap-2">
-                <Truck className="h-8 w-8 text-purple-600" />
-                <span className="text-2xl font-bold">{balance.total_deliveries}</span>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">Total Facture</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center gap-2">
-                <TrendingUp className="h-6 w-6 text-blue-600" />
-                <span className="text-xl font-bold text-blue-600">{formatPrice(balance.total_due)}</span>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">Total Paye</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="h-6 w-6 text-green-600" />
-                <span className="text-xl font-bold text-green-600">{formatPrice(balance.total_paid)}</span>
-              </div>
-            </CardContent>
-          </Card>
-          <Card className={balance.balance > 0 ? 'border-red-200 bg-red-50' : 'border-green-200 bg-green-50'}>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">Solde</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center gap-2">
-                {balance.balance > 0 ? (
-                  <TrendingDown className="h-6 w-6 text-red-600" />
-                ) : (
-                  <CheckCircle2 className="h-6 w-6 text-green-600" />
-                )}
-                <span className={`text-xl font-bold ${balance.balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                  {formatPrice(balance.balance)}
-                </span>
-              </div>
-            </CardContent>
-          </Card>
+        {/* Section BL */}
+        <div className="space-y-2">
+          <h3 className="text-lg font-semibold text-gray-700 flex items-center gap-2">
+            <Truck className="h-5 w-5" />
+            Bons de Livraison (BL)
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600">Nombre BL</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  <Truck className="h-6 w-6 text-purple-600" />
+                  <span className="text-2xl font-bold">{balance.nb_bl}</span>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600">Total BL</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  <FileText className="h-6 w-6 text-blue-600" />
+                  <span className="text-xl font-bold text-blue-600">{formatPrice(balance.total_bl)}</span>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600">Reglement BL</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-6 w-6 text-[#B8860B]" />
+                  <span className="text-xl font-bold text-[#B8860B]">{formatPrice(balance.reglement_bl)}</span>
+                </div>
+              </CardContent>
+            </Card>
+            <Card className={balance.reste_bl > 0 ? 'border-red-200 bg-red-50' : 'border-green-200 bg-green-50'}>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600">Reste BL</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  {balance.reste_bl > 0 ? (
+                    <TrendingDown className="h-6 w-6 text-red-600" />
+                  ) : (
+                    <CheckCircle2 className="h-6 w-6 text-green-600" />
+                  )}
+                  <span className={`text-xl font-bold ${balance.reste_bl > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                    {formatPrice(balance.reste_bl)}
+                  </span>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+
+        {/* Section Factures */}
+        <div className="space-y-2">
+          <h3 className="text-lg font-semibold text-gray-700 flex items-center gap-2">
+            <Receipt className="h-5 w-5" />
+            Factures
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600">Nombre Factures</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  <Receipt className="h-6 w-6 text-indigo-600" />
+                  <span className="text-2xl font-bold">{balance.nb_factures}</span>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600">Total Factures</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  <FileText className="h-6 w-6 text-blue-600" />
+                  <span className="text-xl font-bold text-blue-600">{formatPrice(balance.total_factures)}</span>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600">Reglement Factures</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-6 w-6 text-[#B8860B]" />
+                  <span className="text-xl font-bold text-[#B8860B]">{formatPrice(balance.reglement_factures)}</span>
+                </div>
+              </CardContent>
+            </Card>
+            <Card className={balance.reste_factures > 0 ? 'border-red-200 bg-red-50' : 'border-green-200 bg-green-50'}>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600">Reste Factures</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  {balance.reste_factures > 0 ? (
+                    <TrendingDown className="h-6 w-6 text-red-600" />
+                  ) : (
+                    <CheckCircle2 className="h-6 w-6 text-green-600" />
+                  )}
+                  <span className={`text-xl font-bold ${balance.reste_factures > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                    {formatPrice(balance.reste_factures)}
+                  </span>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         </div>
 
         {/* Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="info" className="gap-2">
               <User className="h-4 w-4" />
               Informations
@@ -481,6 +710,10 @@ export default function ClientDetailPage() {
             <TabsTrigger value="deliveries" className="gap-2">
               <Truck className="h-4 w-4" />
               Livraisons ({deliveries.length})
+            </TabsTrigger>
+            <TabsTrigger value="factures" className="gap-2">
+              <FileText className="h-4 w-4" />
+              Factures ({factures.length})
             </TabsTrigger>
             <TabsTrigger value="payments" className="gap-2">
               <Wallet className="h-4 w-4" />
@@ -583,7 +816,7 @@ export default function ClientDetailPage() {
                       )}
                       {(client.gps_lat && client.gps_lng) && (
                         <div className="flex items-center gap-3">
-                          <MapPin className="h-5 w-5 text-green-500" />
+                          <MapPin className="h-5 w-5 text-[#DAA520]" />
                           <div>
                             <p className="text-sm text-gray-500">Coordonnees GPS</p>
                             <p className="font-medium font-mono text-sm">
@@ -623,15 +856,14 @@ export default function ClientDetailPage() {
                         <TableHead>Date</TableHead>
                         <TableHead>Statut</TableHead>
                         <TableHead>Paiement</TableHead>
-                        <TableHead className="text-right">Total TTC</TableHead>
+                        <TableHead className="text-right">Total HT</TableHead>
                         <TableHead className="text-right">Paye</TableHead>
                         <TableHead className="text-right">Reste</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {deliveries.map((delivery) => {
-                        const totalTTC = (delivery.total_ht || 0) * 1.2
-                        const balanceDue = delivery.balance_due ?? totalTTC
+                        const reste = (delivery.total_ht || 0) - (delivery.amount_paid || 0)
                         return (
                           <TableRow key={delivery.id}>
                             <TableCell className="font-medium">{delivery.delivery_number}</TableCell>
@@ -651,13 +883,80 @@ export default function ClientDetailPage() {
                               </Badge>
                             </TableCell>
                             <TableCell className="text-right font-semibold">
-                              {formatPrice(totalTTC)}
+                              {formatPrice(delivery.total_ht || 0)}
                             </TableCell>
-                            <TableCell className="text-right text-green-600">
+                            <TableCell className="text-right text-[#B8860B]">
                               {formatPrice(delivery.amount_paid || 0)}
                             </TableCell>
-                            <TableCell className={`text-right font-semibold ${balanceDue > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                              {formatPrice(balanceDue)}
+                            <TableCell className={`text-right font-semibold ${reste > 0 ? 'text-red-600' : 'text-[#B8860B]'}`}>
+                              {formatPrice(reste)}
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Factures Tab */}
+          <TabsContent value="factures">
+            <Card>
+              <CardContent className="pt-6">
+                {factures.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    Aucune facture pour ce client
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>N Facture</TableHead>
+                        <TableHead>Date</TableHead>
+                        <TableHead>BL</TableHead>
+                        <TableHead>Statut</TableHead>
+                        <TableHead className="text-right">Total HT</TableHead>
+                        <TableHead className="text-right">TVA</TableHead>
+                        <TableHead className="text-right">Total TTC</TableHead>
+                        <TableHead className="text-right">Paye</TableHead>
+                        <TableHead className="text-right">Reste</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {factures.map((facture) => {
+                        const resteFacture = (facture.total_ttc || 0) - (facture.amount_paid || 0)
+                        return (
+                          <TableRow key={facture.id}>
+                            <TableCell className="font-medium">{facture.facture_number}</TableCell>
+                            <TableCell>
+                              {facture.facture_date
+                                ? format(new Date(facture.facture_date), 'dd/MM/yyyy', { locale: fr })
+                                : '-'}
+                            </TableCell>
+                            <TableCell>
+                              {facture.delivery?.delivery_number || '-'}
+                            </TableCell>
+                            <TableCell>
+                              <Badge className={factureStatusColors[facture.status] || 'bg-gray-100 text-gray-800'}>
+                                {factureStatusLabels[facture.status] || facture.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-right font-semibold">
+                              {formatPrice(facture.total_ht || 0)}
+                            </TableCell>
+                            <TableCell className="text-right text-gray-600">
+                              {formatPrice(facture.total_tva || 0)}
+                            </TableCell>
+                            <TableCell className="text-right font-semibold text-blue-600">
+                              {formatPrice(facture.total_ttc || 0)}
+                            </TableCell>
+                            <TableCell className="text-right text-[#B8860B]">
+                              {formatPrice(facture.amount_paid || 0)}
+                            </TableCell>
+                            <TableCell className={`text-right font-semibold ${resteFacture > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                              {formatPrice(resteFacture)}
                             </TableCell>
                           </TableRow>
                         )
@@ -708,7 +1007,7 @@ export default function ClientDetailPage() {
                           <TableCell className="text-gray-600">
                             {payment.reference || '-'}
                           </TableCell>
-                          <TableCell className="text-right font-semibold text-green-600">
+                          <TableCell className="text-right font-semibold text-[#B8860B]">
                             {formatPrice(payment.amount)}
                           </TableCell>
                         </TableRow>
@@ -733,11 +1032,11 @@ export default function ClientDetailPage() {
                     </div>
                     <div className="text-center">
                       <p className="text-sm text-gray-500">Total Paye</p>
-                      <p className="text-xl font-bold text-green-600">{formatPrice(balance.total_paid)}</p>
+                      <p className="text-xl font-bold text-[#B8860B]">{formatPrice(balance.total_paid)}</p>
                     </div>
                     <div className="text-center">
                       <p className="text-sm text-gray-500">Solde</p>
-                      <p className={`text-xl font-bold ${balance.balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                      <p className={`text-xl font-bold ${balance.balance > 0 ? 'text-red-600' : 'text-[#B8860B]'}`}>
                         {formatPrice(balance.balance)}
                       </p>
                     </div>
@@ -788,7 +1087,7 @@ export default function ClientDetailPage() {
                               <TableCell className="text-right text-red-600">
                                 {transaction.debit > 0 ? formatPrice(transaction.debit) : '-'}
                               </TableCell>
-                              <TableCell className="text-right text-green-600">
+                              <TableCell className="text-right text-[#B8860B]">
                                 {transaction.credit > 0 ? formatPrice(transaction.credit) : '-'}
                               </TableCell>
                             </TableRow>

@@ -18,8 +18,8 @@ export function ConnectionStatus() {
       case 'healthy':
         return {
           icon: Wifi,
-          color: 'text-green-500',
-          bgColor: 'bg-green-100',
+          color: 'text-[#DAA520]',
+          bgColor: 'bg-amber-100',
           label: 'Connecte',
         }
       case 'degraded':

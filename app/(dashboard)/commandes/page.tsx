@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
 import { Button } from '@/components/ui/button'
@@ -48,6 +49,7 @@ import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { generateInvoicePDF, generateDeliveryNotePDF } from '@/lib/pdf/invoice'
 import { useCompanySettings } from '@/hooks/useCompanySettings'
+import { useAuth } from '@/hooks/useAuth'
 import { cn } from '@/lib/utils'
 
 interface OrderItemDB {
@@ -113,22 +115,36 @@ interface OrderItem {
   quantity: number
   unit_price: number
   total_ht: number
+  lot_id?: string
+  lot_number?: string
 }
 
 const statusColors: Record<string, string> = {
-  draft: 'bg-gray-100 text-gray-800',
+  pending: 'bg-gray-100 text-gray-800',
   confirmed: 'bg-blue-100 text-blue-800',
-  in_progress: 'bg-yellow-100 text-yellow-800',
-  delivered: 'bg-green-100 text-green-800',
+  in_preparation: 'bg-yellow-100 text-yellow-800',
+  ready: 'bg-amber-100 text-[#9A7209]',
+  in_delivery: 'bg-purple-100 text-purple-800',
+  delivered: 'bg-emerald-100 text-emerald-800',
+  partial: 'bg-orange-100 text-orange-800',
+  returned: 'bg-pink-100 text-pink-800',
   cancelled: 'bg-red-100 text-red-800',
+  out_of_stock: 'bg-slate-100 text-slate-800',
+  in_progress: 'bg-cyan-100 text-cyan-800',
 }
 
 const statusLabels: Record<string, string> = {
-  draft: 'Brouillon',
-  confirmed: 'Confirmee',
+  pending: 'En attente',
+  confirmed: 'Confirmée',
+  in_preparation: 'En préparation',
+  ready: 'Prête',
+  in_delivery: 'En livraison',
+  delivered: 'Livrée',
+  partial: 'Partiellement livrée',
+  returned: 'Retournée',
+  cancelled: 'Annulée',
+  out_of_stock: 'Rupture de stock',
   in_progress: 'En cours',
-  delivered: 'Livree',
-  cancelled: 'Annulee',
 }
 
 interface ClientPrice {
@@ -136,10 +152,35 @@ interface ClientPrice {
   custom_price: number
 }
 
+interface Lot {
+  id: string
+  lot_number: string
+  olive_type: string
+  state: string
+  remaining_quantity_kg: number | null
+}
+
+interface StockByLot {
+  id: string
+  article_id: string
+  lot_id: string | null
+  quantity: number
+  lot?: {
+    id: string
+    lot_number: string
+  }
+  article?: {
+    code: string
+    name: string
+  }
+}
+
 export default function CommandesPage() {
   const [orders, setOrders] = useState<Order[]>([])
   const [clients, setClients] = useState<Client[]>([])
   const [articles, setArticles] = useState<Article[]>([])
+  const [lots, setLots] = useState<Lot[]>([])
+  const [stockByLot, setStockByLot] = useState<StockByLot[]>([])
   const [clientPrices, setClientPrices] = useState<ClientPrice[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
@@ -153,11 +194,14 @@ export default function CommandesPage() {
     client_id: '',
     order_date: '',
     notes: '',
-    status: 'draft',
+    status: 'pending',
   })
   const [editOrderItems, setEditOrderItems] = useState<OrderItem[]>([])
   const supabase = createClient()
+  const router = useRouter()
   const { companySettings } = useCompanySettings()
+  const { profile } = useAuth()
+  const isLivreur = profile?.role?.name === 'livreur'
 
   const [formData, setFormData] = useState({
     client_id: '',
@@ -168,6 +212,7 @@ export default function CommandesPage() {
   const [orderItems, setOrderItems] = useState<OrderItem[]>([])
   const [selectedArticle, setSelectedArticle] = useState('')
   const [selectedQuantity, setSelectedQuantity] = useState('1')
+  const [selectedLot, setSelectedLot] = useState('')
 
   // Combobox open states
   const [clientOpen, setClientOpen] = useState(false)
@@ -220,6 +265,46 @@ export default function CommandesPage() {
     setArticles(data || [])
   }
 
+  const fetchLots = async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await (supabase.from('lots') as any)
+      .select('id, lot_number, olive_type, state, remaining_quantity_kg')
+      .neq('state', 'epuise')
+      .eq('is_active', true)
+      .order('purchase_date', { ascending: false })
+    setLots(data || [])
+  }
+
+  const fetchStockByLot = async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await (supabase.from('stock') as any)
+      .select(`
+        id,
+        article_id,
+        lot_id,
+        quantity,
+        lot:lots(id, lot_number),
+        article:articles(code, name)
+      `)
+      .gt('quantity', 0)
+      .order('quantity', { ascending: false })
+    setStockByLot(data || [])
+  }
+
+  // Get available stock for an article+lot combination
+  const getAvailableStock = (articleId: string, lotId: string | null): number => {
+    const stock = stockByLot.find(s =>
+      s.article_id === articleId &&
+      (s.lot_id === lotId || (!s.lot_id && !lotId))
+    )
+    return stock?.quantity || 0
+  }
+
+  // Get lots that have stock for a specific article
+  const getLotsWithStockForArticle = (articleId: string): StockByLot[] => {
+    return stockByLot.filter(s => s.article_id === articleId && s.quantity > 0)
+  }
+
   const fetchClientPrices = async (clientId: string) => {
     if (!clientId) {
       setClientPrices([])
@@ -244,6 +329,8 @@ export default function CommandesPage() {
     fetchOrders()
     fetchClients()
     fetchArticles()
+    fetchLots()
+    fetchStockByLot()
   }, [])
 
   // Fetch client prices when client changes
@@ -256,18 +343,20 @@ export default function CommandesPage() {
   }, [formData.client_id])
 
   const generateOrderNumber = async (): Promise<string> => {
-    // Query database for the highest order number to avoid duplicates
+    // Query database for all order numbers and find the max numerically
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data } = await (supabase.from('orders') as any)
       .select('order_number')
       .like('order_number', 'BCC%')
-      .order('order_number', { ascending: false })
-      .limit(1)
 
     if (data && data.length > 0) {
-      const lastNum = parseInt(data[0].order_number.replace('BCC', ''))
-      if (!isNaN(lastNum)) {
-        return `BCC${lastNum + 1}`
+      const numbers = data
+        .map((d: { order_number: string }) => parseInt(d.order_number.replace('BCC', '')))
+        .filter((n: number) => !isNaN(n))
+
+      if (numbers.length > 0) {
+        const maxNum = Math.max(...numbers)
+        return `BCC${maxNum + 1}`
       }
     }
     return `BCC${401}`
@@ -279,7 +368,25 @@ export default function CommandesPage() {
     const article = articles.find(a => a.id === selectedArticle)
     if (!article) return
 
+    const lot = selectedLot ? lots.find(l => l.id === selectedLot) : null
     const quantity = parseInt(selectedQuantity)
+
+    // Vérifier le stock disponible
+    const availableStock = getAvailableStock(selectedArticle, selectedLot || null)
+
+    // Calculer la quantité déjà ajoutée pour cet article+lot dans la commande
+    const alreadyOrdered = orderItems
+      .filter(item => item.article_id === selectedArticle && (item.lot_id || '') === (selectedLot || ''))
+      .reduce((sum, item) => sum + item.quantity, 0)
+
+    const totalRequestedQty = alreadyOrdered + quantity
+
+    if (availableStock > 0 && totalRequestedQty > availableStock) {
+      const remainingStock = availableStock - alreadyOrdered
+      alert(`Stock insuffisant!\n\nStock disponible: ${availableStock}\nDéjà commandé: ${alreadyOrdered}\nRestant: ${remainingStock}\nQuantité demandée: ${quantity}`)
+      return
+    }
+
     const unitPrice = getArticlePrice(selectedArticle)
     const total_ht = unitPrice * quantity
 
@@ -291,10 +398,13 @@ export default function CommandesPage() {
       quantity,
       unit_price: unitPrice,
       total_ht,
+      lot_id: lot?.id,
+      lot_number: lot?.lot_number,
     }])
 
     setSelectedArticle('')
     setSelectedQuantity('1')
+    setSelectedLot('')
   }
 
   const removeItem = (index: number) => {
@@ -323,7 +433,7 @@ export default function CommandesPage() {
         order_number: orderNumber,
         client_id: formData.client_id,
         order_date: formData.order_date,
-        status: 'draft',
+        status: 'pending',
         total_ht,
         total_tva,
         total_ttc,
@@ -352,6 +462,7 @@ export default function CommandesPage() {
       unit_price: item.unit_price,
       discount_percent: 0,
       total_ht: item.total_ht,
+      lot_id: item.lot_id || null,
     }))
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -406,43 +517,78 @@ export default function CommandesPage() {
     generateInvoicePDF(pdfOrder, companySettings)
   }
 
-  const handleGenerateDeliveryNote = (order: Order) => {
+  const generateDeliveryNumber = () => {
+    const date = new Date()
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0')
+    return `BL-${year}${month}-${random}`
+  }
+
+  const handleCreateDelivery = async (order: Order) => {
     if (!order.client || !order.order_items) {
       alert('Donnees de commande incompletes')
       return
     }
 
-    const pdfOrder = {
-      id: order.id,
-      order_number: order.order_number,
-      order_date: order.order_date,
-      status: order.status,
-      total_ht: order.total_ht || 0,
-      total_tva: order.total_tva || 0,
-      total_ttc: order.total_ttc || 0,
-      notes: order.notes,
-      client: {
-        code: order.client.code,
-        name: order.client.name,
-        contact_name: order.client.contact_name,
-        phone: order.client.phone,
-        email: order.client.email,
-        address: order.client.address,
-        city: order.client.city,
-      },
-      order_items: order.order_items.map(item => ({
-        article: {
-          code: item.article?.code || '',
-          name: item.article?.name || '',
-          description: item.article?.description || null,
-        },
-        quantity: item.quantity,
-        unit_price: item.unit_price,
-        total_ht: item.total_ht,
-      })),
+    // Check if a delivery already exists for this order
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: existingDeliveries } = await (supabase.from('deliveries') as any)
+      .select('id, delivery_number')
+      .eq('order_id', order.id)
+
+    if (existingDeliveries && existingDeliveries.length > 0) {
+      alert(`Un BL existe déjà pour cette commande: ${existingDeliveries[0].delivery_number}`)
+      return
     }
 
-    generateDeliveryNotePDF(pdfOrder, companySettings)
+    // Create the delivery
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: newDelivery, error } = await (supabase.from('deliveries') as any).insert([{
+      delivery_number: generateDeliveryNumber(),
+      order_id: order.id,
+      client_id: order.client_id,
+      delivery_date: new Date().toISOString().split('T')[0],
+      status: 'pending',
+      total_ht: order.total_ht || 0,
+      notes: order.notes || null,
+    }]).select().single()
+
+    if (error) {
+      console.error('Error creating delivery:', error)
+      alert(`Erreur lors de la création du BL: ${error.message || JSON.stringify(error)}`)
+      return
+    }
+
+    // Copy order items to delivery items
+    if (order.order_items && order.order_items.length > 0 && newDelivery) {
+      const deliveryItems = order.order_items.map(item => ({
+        delivery_id: newDelivery.id,
+        article_id: item.article_id,
+        quantity_ordered: item.quantity,
+        quantity_delivered: item.quantity,
+        quantity_returned: 0,
+        unit_price: item.unit_price,
+      }))
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: itemsError } = await (supabase.from('delivery_items') as any).insert(deliveryItems)
+
+      if (itemsError) {
+        console.error('Error creating delivery items:', itemsError)
+      }
+    }
+
+    // Update order status to in_delivery
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase.from('orders') as any)
+      .update({ status: 'in_delivery' })
+      .eq('id', order.id)
+
+    alert(`BL créé avec succès: ${newDelivery.delivery_number}`)
+    setIsViewDialogOpen(false)
+    fetchOrders()
+    router.push('/livraisons')
   }
 
   const updateOrderStatus = async (orderId: string, newStatus: string) => {
@@ -460,26 +606,117 @@ export default function CommandesPage() {
   }
 
   const handleDeleteOrder = async (orderId: string, orderNumber: string) => {
-    if (!confirm(`Êtes-vous sûr de vouloir supprimer la commande ${orderNumber} ?`)) {
-      return
+    // Vérifier s'il y a des BL liés à cette commande
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: linkedDeliveries } = await (supabase.from('deliveries') as any)
+      .select('id, delivery_number')
+      .eq('order_id', orderId)
+
+    if (linkedDeliveries && linkedDeliveries.length > 0) {
+      const blNumbers = linkedDeliveries.map((d: any) => d.delivery_number).join(', ')
+      const confirmDelete = confirm(
+        `Cette commande est liée à ${linkedDeliveries.length} BL(s): ${blNumbers}.\n\n` +
+        `Voulez-vous supprimer la commande ET les BL associés ?`
+      )
+      if (!confirmDelete) return
+
+      // Supprimer les delivery_items et deliveries liés
+      for (const delivery of linkedDeliveries) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabase.from('delivery_items') as any).delete().eq('delivery_id', delivery.id)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabase.from('deliveries') as any).delete().eq('id', delivery.id)
+      }
+    } else {
+      if (!confirm(`Êtes-vous sûr de vouloir supprimer la commande ${orderNumber} ?`)) {
+        return
+      }
     }
 
-    // First delete order items
+    // Supprimer les order_items
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (supabase.from('order_items') as any).delete().eq('order_id', orderId)
 
-    // Then delete the order
+    // Supprimer la commande
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error } = await (supabase.from('orders') as any).delete().eq('id', orderId)
 
     if (error) {
       console.error('Error deleting order:', error)
-      alert('Erreur lors de la suppression de la commande')
+      if (error.code === '23503') {
+        alert('Impossible de supprimer cette commande car elle est liée à d\'autres documents (ventes, factures, etc.)')
+      } else {
+        alert(`Erreur lors de la suppression: ${error.message}`)
+      }
     } else {
       fetchOrders()
       if (viewingOrder?.id === orderId) {
         setIsViewDialogOpen(false)
       }
+    }
+  }
+
+  const handleCreateBL = async (order: Order) => {
+    if (!confirm(`Créer un Bon de Livraison pour la commande ${order.order_number} ?`)) return
+
+    // Générer le numéro BL
+    const date = new Date()
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0')
+    const deliveryNumber = `BL-${year}${month}-${random}`
+
+    // Créer le BL
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: newDelivery, error } = await (supabase.from('deliveries') as any).insert([{
+      delivery_number: deliveryNumber,
+      order_id: order.id,
+      client_id: order.client_id,
+      delivery_date: new Date().toISOString().split('T')[0],
+      status: 'pending',
+      total_ht: order.total_ht || 0,
+      notes: `BL créé depuis commande ${order.order_number}`,
+    }]).select().single()
+
+    if (error) {
+      console.error('Error creating delivery:', error)
+      alert('Erreur lors de la création du BL')
+      return
+    }
+
+    // Copier les order_items en delivery_items
+    if (newDelivery && order.order_items && order.order_items.length > 0) {
+      const deliveryItems = order.order_items.map((item) => ({
+        delivery_id: newDelivery.id,
+        article_id: item.article_id,
+        quantity_ordered: item.quantity,
+        quantity_delivered: item.quantity,
+        quantity_returned: 0,
+        unit_price: item.unit_price,
+      }))
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: itemsError } = await (supabase.from('delivery_items') as any).insert(deliveryItems)
+      if (itemsError) {
+        console.error('Error creating delivery items:', itemsError)
+      }
+    }
+
+    alert(`BL ${deliveryNumber} créé avec succès`)
+    router.push('/livraisons')
+  }
+
+  const handleChangeStatus = async (orderId: string, newStatus: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('orders') as any)
+      .update({ status: newStatus })
+      .eq('id', orderId)
+
+    if (error) {
+      console.error('Error updating status:', error)
+      alert('Erreur lors du changement de statut')
+    } else {
+      fetchOrders()
     }
   }
 
@@ -661,12 +898,6 @@ export default function CommandesPage() {
     }).format(price || 0)
   }
 
-  // Stats
-  const totalCA = orders.reduce((sum, o) => sum + (o.total_ttc || 0), 0)
-  const pendingOrders = orders.filter((o) => o.status === 'draft' || o.status === 'confirmed').length
-  const inProgressOrders = orders.filter((o) => o.status === 'in_progress').length
-  const deliveredOrders = orders.filter((o) => o.status === 'delivered').length
-
   return (
     <ProtectedModule module="commandes">
       <div className="space-y-6">
@@ -676,20 +907,19 @@ export default function CommandesPage() {
             <p className="text-gray-500">Gerez vos commandes clients</p>
           </div>
 
-          <ProtectedModule module="commandes" action="create">
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-              <DialogTrigger asChild>
-                <Button
-                  className="bg-green-600 hover:bg-green-700"
-                  onClick={() => {
-                    resetForm()
-                    setIsDialogOpen(true)
-                  }}
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Nouvelle commande
-                </Button>
-              </DialogTrigger>
+          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+            <DialogTrigger asChild>
+              <Button
+                className="bg-[#B8860B] hover:bg-[#9A7209]"
+                onClick={() => {
+                  resetForm()
+                  setIsDialogOpen(true)
+                }}
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                Nouvelle commande
+              </Button>
+            </DialogTrigger>
             <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Nouvelle commande</DialogTitle>
@@ -704,7 +934,7 @@ export default function CommandesPage() {
                           variant="outline"
                           role="combobox"
                           aria-expanded={clientOpen}
-                          className="w-full justify-between"
+                          className="w-full justify-between bg-[#F5E6C8]"
                         >
                           {formData.client_id
                             ? clients.find((c) => c.id === formData.client_id)?.name || "Client selectionne"
@@ -721,7 +951,7 @@ export default function CommandesPage() {
                               {clients.map((client) => (
                                 <CommandItem
                                   key={client.id}
-                                  value={`${client.code} ${client.name} ${client.phone || ''}`}
+                                  value={`${client.code} ${client.name}`}
                                   onSelect={() => {
                                     setFormData({ ...formData, client_id: client.id })
                                     setClientOpen(false)
@@ -735,9 +965,6 @@ export default function CommandesPage() {
                                   />
                                   <span className="font-medium">{client.code}</span>
                                   <span className="ml-2 text-gray-600">{client.name}</span>
-                                  {client.phone && (
-                                    <span className="ml-2 text-gray-400 text-sm">{client.phone}</span>
-                                  )}
                                 </CommandItem>
                               ))}
                             </CommandGroup>
@@ -753,6 +980,7 @@ export default function CommandesPage() {
                       type="date"
                       value={formData.order_date}
                       onChange={(e) => setFormData({ ...formData, order_date: e.target.value })}
+                      className="bg-[#F5E6C8]"
                     />
                   </div>
                 </div>
@@ -764,6 +992,7 @@ export default function CommandesPage() {
                     value={formData.notes}
                     onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                     placeholder="Notes sur la commande"
+                    className="bg-[#F5E6C8]"
                   />
                 </div>
 
@@ -771,27 +1000,30 @@ export default function CommandesPage() {
                   <h3 className="font-medium mb-3">
                     Articles
                     {clientPrices.length > 0 && (
-                      <Badge className="ml-2 bg-green-100 text-green-800">
+                      <Badge className="ml-2 bg-amber-100 text-[#9A7209]">
                         {clientPrices.length} prix personnalises
                       </Badge>
                     )}
+                    {selectedArticle && (
+                      <Badge className="ml-2 bg-blue-100 text-blue-800">
+                        Stock total: {getLotsWithStockForArticle(selectedArticle).reduce((sum, s) => sum + s.quantity, 0)}
+                      </Badge>
+                    )}
                   </h3>
-                  <div className="flex gap-2 mb-4">
+                  <div className="flex gap-2 mb-4 flex-wrap">
                     <Popover open={articleOpen} onOpenChange={setArticleOpen}>
                       <PopoverTrigger asChild>
                         <Button
                           variant="outline"
                           role="combobox"
                           aria-expanded={articleOpen}
-                          className="flex-1 justify-between"
+                          className="flex-1 min-w-[200px] justify-between bg-[#F5E6C8]"
                         >
                           {selectedArticle
                             ? (() => {
                                 const article = articles.find((a) => a.id === selectedArticle)
                                 if (!article) return "Article selectionne"
-                                const clientPrice = clientPrices.find(cp => cp.article_id === article.id)
-                                const displayPrice = clientPrice ? clientPrice.custom_price : article.price_ht
-                                return `${article.code} - ${article.name} (${formatPrice(displayPrice)})`
+                                return `${article.code} - ${article.name}`
                               })()
                             : "Rechercher un article..."}
                           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
@@ -804,14 +1036,15 @@ export default function CommandesPage() {
                             <CommandEmpty>Aucun article trouve.</CommandEmpty>
                             <CommandGroup>
                               {articles.map((article) => {
-                                const clientPrice = clientPrices.find(cp => cp.article_id === article.id)
-                                const displayPrice = clientPrice ? clientPrice.custom_price : article.price_ht
+                                const articleStock = getLotsWithStockForArticle(article.id)
+                                const totalStock = articleStock.reduce((sum, s) => sum + s.quantity, 0)
                                 return (
                                   <CommandItem
                                     key={article.id}
                                     value={`${article.code} ${article.name}`}
                                     onSelect={() => {
                                       setSelectedArticle(article.id)
+                                      setSelectedLot('') // Reset lot selection when article changes
                                       setArticleOpen(false)
                                     }}
                                   >
@@ -822,9 +1055,13 @@ export default function CommandesPage() {
                                       )}
                                     />
                                     <span className="font-medium">{article.code}</span>
-                                    <span className="ml-2 text-gray-600">{article.name}</span>
-                                    <span className="ml-auto text-green-600">{formatPrice(displayPrice)}</span>
-                                    {clientPrice && <Badge className="ml-1 bg-yellow-100 text-yellow-800 text-xs">*</Badge>}
+                                    <span className="ml-2 text-gray-600 flex-1">{article.name}</span>
+                                    <span className={cn(
+                                      "ml-2 text-xs px-2 py-0.5 rounded-full",
+                                      totalStock > 0 ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                                    )}>
+                                      {totalStock > 0 ? `${totalStock} dispo` : 'Rupture'}
+                                    </span>
                                   </CommandItem>
                                 )
                               })}
@@ -833,16 +1070,42 @@ export default function CommandesPage() {
                         </Command>
                       </PopoverContent>
                     </Popover>
+                    <Select
+                      value={selectedLot || 'none'}
+                      onValueChange={(value) => setSelectedLot(value === 'none' ? '' : value)}
+                    >
+                      <SelectTrigger className="w-[250px] bg-[#F5E6C8]">
+                        <SelectValue placeholder="N° Lot (stock)" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Sans lot</SelectItem>
+                        {selectedArticle ? (
+                          // Afficher les lots avec stock pour l'article sélectionné
+                          getLotsWithStockForArticle(selectedArticle).map((stock) => (
+                            <SelectItem key={stock.lot_id || 'no-lot'} value={stock.lot_id || 'none'}>
+                              {stock.lot?.lot_number || 'Sans lot'} ({stock.quantity} dispo)
+                            </SelectItem>
+                          ))
+                        ) : (
+                          // Si pas d'article sélectionné, afficher tous les lots
+                          lots.map((lot) => (
+                            <SelectItem key={lot.id} value={lot.id}>
+                              {lot.lot_number}
+                            </SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
                     <Input
                       type="number"
                       min="1"
                       value={selectedQuantity}
                       onChange={(e) => setSelectedQuantity(e.target.value)}
-                      className="w-24"
+                      className="w-24 bg-[#F5E6C8]"
                       placeholder="Qte"
                     />
-                    <Button type="button" onClick={addItem} variant="outline">
-                      <Plus className="h-4 w-4" />
+                    <Button type="button" onClick={addItem} className="bg-[#B8860B] hover:bg-[#9A7209] text-white">
+                      Ajouter
                     </Button>
                   </div>
 
@@ -851,6 +1114,7 @@ export default function CommandesPage() {
                       <TableHeader>
                         <TableRow>
                           <TableHead>Article</TableHead>
+                          <TableHead>N° Lot</TableHead>
                           <TableHead className="text-right">Qte</TableHead>
                           <TableHead className="text-right">Prix unit.</TableHead>
                           <TableHead className="text-right">Total HT</TableHead>
@@ -858,31 +1122,53 @@ export default function CommandesPage() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {orderItems.map((item, index) => (
-                          <TableRow key={index}>
-                            <TableCell>
-                              <div>
-                                <span className="font-mono text-sm">{item.article_code}</span>
-                                <span className="ml-2">{item.article_name}</span>
-                              </div>
-                            </TableCell>
-                            <TableCell className="text-right">{item.quantity}</TableCell>
-                            <TableCell className="text-right">{formatPrice(item.unit_price)}</TableCell>
-                            <TableCell className="text-right">{formatPrice(item.total_ht)}</TableCell>
-                            <TableCell>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => removeItem(index)}
-                              >
-                                <Trash2 className="h-4 w-4 text-red-600" />
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        ))}
+                        {orderItems.map((item, index) => {
+                          const availableStock = getAvailableStock(item.article_id, item.lot_id || null)
+                          const orderedQty = orderItems
+                            .filter(i => i.article_id === item.article_id && (i.lot_id || '') === (item.lot_id || ''))
+                            .reduce((sum, i) => sum + i.quantity, 0)
+                          const isOverStock = availableStock > 0 && orderedQty > availableStock
+
+                          return (
+                            <TableRow key={index} className={isOverStock ? 'bg-red-50' : ''}>
+                              <TableCell>
+                                <div>
+                                  <span className="font-mono text-sm">{item.article_code}</span>
+                                  <span className="ml-2">{item.article_name}</span>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                {item.lot_number ? (
+                                  <div>
+                                    <span className="font-mono text-xs text-blue-600">{item.lot_number}</span>
+                                    <span className="text-xs text-gray-500 ml-1">({availableStock} dispo)</span>
+                                  </div>
+                                ) : (
+                                  <span className="text-gray-400 text-xs">-</span>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <span className={isOverStock ? 'text-red-600 font-bold' : ''}>
+                                  {item.quantity}
+                                </span>
+                              </TableCell>
+                              <TableCell className="text-right">{formatPrice(item.unit_price)}</TableCell>
+                              <TableCell className="text-right">{formatPrice(item.total_ht)}</TableCell>
+                              <TableCell>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => removeItem(index)}
+                                >
+                                  <Trash2 className="h-4 w-4 text-red-600" />
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          )
+                        })}
                         <TableRow>
-                          <TableCell colSpan={3} className="text-right font-medium">
+                          <TableCell colSpan={4} className="text-right font-medium">
                             Total HT:
                           </TableCell>
                           <TableCell className="text-right font-bold">
@@ -899,83 +1185,48 @@ export default function CommandesPage() {
                   <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                     Annuler
                   </Button>
-                  <Button type="submit" className="bg-green-600 hover:bg-green-700">
+                  <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
                     Creer la commande
                   </Button>
                 </div>
               </form>
             </DialogContent>
-            </Dialog>
-          </ProtectedModule>
+          </Dialog>
         </div>
 
-        {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">
-                Total Commandes
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center gap-2">
-                <ShoppingCart className="h-8 w-8 text-green-600" />
-                <span className="text-2xl font-bold">{orders.length}</span>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">
-                CA Total
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <span className="text-xl font-bold text-green-600">
-                {formatPrice(totalCA)}
-              </span>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">
-                En attente
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <span className="text-2xl font-bold text-yellow-600">
-                {pendingOrders}
-              </span>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">
-                En cours
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <span className="text-2xl font-bold text-blue-600">
-                {inProgressOrders}
-              </span>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">
-                Livrees
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <span className="text-2xl font-bold text-green-600">
-                {deliveredOrders}
-              </span>
-            </CardContent>
-          </Card>
+        {/* Status Filter Buttons */}
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant={statusFilter === 'all' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setStatusFilter('all')}
+            className={statusFilter === 'all' ? 'bg-[#B8860B] hover:bg-[#9A7209]' : 'border-[#B8860B] text-[#B8860B] hover:bg-[#B8860B] hover:text-white'}
+          >
+            Tous ({orders.length})
+          </Button>
+          {Object.entries(statusLabels).map(([key, label]) => {
+            const count = orders.filter(o => o.status === key).length
+            return (
+              <Button
+                key={key}
+                variant={statusFilter === key ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setStatusFilter(key)}
+                className={cn(
+                  'border-2 transition-all',
+                  statusFilter === key
+                    ? statusColors[key]
+                    : 'border-[#B8860B] hover:bg-[#B8860B] hover:text-white'
+                )}
+              >
+                {label} ({count})
+              </Button>
+            )
+          })}
         </div>
 
         {/* Search & Table */}
-        <Card>
+        <Card className="border-2 border-[#B8860B]">
           <CardHeader>
             <div className="flex flex-col md:flex-row gap-4">
               <div className="relative flex-1">
@@ -984,22 +1235,9 @@ export default function CommandesPage() {
                   placeholder="Rechercher par numero ou client..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10"
+                  className="pl-10 border-2 border-[#B8860B]"
                 />
               </div>
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-full md:w-48">
-                  <SelectValue placeholder="Statut" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Tous les statuts</SelectItem>
-                  <SelectItem value="draft">Brouillon</SelectItem>
-                  <SelectItem value="confirmed">Confirmee</SelectItem>
-                  <SelectItem value="in_progress">En cours</SelectItem>
-                  <SelectItem value="delivered">Livree</SelectItem>
-                  <SelectItem value="cancelled">Annulee</SelectItem>
-                </SelectContent>
-              </Select>
             </div>
           </CardHeader>
           <CardContent>
@@ -1010,13 +1248,13 @@ export default function CommandesPage() {
                 Aucune commande trouvee
               </div>
             ) : (
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto border-2 border-[#B8860B] rounded-lg">
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead>Date</TableHead>
                       <TableHead>N Commande</TableHead>
                       <TableHead>Client</TableHead>
-                      <TableHead>Date</TableHead>
                       <TableHead className="text-center">Articles</TableHead>
                       <TableHead>Statut</TableHead>
                       <TableHead className="text-right">Total HT</TableHead>
@@ -1026,6 +1264,11 @@ export default function CommandesPage() {
                   <TableBody>
                     {filteredOrders.map((order) => (
                       <TableRow key={order.id}>
+                        <TableCell>
+                          {format(new Date(order.order_date), 'dd/MM/yyyy', {
+                            locale: fr,
+                          })}
+                        </TableCell>
                         <TableCell className="font-mono font-medium">
                           {order.order_number}
                         </TableCell>
@@ -1035,14 +1278,9 @@ export default function CommandesPage() {
                             <span className="text-gray-500 ml-2">{order.client?.name}</span>
                           </div>
                         </TableCell>
-                        <TableCell>
-                          {format(new Date(order.order_date), 'dd/MM/yyyy', {
-                            locale: fr,
-                          })}
-                        </TableCell>
                         <TableCell className="text-center">
                           <Badge variant="outline">
-                            {order.order_items?.length || 0}
+                            {order.order_items?.reduce((sum, item) => sum + (item.quantity || 0), 0) || 0}
                           </Badge>
                         </TableCell>
                         <TableCell>
@@ -1054,7 +1292,7 @@ export default function CommandesPage() {
                           {formatPrice(order.total_ht)}
                         </TableCell>
                         <TableCell className="text-right">
-                          <div className="flex justify-end gap-1">
+                          <div className="flex justify-end items-center gap-1">
                             <Button
                               variant="ghost"
                               size="icon"
@@ -1063,38 +1301,49 @@ export default function CommandesPage() {
                             >
                               <Eye className="h-4 w-4" />
                             </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              title="Modifier"
-                              onClick={() => handleEditOrder(order)}
-                            >
-                              <Pencil className="h-4 w-4 text-orange-600" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              title="Telecharger facture"
-                              onClick={() => handleGenerateInvoice(order)}
-                            >
-                              <FileText className="h-4 w-4 text-blue-600" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              title="Telecharger BL"
-                              onClick={() => handleGenerateDeliveryNote(order)}
-                            >
-                              <Truck className="h-4 w-4 text-green-600" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              title="Supprimer"
-                              onClick={() => handleDeleteOrder(order.id, order.order_number)}
-                            >
-                              <Trash2 className="h-4 w-4 text-red-600" />
-                            </Button>
+                            {!isLivreur && (
+                              <>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  title="Créer un BL"
+                                  onClick={() => handleCreateBL(order)}
+                                >
+                                  <Truck className="h-4 w-4 text-[#B8860B]" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  title="Modifier"
+                                  onClick={() => handleEditOrder(order)}
+                                >
+                                  <Pencil className="h-4 w-4 text-orange-600" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  title="Supprimer"
+                                  onClick={() => handleDeleteOrder(order.id, order.order_number)}
+                                >
+                                  <Trash2 className="h-4 w-4 text-red-600" />
+                                </Button>
+                                <Select
+                                  value={order.status}
+                                  onValueChange={(value) => handleChangeStatus(order.id, value)}
+                                >
+                                  <SelectTrigger className="h-8 w-36 text-xs font-medium bg-[#D4A847] text-gray-900 border-[#C49A3C] hover:bg-[#C49A3C]">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {Object.entries(statusLabels).map(([key, label]) => (
+                                      <SelectItem key={key} value={key}>
+                                        {label}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </>
+                            )}
                           </div>
                         </TableCell>
                       </TableRow>
@@ -1114,7 +1363,7 @@ export default function CommandesPage() {
           <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-3 text-xl">
-                <ShoppingCart className="h-6 w-6 text-green-600" />
+                <ShoppingCart className="h-6 w-6 text-[#B8860B]" />
                 Commande {viewingOrder?.order_number}
                 {viewingOrder && (
                   <Badge className={`ml-2 ${statusColors[viewingOrder.status]}`}>
@@ -1128,10 +1377,10 @@ export default function CommandesPage() {
                 {/* Header with Client & Order Info */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {/* Client Card */}
-                  <div className="bg-gradient-to-br from-green-50 to-green-100 border border-green-200 rounded-xl p-4">
+                  <div className="bg-gradient-to-br from-amber-50 to-amber-100 border border-amber-200 rounded-xl p-4">
                     <div className="flex items-center gap-2 mb-3">
-                      <Users className="h-5 w-5 text-green-600" />
-                      <h3 className="font-semibold text-green-800">Client</h3>
+                      <Users className="h-5 w-5 text-[#B8860B]" />
+                      <h3 className="font-semibold text-[#9A7209]">Client</h3>
                     </div>
                     <div className="space-y-1">
                       <p className="font-bold text-lg text-gray-900">
@@ -1179,10 +1428,6 @@ export default function CommandesPage() {
                         <p className="text-xs text-gray-500 uppercase">Articles</p>
                         <p className="font-medium">{viewingOrder.order_items?.length || 0} produits</p>
                       </div>
-                      <div>
-                        <p className="text-xs text-gray-500 uppercase">Total TTC</p>
-                        <p className="font-bold text-green-600 text-lg">{formatPrice(viewingOrder.total_ttc)}</p>
-                      </div>
                     </div>
                   </div>
                 </div>
@@ -1223,18 +1468,10 @@ export default function CommandesPage() {
                   {/* Totals Section */}
                   <div className="bg-gray-50 p-4 border-t">
                     <div className="flex justify-end">
-                      <div className="w-72 space-y-2">
-                        <div className="flex justify-between text-sm">
-                          <span className="text-gray-600">Total HT:</span>
-                          <span className="font-medium">{formatPrice(viewingOrder.total_ht)}</span>
-                        </div>
-                        <div className="flex justify-between text-sm">
-                          <span className="text-gray-600">TVA (20%):</span>
-                          <span className="font-medium">{formatPrice(viewingOrder.total_tva)}</span>
-                        </div>
-                        <div className="flex justify-between text-lg font-bold border-t pt-2 mt-2">
-                          <span className="text-green-700">Total TTC:</span>
-                          <span className="text-green-700">{formatPrice(viewingOrder.total_ttc)}</span>
+                      <div className="w-72">
+                        <div className="flex justify-between text-lg font-bold">
+                          <span className="text-[#9A7209]">Total HT:</span>
+                          <span className="text-[#9A7209]">{formatPrice(viewingOrder.total_ht)}</span>
                         </div>
                       </div>
                     </div>
@@ -1251,26 +1488,20 @@ export default function CommandesPage() {
 
                 {/* Actions */}
                 <div className="flex flex-wrap justify-end gap-3 pt-4 border-t">
+                  {!isLivreur && (
+                    <Button
+                      className="bg-[#B8860B] hover:bg-[#9A7209]"
+                      onClick={() => handleCreateDelivery(viewingOrder)}
+                    >
+                      <Truck className="h-4 w-4 mr-2" />
+                      Créer BL
+                    </Button>
+                  )}
                   <Button
-                    variant="outline"
+                    className="bg-[#B8860B] hover:bg-[#9A7209] text-white"
                     onClick={() => setIsViewDialogOpen(false)}
                   >
                     Fermer
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="border-green-600 text-green-600 hover:bg-green-50"
-                    onClick={() => handleGenerateDeliveryNote(viewingOrder)}
-                  >
-                    <Truck className="h-4 w-4 mr-2" />
-                    Bon de Livraison
-                  </Button>
-                  <Button
-                    className="bg-blue-600 hover:bg-blue-700"
-                    onClick={() => handleGenerateInvoice(viewingOrder)}
-                  >
-                    <Download className="h-4 w-4 mr-2" />
-                    Telecharger Facture
                   </Button>
                 </div>
               </div>
@@ -1297,7 +1528,7 @@ export default function CommandesPage() {
                         variant="outline"
                         role="combobox"
                         aria-expanded={editClientOpen}
-                        className="w-full justify-between"
+                        className="w-full justify-between bg-[#F5E6C8]"
                       >
                         {editFormData.client_id
                           ? clients.find((c) => c.id === editFormData.client_id)?.name || "Client selectionne"
@@ -1314,7 +1545,7 @@ export default function CommandesPage() {
                             {clients.map((client) => (
                               <CommandItem
                                 key={client.id}
-                                value={`${client.code} ${client.name} ${client.phone || ''}`}
+                                value={`${client.code} ${client.name}`}
                                 onSelect={() => {
                                   handleEditClientChange(client.id)
                                   setEditClientOpen(false)
@@ -1328,9 +1559,6 @@ export default function CommandesPage() {
                                 />
                                 <span className="font-medium">{client.code}</span>
                                 <span className="ml-2 text-gray-600">{client.name}</span>
-                                {client.phone && (
-                                  <span className="ml-2 text-gray-400 text-sm">{client.phone}</span>
-                                )}
                               </CommandItem>
                             ))}
                           </CommandGroup>
@@ -1346,6 +1574,7 @@ export default function CommandesPage() {
                     type="date"
                     value={editFormData.order_date}
                     onChange={(e) => setEditFormData({ ...editFormData, order_date: e.target.value })}
+                    className="bg-[#F5E6C8]"
                   />
                 </div>
               </div>
@@ -1357,15 +1586,19 @@ export default function CommandesPage() {
                     value={editFormData.status}
                     onValueChange={(value) => setEditFormData({ ...editFormData, status: value })}
                   >
-                    <SelectTrigger>
+                    <SelectTrigger className="bg-[#F5E6C8]">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="draft">Brouillon</SelectItem>
-                      <SelectItem value="confirmed">Confirmee</SelectItem>
-                      <SelectItem value="in_progress">En cours</SelectItem>
-                      <SelectItem value="delivered">Livree</SelectItem>
-                      <SelectItem value="cancelled">Annulee</SelectItem>
+                      <SelectItem value="pending">En attente</SelectItem>
+                      <SelectItem value="confirmed">Confirmée</SelectItem>
+                      <SelectItem value="in_preparation">En préparation</SelectItem>
+                      <SelectItem value="ready">Prête</SelectItem>
+                      <SelectItem value="in_delivery">En livraison</SelectItem>
+                      <SelectItem value="delivered">Livrée</SelectItem>
+                      <SelectItem value="partial">Partiellement livrée</SelectItem>
+                      <SelectItem value="returned">Retournée</SelectItem>
+                      <SelectItem value="cancelled">Annulée</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -1376,6 +1609,7 @@ export default function CommandesPage() {
                     value={editFormData.notes}
                     onChange={(e) => setEditFormData({ ...editFormData, notes: e.target.value })}
                     placeholder="Notes sur la commande"
+                    className="bg-[#F5E6C8]"
                   />
                 </div>
               </div>
@@ -1384,7 +1618,7 @@ export default function CommandesPage() {
                 <h3 className="font-medium mb-3">
                   Articles
                   {editClientPrices.length > 0 && (
-                    <Badge className="ml-2 bg-green-100 text-green-800">
+                    <Badge className="ml-2 bg-amber-100 text-[#9A7209]">
                       {editClientPrices.length} prix personnalises
                     </Badge>
                   )}
@@ -1396,15 +1630,13 @@ export default function CommandesPage() {
                         variant="outline"
                         role="combobox"
                         aria-expanded={editArticleOpen}
-                        className="flex-1 justify-between"
+                        className="flex-1 justify-between bg-[#F5E6C8]"
                       >
                         {editSelectedArticle
                           ? (() => {
                               const article = articles.find((a) => a.id === editSelectedArticle)
                               if (!article) return "Article selectionne"
-                              const clientPrice = editClientPrices.find(cp => cp.article_id === article.id)
-                              const displayPrice = clientPrice ? clientPrice.custom_price : article.price_ht
-                              return `${article.code} - ${article.name} (${formatPrice(displayPrice)})`
+                              return `${article.code} - ${article.name}`
                             })()
                           : "Ajouter un article..."}
                         <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
@@ -1416,10 +1648,7 @@ export default function CommandesPage() {
                         <CommandList>
                           <CommandEmpty>Aucun article trouve.</CommandEmpty>
                           <CommandGroup>
-                            {articles.map((article) => {
-                              const clientPrice = editClientPrices.find(cp => cp.article_id === article.id)
-                              const displayPrice = clientPrice ? clientPrice.custom_price : article.price_ht
-                              return (
+                            {articles.map((article) => (
                                 <CommandItem
                                   key={article.id}
                                   value={`${article.code} ${article.name}`}
@@ -1436,11 +1665,8 @@ export default function CommandesPage() {
                                   />
                                   <span className="font-medium">{article.code}</span>
                                   <span className="ml-2 text-gray-600">{article.name}</span>
-                                  <span className="ml-auto text-green-600">{formatPrice(displayPrice)}</span>
-                                  {clientPrice && <Badge className="ml-1 bg-yellow-100 text-yellow-800 text-xs">*</Badge>}
                                 </CommandItem>
-                              )
-                            })}
+                            ))}
                           </CommandGroup>
                         </CommandList>
                       </Command>
@@ -1451,11 +1677,11 @@ export default function CommandesPage() {
                     min="1"
                     value={editSelectedQuantity}
                     onChange={(e) => setEditSelectedQuantity(e.target.value)}
-                    className="w-24"
+                    className="w-24 bg-[#F5E6C8]"
                     placeholder="Qte"
                   />
-                  <Button type="button" onClick={addEditItem} variant="outline">
-                    <Plus className="h-4 w-4" />
+                  <Button type="button" onClick={addEditItem} className="bg-[#B8860B] hover:bg-[#9A7209] text-white">
+                    Ajouter
                   </Button>
                 </div>
 
@@ -1526,7 +1752,7 @@ export default function CommandesPage() {
               </div>
 
               <div className="flex justify-end gap-2 pt-4 border-t mt-4">
-                <Button type="button" variant="outline" onClick={() => setIsEditDialogOpen(false)}>
+                <Button type="button" className="bg-[#B8860B] hover:bg-[#9A7209] text-white" onClick={() => setIsEditDialogOpen(false)}>
                   Annuler
                 </Button>
                 <Button onClick={handleSaveEdit} className="bg-orange-600 hover:bg-orange-700">

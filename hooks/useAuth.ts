@@ -24,7 +24,7 @@ export function useAuth() {
       .single()
 
     if (error) {
-      console.error('Error fetching profile:', error)
+      console.error('Error fetching profile:', error.message, error.code, error.details)
       return null
     }
 

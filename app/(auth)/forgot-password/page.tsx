@@ -41,11 +41,11 @@ export default function ForgotPasswordPage() {
 
   if (isSuccess) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-50 to-green-100 p-4">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-amber-50 to-amber-100 p-4">
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
-            <div className="mx-auto mb-4 w-16 h-16 bg-green-100 rounded-full flex items-center justify-center">
-              <CheckCircle className="w-8 h-8 text-green-600" />
+            <div className="mx-auto mb-4 w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center">
+              <CheckCircle className="w-8 h-8 text-[#B8860B]" />
             </div>
             <CardTitle className="text-2xl">Email envoye</CardTitle>
             <CardDescription>
@@ -71,11 +71,11 @@ export default function ForgotPasswordPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-50 to-green-100 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-amber-50 to-amber-100 p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
-          <div className="mx-auto mb-4 w-16 h-16 bg-green-100 rounded-full flex items-center justify-center">
-            <Mail className="w-8 h-8 text-green-600" />
+          <div className="mx-auto mb-4 w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center">
+            <Mail className="w-8 h-8 text-[#B8860B]" />
           </div>
           <CardTitle className="text-2xl">Mot de passe oublie</CardTitle>
           <CardDescription>
@@ -105,7 +105,7 @@ export default function ForgotPasswordPage() {
 
             <Button
               type="submit"
-              className="w-full bg-green-600 hover:bg-green-700"
+              className="w-full bg-[#B8860B] hover:bg-[#9A7209]"
               disabled={isLoading}
             >
               {isLoading ? 'Envoi...' : 'Envoyer le lien'}
@@ -114,7 +114,7 @@ export default function ForgotPasswordPage() {
             <div className="text-center">
               <Link
                 href="/login"
-                className="text-sm text-green-600 hover:underline inline-flex items-center"
+                className="text-sm text-[#B8860B] hover:underline inline-flex items-center"
               >
                 <ArrowLeft className="w-4 h-4 mr-1" />
                 Retour a la connexion

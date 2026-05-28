@@ -61,7 +61,7 @@ const categoryIcons: Record<string, React.ReactNode> = {
 }
 
 const categoryColors: Record<string, string> = {
-  'Olives': 'bg-green-100 text-green-800',
+  'Olives': 'bg-amber-100 text-[#9A7209]',
   'Etiquettes': 'bg-blue-100 text-blue-800',
   'Emballage': 'bg-orange-100 text-orange-800',
   'Autre': 'bg-gray-100 text-gray-800',
@@ -231,7 +231,7 @@ export default function FournituresPage() {
             if (!open) resetForm()
           }}>
             <DialogTrigger asChild>
-              <Button className="bg-green-600 hover:bg-green-700">
+              <Button className="bg-[#B8860B] hover:bg-[#9A7209]">
                 <Plus className="mr-2 h-4 w-4" />
                 Nouvelle Fourniture
               </Button>
@@ -333,7 +333,7 @@ export default function FournituresPage() {
                   <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                     Annuler
                   </Button>
-                  <Button type="submit" className="bg-green-600 hover:bg-green-700">
+                  <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
                     {editingSupply ? 'Mettre à jour' : 'Créer'}
                   </Button>
                 </div>
@@ -351,7 +351,7 @@ export default function FournituresPage() {
           </CardHeader>
           <CardContent>
             <div className="flex items-center gap-2">
-              <Package className="h-6 w-6 text-green-600" />
+              <Package className="h-6 w-6 text-[#B8860B]" />
               <span className="text-2xl font-bold">{supplies.length}</span>
             </div>
           </CardContent>

@@ -40,12 +40,12 @@ export function Header() {
     .toUpperCase() || 'U'
 
   return (
-    <header className="h-16 bg-white border-b flex items-center justify-between px-6">
+    <header className="h-16 bg-[#DAA520] border-b border-[#B8860B] flex items-center justify-between px-6">
       <div>
-        <h1 className="text-lg font-semibold text-gray-800">
+        <h1 className="text-lg font-semibold text-white">
           Bienvenue, {profile?.full_name || 'Utilisateur'}
         </h1>
-        <p className="text-sm text-gray-500">
+        <p className="text-sm text-white/80">
           {profile?.role?.name && (
             <span className="capitalize">{profile.role.name}</span>
           )}
@@ -57,7 +57,7 @@ export function Header() {
         <ConnectionStatus />
 
         {/* Notifications */}
-        <Button variant="ghost" size="icon" className="relative">
+        <Button variant="ghost" size="icon" className="relative text-white hover:bg-[#B8860B]">
           <Bell size={20} />
           <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-xs text-white flex items-center justify-center">
             3
@@ -68,10 +68,10 @@ export function Header() {
         {mounted ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="flex items-center gap-2">
+              <Button variant="ghost" className="flex items-center gap-2 hover:bg-[#B8860B]">
                 <Avatar className="h-8 w-8">
                   <AvatarImage src={profile?.avatar_url || undefined} />
-                  <AvatarFallback className="bg-green-600 text-white">
+                  <AvatarFallback className="bg-white text-[#DAA520]">
                     {initials}
                   </AvatarFallback>
                 </Avatar>
@@ -101,9 +101,9 @@ export function Header() {
             </DropdownMenuContent>
           </DropdownMenu>
         ) : (
-          <Button variant="ghost" className="flex items-center gap-2">
+          <Button variant="ghost" className="flex items-center gap-2 hover:bg-[#B8860B]">
             <Avatar className="h-8 w-8">
-              <AvatarFallback className="bg-green-600 text-white">
+              <AvatarFallback className="bg-white text-[#DAA520]">
                 {initials}
               </AvatarFallback>
             </Avatar>

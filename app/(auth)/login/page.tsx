@@ -43,10 +43,10 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-50 to-green-100 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-amber-50 to-amber-100 p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
-          <div className="mx-auto mb-4 w-24 h-24 bg-green-600 rounded-full flex items-center justify-center">
+          <div className="mx-auto mb-4 w-24 h-24 bg-[#B8860B] rounded-full flex items-center justify-center">
             <span className="text-white text-2xl font-bold">AKKA</span>
           </div>
           <CardTitle className="text-2xl">Connexion</CardTitle>
@@ -90,7 +90,7 @@ export default function LoginPage() {
 
             <Button
               type="submit"
-              className="w-full bg-green-600 hover:bg-green-700"
+              className="w-full bg-[#B8860B] hover:bg-[#9A7209]"
               disabled={isLoading}
             >
               {isLoading ? 'Connexion...' : 'Se connecter'}
@@ -99,7 +99,7 @@ export default function LoginPage() {
             <div className="text-center text-sm">
               <Link
                 href="/forgot-password"
-                className="text-green-600 hover:underline"
+                className="text-[#B8860B] hover:underline"
               >
                 Mot de passe oublié ?
               </Link>

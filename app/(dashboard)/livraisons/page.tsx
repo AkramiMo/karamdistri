@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import { useSupabase, querySimple } from '@/hooks/useSupabase'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -23,6 +24,13 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import {
   Select,
   SelectContent,
@@ -48,6 +56,7 @@ import {
   Trash2,
   Pencil,
   Navigation,
+  MoreHorizontal,
   Building,
   Link2,
   Wallet,
@@ -66,6 +75,7 @@ import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { generateDeliveryNotePDF } from '@/lib/pdf/invoice'
 import { useCompanySettings } from '@/hooks/useCompanySettings'
+import { useAuth } from '@/hooks/useAuth'
 
 interface DeliveryItem {
   id: string
@@ -177,6 +187,19 @@ interface DeliveryRoundItem {
       gps_lat: number | null
       gps_lng: number | null
     }
+    delivery_items?: {
+      id: string
+      article_id: string
+      quantity_ordered: number
+      quantity_delivered: number
+      quantity_returned: number
+      unit_price: number
+      article?: {
+        code: string
+        name: string
+        description: string | null
+      }
+    }[]
   }
 }
 
@@ -208,71 +231,10 @@ interface Driver {
   email: string
 }
 
-// RBLT - Retour interfaces
-interface DeliveryReturnItem {
-  id: string
-  return_id: string
-  delivery_item_id: string | null
-  article_id: string
-  quantity_returned: number
-  unit_price: number | null
-  return_reason: string | null
-  article?: {
-    code: string
-    name: string
-  }
-}
-
-interface DeliveryReturn {
-  id: string
-  return_number: string
-  delivery_id: string | null
-  round_id: string | null
-  client_id: string
-  return_date: string
-  status: string
-  return_reason: string | null
-  total_ht: number | null
-  notes: string | null
-  user_id: string | null
-  created_at: string
-  delivery?: {
-    delivery_number: string
-  }
-  round?: {
-    id: string
-    round_number: string
-    round_date: string
-    status: string
-    driver?: { full_name: string }
-    delivery_round_items?: {
-      id: string
-      delivery_id: string
-      delivery?: {
-        id: string
-        delivery_number: string
-        total_ht: number | null
-        status: string
-        delivery_items?: {
-          id: string
-          quantity_ordered: number
-          quantity_delivered: number
-          quantity_returned: number
-          unit_price: number
-        }[]
-      }
-    }[]
-  }
-  client?: {
-    code: string
-    name: string
-  }
-  delivery_return_items?: DeliveryReturnItem[]
-}
-
 const statusColors: Record<string, string> = {
   pending: 'bg-gray-100 text-gray-800',
   in_progress: 'bg-yellow-100 text-yellow-800',
+  in_delivery: 'bg-purple-100 text-purple-800',
   delivered: 'bg-emerald-100 text-emerald-800',
   partial: 'bg-orange-100 text-orange-800',
   returned: 'bg-pink-100 text-pink-800',
@@ -282,6 +244,7 @@ const statusColors: Record<string, string> = {
 const statusLabels: Record<string, string> = {
   pending: 'En attente',
   in_progress: 'En cours',
+  in_delivery: 'En livraison',
   delivered: 'Livrée',
   partial: 'Partiellement livrée',
   returned: 'Retournée',
@@ -338,31 +301,10 @@ const itemStatusLabels: Record<string, string> = {
   cancelled: 'Annule',
 }
 
-// RBLT status colors and labels
-const returnStatusColors: Record<string, string> = {
-  pending: 'bg-yellow-100 text-yellow-800',
-  validated: 'bg-amber-100 text-[#9A7209]',
-  cancelled: 'bg-red-100 text-red-800',
-}
-
-const returnStatusLabels: Record<string, string> = {
-  pending: 'En attente',
-  validated: 'Validé',
-  cancelled: 'Annulé',
-}
-
-const returnReasons = [
-  { value: 'damaged', label: 'Produit endommagé' },
-  { value: 'expired', label: 'Produit périmé' },
-  { value: 'wrong_product', label: 'Mauvais produit' },
-  { value: 'excess', label: 'Excédent' },
-  { value: 'quality', label: 'Problème qualité' },
-  { value: 'other', label: 'Autre' },
-]
-
-type TabType = 'bl' | 'blt' | 'rblt'
+type TabType = 'bl' | 'blt'
 
 export default function LivraisonsPage() {
+  const router = useRouter()
   const [activeTab, setActiveTab] = useState<TabType>('bl')
   const [deliveries, setDeliveries] = useState<Delivery[]>([])
   const [orders, setOrders] = useState<Order[]>([])
@@ -372,6 +314,7 @@ export default function LivraisonsPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [dateFilter, setDateFilter] = useState<string>('')
+  const [showOnlyWithBalance, setShowOnlyWithBalance] = useState(false)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [viewDelivery, setViewDelivery] = useState<Delivery | null>(null)
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
@@ -426,26 +369,10 @@ export default function LivraisonsPage() {
   })
   const [selectedRoundDeliveries, setSelectedRoundDeliveries] = useState<string[]>([])
 
-  // RBLT - Retour state
-  const [returns, setReturns] = useState<DeliveryReturn[]>([])
-  const [isReturnDialogOpen, setIsReturnDialogOpen] = useState(false)
-  const [isViewReturnDialogOpen, setIsViewReturnDialogOpen] = useState(false)
-  const [viewingReturn, setViewingReturn] = useState<DeliveryReturn | null>(null)
-  const [returnSearchTerm, setReturnSearchTerm] = useState('')
-  const [returnStatusFilter, setReturnStatusFilter] = useState<string>('all')
-  const [returnFormData, setReturnFormData] = useState({
-    delivery_id: '',
-    client_id: '',
-    return_date: new Date().toISOString().split('T')[0],
-    return_reason: '',
-    notes: '',
-  })
-  const [returnItems, setReturnItems] = useState<{ article_id: string; quantity: number; reason: string; unit_price: number }[]>([])
-  const [selectedDeliveryForReturn, setSelectedDeliveryForReturn] = useState<Delivery | null>(null)
-  const [selectedRoundForReturn, setSelectedRoundForReturn] = useState<string>('')
-
   const supabase = useSupabase()
   const { companySettings } = useCompanySettings()
+  const { profile } = useAuth()
+  const isLivreur = profile?.role?.name === 'livreur'
 
   const [formData, setFormData] = useState({
     order_id: '',
@@ -470,7 +397,7 @@ export default function LivraisonsPage() {
               order:orders(order_number),
               delivery_items(id, article_id, quantity_ordered, quantity_delivered, quantity_returned, unit_price, article:articles(code, name, description))
             `)
-            .order('delivery_date', { ascending: false })
+            .order('created_at', { ascending: false })
             .limit(30)
         ),
         querySimple(() =>
@@ -525,6 +452,7 @@ export default function LivraisonsPage() {
             delivery_number,
             client_id,
             total_ht,
+            balance_due,
             status,
             client:clients(code, name, address, city, gps_lat, gps_lng),
             delivery_items(id, article_id, quantity_ordered, quantity_delivered, quantity_returned, unit_price, article:articles(code, name, description))
@@ -574,7 +502,7 @@ export default function LivraisonsPage() {
   }, [supabase, rounds])
 
   useEffect(() => {
-    if (activeTab === 'blt' || activeTab === 'rblt') {
+    if (activeTab === 'blt') {
       fetchRounds()
       fetchDrivers()
     }
@@ -706,6 +634,7 @@ export default function LivraisonsPage() {
               delivery_number,
               client_id,
               total_ht,
+              balance_due,
               client:clients(code, name, address, city, gps_lat, gps_lng)
             )
           )
@@ -771,6 +700,8 @@ export default function LivraisonsPage() {
         await (supabase.from('deliveries') as any)
           .update({ status: newStatus })
           .eq('id', deliveryId)
+
+        await syncOrderStatus(deliveryId, newStatus)
       }
 
       await fetchRounds()
@@ -789,6 +720,7 @@ export default function LivraisonsPage() {
                 delivery_number,
                 client_id,
                 total_ht,
+                balance_due,
                 status,
                 client:clients(code, name, address, city, gps_lat, gps_lng),
                 delivery_items(id, article_id, quantity_ordered, quantity_delivered, quantity_returned, unit_price, article:articles(code, name, description))
@@ -842,6 +774,7 @@ export default function LivraisonsPage() {
       .eq('id', deliveryId)
 
     if (!error) {
+      await syncOrderStatus(deliveryId, newStatus)
       // Refresh both rounds and deliveries tables
       await fetchRounds()
       await fetchData()
@@ -879,6 +812,7 @@ export default function LivraisonsPage() {
       .eq('id', deliveryId)
 
     if (!error) {
+      await syncOrderStatus(deliveryId, newStatus)
       // Update delivery_round_items status
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (supabase.from('delivery_round_items') as any)
@@ -902,6 +836,7 @@ export default function LivraisonsPage() {
                 delivery_number,
                 client_id,
                 total_ht,
+                balance_due,
                 status,
                 client:clients(code, name, address, city, gps_lat, gps_lng),
                 delivery_items(id, article_id, quantity_ordered, quantity_delivered, quantity_returned, unit_price, article:articles(code, name, description))
@@ -954,238 +889,6 @@ export default function LivraisonsPage() {
     inProgress: rounds.filter(r => r.status === 'in_progress').length,
     completed: rounds.filter(r => r.status === 'completed').length,
   }
-
-  // RBLT - Fetch returns
-  const fetchReturns = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('delivery_returns')
-      .select(`
-        *,
-        delivery:deliveries(delivery_number),
-        client:clients(code, name),
-        round:delivery_rounds(
-          id,
-          round_number,
-          round_date,
-          status,
-          driver:users!delivery_rounds_driver_id_fkey(full_name),
-          delivery_round_items(
-            *,
-            delivery:deliveries(
-              id,
-              delivery_number,
-              total_ht,
-              status,
-              delivery_items(id, quantity_ordered, quantity_delivered, quantity_returned, unit_price)
-            )
-          )
-        ),
-        delivery_return_items(
-          *,
-          article:articles(code, name)
-        )
-      `)
-      .order('created_at', { ascending: false })
-
-    if (error) {
-      console.error('Error fetching returns:', error)
-    } else {
-      setReturns(data || [])
-    }
-  }, [supabase])
-
-  useEffect(() => {
-    if (activeTab === 'rblt') {
-      fetchReturns()
-    }
-  }, [activeTab, fetchReturns])
-
-  const generateReturnNumber = async (): Promise<string> => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data } = await (supabase.from('delivery_returns') as any)
-      .select('return_number')
-      .like('return_number', 'RBLT%')
-      .order('return_number', { ascending: false })
-      .limit(1)
-
-    if (data && data.length > 0) {
-      const lastNum = parseInt(data[0].return_number.replace('RBLT', ''))
-      if (!isNaN(lastNum)) {
-        return `RBLT${String(lastNum + 1).padStart(4, '0')}`
-      }
-    }
-    return 'RBLT0001'
-  }
-
-  const handleSelectDeliveryForReturn = (delivery: Delivery) => {
-    setSelectedDeliveryForReturn(delivery)
-    setReturnFormData({
-      ...returnFormData,
-      delivery_id: delivery.id,
-      client_id: delivery.client_id,
-    })
-    // Initialize return items from delivery items
-    if (delivery.delivery_items) {
-      setReturnItems(delivery.delivery_items.map(item => ({
-        article_id: item.article_id,
-        quantity: 0,
-        reason: '',
-        unit_price: item.unit_price || 0,
-      })))
-    }
-  }
-
-  const handleReturnSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-
-    const itemsToReturn = returnItems.filter(item => item.quantity > 0)
-    if (itemsToReturn.length === 0) {
-      alert('Veuillez sélectionner au moins un article à retourner')
-      return
-    }
-
-    const returnNumber = await generateReturnNumber()
-    const totalHt = itemsToReturn.reduce((sum, item) => sum + (item.quantity * item.unit_price), 0)
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: returnData, error: returnError } = await (supabase.from('delivery_returns') as any)
-      .insert([{
-        return_number: returnNumber,
-        delivery_id: returnFormData.delivery_id || null,
-        round_id: selectedRoundForReturn || null,
-        client_id: returnFormData.client_id,
-        return_date: returnFormData.return_date,
-        status: 'pending',
-        return_reason: returnFormData.return_reason || null,
-        total_ht: totalHt,
-        notes: returnFormData.notes || null,
-      }])
-      .select()
-      .single()
-
-    if (returnError) {
-      console.error('Error creating return:', returnError)
-      alert(`Erreur: ${returnError.message}`)
-      return
-    }
-
-    // Add return items
-    const returnItemsData = itemsToReturn.map(item => ({
-      return_id: returnData.id,
-      article_id: item.article_id,
-      quantity_returned: item.quantity,
-      unit_price: item.unit_price,
-      return_reason: item.reason || null,
-    }))
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (supabase.from('delivery_return_items') as any).insert(returnItemsData)
-
-    // Update delivery items with returned quantities
-    if (selectedDeliveryForReturn?.delivery_items) {
-      for (const item of itemsToReturn) {
-        const deliveryItem = selectedDeliveryForReturn.delivery_items.find(di => di.article_id === item.article_id)
-        if (deliveryItem) {
-          const newReturnedQty = (deliveryItem.quantity_returned || 0) + item.quantity
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          await (supabase.from('delivery_items') as any)
-            .update({ quantity_returned: newReturnedQty })
-            .eq('id', deliveryItem.id)
-        }
-      }
-
-      // Calculate new delivery status based on returns
-      let totalDelivered = 0
-      let totalReturned = 0
-      for (const deliveryItem of selectedDeliveryForReturn.delivery_items) {
-        const returnedItem = itemsToReturn.find(i => i.article_id === deliveryItem.article_id)
-        const currentReturned = (deliveryItem.quantity_returned || 0) + (returnedItem?.quantity || 0)
-        totalDelivered += deliveryItem.quantity_delivered || 0
-        totalReturned += currentReturned
-      }
-
-      // Update delivery status
-      let newStatus = 'delivered'
-      if (totalReturned > 0 && totalReturned >= totalDelivered) {
-        newStatus = 'returned'
-      } else if (totalReturned > 0) {
-        newStatus = 'partial'
-      }
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabase.from('deliveries') as any)
-        .update({ status: newStatus })
-        .eq('id', selectedDeliveryForReturn.id)
-    }
-
-    fetchReturns()
-    fetchData()
-    setIsReturnDialogOpen(false)
-    resetReturnForm()
-  }
-
-  const handleValidateReturn = async (returnId: string) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { error } = await (supabase.from('delivery_returns') as any)
-      .update({ status: 'validated' })
-      .eq('id', returnId)
-    if (!error) fetchReturns()
-  }
-
-  const handleCancelReturn = async (returnId: string) => {
-    if (!confirm('Êtes-vous sûr de vouloir annuler ce retour ?')) return
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { error } = await (supabase.from('delivery_returns') as any)
-      .update({ status: 'cancelled' })
-      .eq('id', returnId)
-    if (!error) fetchReturns()
-  }
-
-  const handleDeleteReturn = async (returnId: string) => {
-    if (!confirm('Êtes-vous sûr de vouloir supprimer ce retour ?')) return
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (supabase.from('delivery_return_items') as any).delete().eq('return_id', returnId)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { error } = await (supabase.from('delivery_returns') as any).delete().eq('id', returnId)
-    if (!error) fetchReturns()
-  }
-
-  const handleViewReturn = (ret: DeliveryReturn) => {
-    setViewingReturn(ret)
-    setIsViewReturnDialogOpen(true)
-  }
-
-  const resetReturnForm = () => {
-    setReturnFormData({
-      delivery_id: '',
-      client_id: '',
-      return_date: new Date().toISOString().split('T')[0],
-      return_reason: '',
-      notes: '',
-    })
-    setReturnItems([])
-    setSelectedDeliveryForReturn(null)
-    setSelectedRoundForReturn('')
-  }
-
-  const filteredReturns = returns.filter((ret) => {
-    const matchesSearch =
-      ret.return_number.toLowerCase().includes(returnSearchTerm.toLowerCase()) ||
-      ret.client?.name?.toLowerCase().includes(returnSearchTerm.toLowerCase()) ||
-      ret.delivery?.delivery_number?.toLowerCase().includes(returnSearchTerm.toLowerCase())
-    const matchesStatus = returnStatusFilter === 'all' || ret.status === returnStatusFilter
-    return matchesSearch && matchesStatus
-  })
-
-  const returnStats = {
-    total: returns.length,
-    pending: returns.filter(r => r.status === 'pending').length,
-    validated: returns.filter(r => r.status === 'validated').length,
-    totalValue: returns.filter(r => r.status !== 'cancelled').reduce((sum, r) => sum + (r.total_ht || 0), 0),
-  }
-
-  // Get delivered deliveries for return selection
-  const deliveredDeliveries = deliveries.filter(d => d.status === 'delivered' || d.status === 'partial')
 
   const generateDeliveryNumber = () => {
     const date = new Date()
@@ -1281,7 +984,7 @@ export default function LivraisonsPage() {
     setIsViewDialogOpen(true)
   }
 
-  const handleGeneratePDF = (delivery: Delivery) => {
+  const handleGeneratePDF = async (delivery: Delivery) => {
     if (!delivery.client) {
       alert('Donnees client manquantes pour generer le PDF')
       return
@@ -1323,10 +1026,26 @@ export default function LivraisonsPage() {
         })),
       }
 
-      generateDeliveryNotePDF(orderData, companySettings)
+      await generateDeliveryNotePDF(orderData, companySettings, '/logo.jpg')
     } catch (error) {
       console.error('Error generating PDF:', error)
       alert('Erreur lors de la generation du PDF')
+    }
+  }
+
+  const syncOrderStatus = async (deliveryId: string, newStatus: string) => {
+    // Fetch the delivery to get its order_id
+    const { data: delivery } = await supabase
+      .from('deliveries')
+      .select('order_id')
+      .eq('id', deliveryId)
+      .single()
+
+    if (delivery?.order_id) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase.from('orders') as any)
+        .update({ status: newStatus })
+        .eq('id', delivery.order_id)
     }
   }
 
@@ -1339,6 +1058,7 @@ export default function LivraisonsPage() {
     if (error) {
       console.error('Error updating status:', error)
     } else {
+      await syncOrderStatus(deliveryId, newStatus)
       fetchData()
       setIsViewDialogOpen(false)
     }
@@ -1469,44 +1189,67 @@ export default function LivraisonsPage() {
   }
 
   const handleSaveEdit = async () => {
-    if (!editingDelivery) return
+    console.log('handleSaveEdit called')
+    console.log('editingDelivery:', editingDelivery)
+    console.log('editItems:', editItems)
+    console.log('editFormData:', editFormData)
 
-    // Calculate new total
-    const newTotal = editItems.reduce((sum, item) => sum + (item.quantity_delivered * item.unit_price), 0)
-
-    // Update delivery
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { error: deliveryError } = await (supabase.from('deliveries') as any)
-      .update({
-        delivery_date: editFormData.delivery_date,
-        notes: editFormData.notes || null,
-        status: editFormData.status,
-        order_id: editFormData.order_id || null,
-        total_ht: newTotal,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', editingDelivery.id)
-
-    if (deliveryError) {
-      console.error('Error updating delivery:', deliveryError)
-      alert('Erreur lors de la mise à jour')
+    if (!editingDelivery) {
+      console.log('No editingDelivery, returning')
       return
     }
 
-    // Update each delivery item
-    for (const item of editItems) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabase.from('delivery_items') as any)
-        .update({
-          quantity_delivered: item.quantity_delivered,
-          quantity_returned: item.quantity_returned,
-        })
-        .eq('id', item.id)
-    }
+    try {
+      // Calculate new total
+      const newTotal = editItems.reduce((sum, item) => sum + (item.quantity_delivered * item.unit_price), 0)
+      console.log('newTotal:', newTotal)
 
-    alert('Bon de livraison mis à jour avec succès')
-    setIsEditDialogOpen(false)
-    fetchData()
+      // Update delivery
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: deliveryError } = await (supabase.from('deliveries') as any)
+        .update({
+          delivery_date: editFormData.delivery_date,
+          notes: editFormData.notes || null,
+          status: editFormData.status,
+          order_id: editFormData.order_id || null,
+          total_ht: newTotal,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', editingDelivery.id)
+
+      if (deliveryError) {
+        console.error('Error updating delivery:', deliveryError)
+        alert('Erreur lors de la mise à jour: ' + deliveryError.message)
+        return
+      }
+
+      console.log('Delivery updated successfully')
+
+      // Update each delivery item
+      for (const item of editItems) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { error: itemError } = await (supabase.from('delivery_items') as any)
+          .update({
+            quantity_delivered: item.quantity_delivered,
+            quantity_returned: item.quantity_returned,
+          })
+          .eq('id', item.id)
+
+        if (itemError) {
+          console.error('Error updating item:', itemError)
+        }
+      }
+
+      // Sync order status with the new delivery status
+      await syncOrderStatus(editingDelivery.id, editFormData.status)
+
+      alert('Bon de livraison mis à jour avec succès')
+      setIsEditDialogOpen(false)
+      fetchData()
+    } catch (err) {
+      console.error('Exception in handleSaveEdit:', err)
+      alert('Erreur: ' + (err as Error).message)
+    }
   }
 
   // Payment handlers
@@ -1538,23 +1281,6 @@ export default function LivraisonsPage() {
     setIsPaymentDialogOpen(true)
   }
 
-  const generatePaymentNumber = async (): Promise<string> => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data } = await (supabase.from('payments') as any)
-      .select('payment_number')
-      .like('payment_number', 'REC%')
-      .order('payment_number', { ascending: false })
-      .limit(1)
-
-    if (data && data.length > 0) {
-      const lastNum = parseInt(data[0].payment_number.replace('REC', ''))
-      if (!isNaN(lastNum)) {
-        return `REC${String(lastNum + 1).padStart(5, '0')}`
-      }
-    }
-    return 'REC00001'
-  }
-
   const handleSubmitPayment = async (e: React.FormEvent) => {
     e.preventDefault()
 
@@ -1566,30 +1292,6 @@ export default function LivraisonsPage() {
     }
 
     try {
-      const paymentNumber = await generatePaymentNumber()
-
-      // Create payment
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: newPayment, error } = await (supabase.from('payments') as any)
-        .insert({
-          payment_number: paymentNumber,
-          client_id: paymentDelivery.client_id,
-          delivery_id: paymentDelivery.id,
-          amount: paymentFormData.amount,
-          payment_method: paymentFormData.payment_method,
-          payment_date: paymentFormData.payment_date,
-          reference: paymentFormData.reference || null,
-          notes: paymentFormData.notes || null,
-        })
-        .select()
-        .single()
-
-      if (error) {
-        console.error('Payment error:', error)
-        alert('Erreur lors de l\'enregistrement du paiement')
-        return
-      }
-
       // Update delivery payment status based on Recette BL
       const recetteBL = getRecetteBL(paymentDelivery)
       const currentPaid = (paymentDelivery.amount_paid || 0) + paymentFormData.amount
@@ -1597,7 +1299,7 @@ export default function LivraisonsPage() {
       const newStatus = newBalance <= 0 ? 'paid' : currentPaid > 0 ? 'partial' : 'pending'
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabase.from('deliveries') as any)
+      const { error } = await (supabase.from('deliveries') as any)
         .update({
           amount_paid: currentPaid,
           balance_due: newBalance,
@@ -1606,7 +1308,199 @@ export default function LivraisonsPage() {
         })
         .eq('id', paymentDelivery.id)
 
-      setLastPayment(newPayment)
+      if (error) {
+        console.error('Payment error:', error)
+        alert('Erreur lors de l\'enregistrement du paiement')
+        return
+      }
+
+      // Générer le numéro de paiement unique
+      const year = new Date().getFullYear()
+      const paymentPrefix = `REC-${year}-`
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: lastPaymentData } = await (supabase.from('payments') as any)
+        .select('payment_number')
+        .like('payment_number', `${paymentPrefix}%`)
+        .order('payment_number', { ascending: false })
+        .limit(1)
+
+      let paymentNumber = `${paymentPrefix}000001`
+      if (lastPaymentData && lastPaymentData.length > 0) {
+        const lastNum = parseInt(lastPaymentData[0].payment_number.replace(paymentPrefix, '')) || 0
+        paymentNumber = `${paymentPrefix}${(lastNum + 1).toString().padStart(6, '0')}`
+      }
+
+      // Insérer le paiement dans la table payments
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: paymentData, error: paymentError } = await (supabase.from('payments') as any)
+        .insert([{
+          payment_number: paymentNumber,
+          client_id: paymentDelivery.client_id,
+          delivery_id: paymentDelivery.id,
+          amount: paymentFormData.amount,
+          payment_method: paymentFormData.payment_method,
+          payment_date: paymentFormData.payment_date,
+          reference: paymentFormData.reference || null,
+          notes: paymentFormData.notes || `Paiement BL ${paymentDelivery.delivery_number}`,
+        }])
+        .select()
+        .single()
+
+      if (paymentError) {
+        console.error('Payment insert error:', paymentError)
+        alert(`Erreur insertion paiement: ${paymentError.message}`)
+        return
+      }
+
+      // Mettre à jour la vente associée si elle existe
+      // 1. Chercher une vente liée directement via delivery_id
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let { data: linkedSale } = await (supabase.from('sales') as any)
+        .select('id, total_ttc, sale_number')
+        .eq('delivery_id', paymentDelivery.id)
+        .maybeSingle()
+
+      let isRbltSale = false
+      let rbltRoundId: string | null = null
+
+      // 2. Si pas de vente directe, chercher via tournée → RBLT → Vente
+      if (!linkedSale) {
+        // Trouver la tournée du BL via delivery_round_items
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: roundItem } = await (supabase.from('delivery_round_items') as any)
+          .select('round_id')
+          .eq('delivery_id', paymentDelivery.id)
+          .maybeSingle()
+
+        if (roundItem?.round_id) {
+          rbltRoundId = roundItem.round_id
+
+          // Trouver le RBLT lié à cette tournée
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: rblt } = await (supabase.from('delivery_returns') as any)
+            .select('id')
+            .eq('round_id', roundItem.round_id)
+            .maybeSingle()
+
+          if (rblt) {
+            // Trouver la vente liée à ce RBLT
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const { data: saleViaRblt } = await (supabase.from('sales') as any)
+              .select('id, total_ttc, sale_number')
+              .eq('return_id', rblt.id)
+              .maybeSingle()
+
+            linkedSale = saleViaRblt
+            isRbltSale = true
+          }
+        }
+      }
+
+      console.log('Vente liée trouvée:', linkedSale, 'isRbltSale:', isRbltSale, 'roundId:', rbltRoundId)
+
+      if (linkedSale) {
+        let totalAmountPaid = currentPaid
+        let saleTotalTTC = linkedSale.total_ttc || recetteBL
+
+        // Si c'est une vente RBLT, calculer le RNET-BLT total de tous les BL de la tournée
+        if (isRbltSale && rbltRoundId) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: roundItems } = await (supabase.from('delivery_round_items') as any)
+            .select('delivery:deliveries(id, amount_paid, delivery_items(quantity_delivered, quantity_returned, unit_price))')
+            .eq('round_id', rbltRoundId)
+
+          if (roundItems) {
+            // RNET-BLT = somme des amount_paid de tous les BL (avec la nouvelle valeur pour le BL actuel)
+            totalAmountPaid = roundItems.reduce((sum: number, ri: any) => {
+              const deliveryAmountPaid = ri.delivery?.id === paymentDelivery.id
+                ? currentPaid  // Utiliser la nouvelle valeur pour le BL qu'on vient d'encaisser
+                : (ri.delivery?.amount_paid || 0)
+              return sum + deliveryAmountPaid
+            }, 0)
+
+            // Recette BLT = somme des (qté livrée - qté retournée) × prix unitaire
+            saleTotalTTC = roundItems.reduce((sum: number, ri: any) => {
+              const items = ri.delivery?.delivery_items || []
+              return sum + items.reduce((s: number, di: any) =>
+                s + ((di.quantity_delivered - di.quantity_returned) * di.unit_price), 0)
+            }, 0)
+          }
+        }
+
+        const saleBalance = Math.max(0, saleTotalTTC - totalAmountPaid)
+        const saleStatus = saleBalance <= 0 ? 'paid' : totalAmountPaid > 0 ? 'partial' : 'pending'
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { error: updateError } = await (supabase.from('sales') as any)
+          .update({
+            total_ttc: saleTotalTTC,      // Recette BLT
+            amount_paid: totalAmountPaid, // RNET-BLT
+            balance_due: saleBalance,
+            payment_status: saleStatus,
+            payment_method: paymentFormData.payment_method,
+          })
+          .eq('id', linkedSale.id)
+
+        if (updateError) {
+          console.error('Erreur mise à jour vente:', updateError)
+        } else {
+          console.log('Vente mise à jour avec succès:', { total_ttc: saleTotalTTC, amount_paid: totalAmountPaid, balance_due: saleBalance, payment_status: saleStatus })
+        }
+
+        // Mettre à jour l'entrée de caisse de la vente si c'est une vente RBLT
+        if (isRbltSale && linkedSale.sale_number) {
+          // Mettre à jour l'entrée de caisse existante de la vente avec le nouveau RNET-BLT
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: cashEntry, error: cashFindError } = await (supabase.from('cash_register') as any)
+            .select('id')
+            .eq('reference', linkedSale.sale_number)
+            .maybeSingle()
+
+          console.log('Entrée caisse trouvée:', cashEntry, 'Erreur:', cashFindError)
+
+          if (cashEntry) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const { error: cashUpdateError } = await (supabase.from('cash_register') as any)
+              .update({ amount: totalAmountPaid })
+              .eq('id', cashEntry.id)
+
+            if (cashUpdateError) {
+              console.error('Erreur mise à jour caisse:', cashUpdateError)
+            } else {
+              console.log('Caisse mise à jour avec succès:', { sale_number: linkedSale.sale_number, amount: totalAmountPaid })
+            }
+          } else {
+            console.log('Aucune entrée caisse trouvée pour:', linkedSale.sale_number)
+          }
+        } else if (!isRbltSale) {
+          // Ajouter une entrée d'encaissement dans la caisse (pour les ventes directes uniquement)
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await (supabase.from('cash_register') as any).insert([{
+            operation_type: 'in',
+            category: 'encaissement',
+            amount: paymentFormData.amount,
+            reference: paymentNumber,
+            notes: `Encaissement BL ${paymentDelivery.delivery_number} - ${paymentDelivery.client?.name || ''}`,
+            transaction_date: paymentFormData.payment_date,
+          }])
+        }
+      }
+
+      // Utiliser le paiement réel pour l'affichage du reçu
+      const realPayment: Payment = {
+        id: paymentData.id,
+        payment_number: paymentData.payment_number,
+        client_id: paymentData.client_id,
+        delivery_id: paymentData.delivery_id,
+        amount: paymentData.amount,
+        payment_method: paymentData.payment_method,
+        payment_date: paymentData.payment_date,
+        reference: paymentData.reference,
+        notes: paymentData.notes,
+        created_at: paymentData.created_at,
+      }
+
+      setLastPayment(realPayment)
       setIsPaymentDialogOpen(false)
       setIsReceiptDialogOpen(true)
       fetchData()
@@ -1907,7 +1801,11 @@ export default function LivraisonsPage() {
         delivery.client?.code?.toLowerCase().includes(searchTerm.toLowerCase())
       const matchesStatus = statusFilter === 'all' || delivery.status === statusFilter
       const matchesDate = !dateFilter || delivery.delivery_date === dateFilter
-      return matchesSearch && matchesStatus && matchesDate
+      // Calculate reste (balance) for filtering
+      const recetteBL = delivery.delivery_items?.reduce((sum, item) => sum + ((item.quantity_delivered - item.quantity_returned) * item.unit_price), 0) || 0
+      const reste = recetteBL - (delivery.amount_paid || 0)
+      const matchesBalance = !showOnlyWithBalance || reste > 0
+      return matchesSearch && matchesStatus && matchesDate && matchesBalance
     }
   )
 
@@ -1936,22 +1834,6 @@ export default function LivraisonsPage() {
           >
             <Truck className="h-4 w-4 mr-2" />
             BL - Bons de Livraison
-          </Button>
-          <Button
-            variant={activeTab === 'blt' ? 'default' : 'outline'}
-            onClick={() => setActiveTab('blt')}
-            className={activeTab === 'blt' ? 'bg-[#B8860B] hover:bg-[#9A7209]' : ''}
-          >
-            <Route className="h-4 w-4 mr-2" />
-            BLT - Tournée des Livraisons
-          </Button>
-          <Button
-            variant={activeTab === 'rblt' ? 'default' : 'outline'}
-            onClick={() => setActiveTab('rblt')}
-            className={activeTab === 'rblt' ? 'bg-[#B8860B] hover:bg-[#9A7209]' : ''}
-          >
-            <RotateCcw className="h-4 w-4 mr-2" />
-            RBLT - Retour des Livraisons
           </Button>
         </div>
 
@@ -2007,20 +1889,21 @@ export default function LivraisonsPage() {
                 </>
               )}
 
-              <ProtectedModule module="livraisons" action="create">
-                <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-                  <DialogTrigger asChild>
-                    <Button
-                      className="bg-[#B8860B] hover:bg-[#9A7209]"
-                      onClick={() => {
-                        resetForm()
-                        setIsDialogOpen(true)
-                      }}
-                    >
-                      <Plus className="mr-2 h-4 w-4" />
-                      Nouveau BL
-                    </Button>
-                  </DialogTrigger>
+              {!isLivreur && (
+                <ProtectedModule module="livraisons" action="create" fallback={null}>
+                  <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+                    <DialogTrigger asChild>
+                      <Button
+                        className="bg-[#B8860B] hover:bg-[#9A7209]"
+                        onClick={() => {
+                          resetForm()
+                          setIsDialogOpen(true)
+                        }}
+                      >
+                        <Plus className="mr-2 h-4 w-4" />
+                        Nouveau BL
+                      </Button>
+                    </DialogTrigger>
               <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                   <DialogTitle>Nouveau bon de livraison</DialogTitle>
@@ -2094,8 +1977,9 @@ export default function LivraisonsPage() {
                   </div>
                 </form>
               </DialogContent>
-              </Dialog>
-            </ProtectedModule>
+                </Dialog>
+              </ProtectedModule>
+              )}
             </div>
           </div>
         )}
@@ -2103,20 +1987,22 @@ export default function LivraisonsPage() {
         {/* BL - Bons de Livraison Tab Content */}
         {activeTab === 'bl' && (
           <>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <Card className="border-2 border-[#B8860B]">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-bold text-gray-600">
-                    Total Livraisons
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex items-center gap-2">
-                    <Truck className="h-8 w-8 text-purple-600" />
-                    <span className="text-2xl font-bold">{deliveries.length}</span>
-                  </div>
-                </CardContent>
-              </Card>
+            <div className={`grid grid-cols-1 ${isLivreur ? 'md:grid-cols-2' : 'md:grid-cols-4'} gap-4`}>
+              {!isLivreur && (
+                <Card className="border-2 border-[#B8860B]">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-bold text-gray-600">
+                      Total Livraisons
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="flex items-center gap-2">
+                      <Truck className="h-8 w-8 text-purple-600" />
+                      <span className="text-2xl font-bold">{deliveries.length}</span>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
               <Card className="border-2 border-[#B8860B]">
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-bold text-gray-600">
@@ -2141,60 +2027,77 @@ export default function LivraisonsPage() {
                   </span>
                 </CardContent>
               </Card>
-              <Card className="border-2 border-[#B8860B]">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-bold text-gray-600">
-                    CA Total
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex items-center gap-2">
-                    <TrendingUp className="h-6 w-6 text-[#B8860B]" />
-                    <span className="text-xl font-bold text-[#B8860B]">
-                      {formatPrice(totalCA)}
-                    </span>
-                  </div>
-                </CardContent>
-              </Card>
+              {!isLivreur && (
+                <Card className="border-2 border-[#B8860B]">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-bold text-gray-600">
+                      CA Total
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="flex items-center gap-2">
+                      <TrendingUp className="h-6 w-6 text-[#B8860B]" />
+                      <span className="text-xl font-bold text-[#B8860B]">
+                        {formatPrice(totalCA)}
+                      </span>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
             </div>
 
             <Card className="border-2 border-[#B8860B]">
           <CardHeader>
             <div className="flex flex-col md:flex-row items-start md:items-center gap-4">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                <Input
-                  placeholder="Rechercher par N BL ou client..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10 border-2 border-[#B8860B]"
-                />
-              </div>
-              <Input
-                type="date"
-                value={dateFilter}
-                onChange={(e) => setDateFilter(e.target.value)}
-                className="w-44 border-2 border-[#B8860B]"
-                placeholder="Filtrer par date"
-              />
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-48 border-2 border-[#B8860B]">
-                  <SelectValue placeholder="Filtrer par statut" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Tous les statuts</SelectItem>
-                  <SelectItem value="pending">En attente</SelectItem>
-                  <SelectItem value="in_progress">En cours</SelectItem>
-                  <SelectItem value="delivered">Livrée</SelectItem>
-                  <SelectItem value="partial">Partiellement livrée</SelectItem>
-                  <SelectItem value="returned">Retournée</SelectItem>
-                  <SelectItem value="cancelled">Annulée</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button onClick={selectAllPending} className="gap-2 bg-[#B8860B] hover:bg-[#9A7209]">
-                <CheckCircle2 className="h-4 w-4" />
-                Selectionner en attente
-              </Button>
+              {!isLivreur && (
+                <>
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                    <Input
+                      placeholder="Rechercher par N BL ou client..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="pl-10 border-2 border-[#B8860B]"
+                    />
+                  </div>
+                  <Input
+                    type="date"
+                    value={dateFilter}
+                    onChange={(e) => setDateFilter(e.target.value)}
+                    className="w-44 border-2 border-[#B8860B]"
+                    placeholder="Filtrer par date"
+                  />
+                  <Select value={statusFilter} onValueChange={setStatusFilter}>
+                    <SelectTrigger className="w-48 border-2 border-[#B8860B]">
+                      <SelectValue placeholder="Filtrer par statut" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Tous les statuts</SelectItem>
+                      <SelectItem value="pending">En attente</SelectItem>
+                      <SelectItem value="in_progress">En cours</SelectItem>
+                      <SelectItem value="delivered">Livrée</SelectItem>
+                      <SelectItem value="partial">Partiellement livrée</SelectItem>
+                      <SelectItem value="returned">Retournée</SelectItem>
+                      <SelectItem value="cancelled">Annulée</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id="showOnlyWithBalance"
+                      checked={showOnlyWithBalance}
+                      onCheckedChange={(checked) => setShowOnlyWithBalance(checked === true)}
+                      className="border-[#B8860B] data-[state=checked]:bg-[#B8860B]"
+                    />
+                    <Label htmlFor="showOnlyWithBalance" className="text-sm font-medium cursor-pointer whitespace-nowrap">
+                      Reste &gt; 0
+                    </Label>
+                  </div>
+                  <Button onClick={selectAllPending} className="gap-2 bg-[#B8860B] hover:bg-[#9A7209]">
+                    <CheckCircle2 className="h-4 w-4" />
+                    Selectionner en attente
+                  </Button>
+                </>
+              )}
               <Button size="icon" onClick={fetchData} title="Actualiser" className="bg-[#B8860B] hover:bg-[#9A7209]">
                 <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
               </Button>
@@ -2219,8 +2122,8 @@ export default function LivraisonsPage() {
                 Aucune livraison trouvee
               </div>
             ) : (
-              <div className="overflow-x-auto border-2 border-[#B8860B] rounded-lg">
-              <Table>
+              <div className="overflow-x-auto border-2 border-[#B8860B] rounded-lg" style={{ transform: 'rotateX(180deg)' }}>
+              <Table style={{ transform: 'rotateX(180deg)' }}>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Date</TableHead>
@@ -2252,7 +2155,7 @@ export default function LivraisonsPage() {
                       <TableCell className="text-gray-600">{delivery.order?.order_number || '-'}</TableCell>
                       <TableCell className="text-center">
                         <Badge variant="outline" className="text-[#B8860B]">
-                          {delivery.delivery_items?.length || 0}
+                          {delivery.delivery_items?.reduce((sum, item) => sum + (item.quantity_delivered || 0), 0) || 0}
                         </Badge>
                       </TableCell>
                       <TableCell>
@@ -2289,48 +2192,59 @@ export default function LivraisonsPage() {
                         </span>
                       </TableCell>
                       <TableCell className="text-right">
-                        <div className="flex justify-end gap-0.5">
-                          <Button
-                            size="sm"
-                            onClick={() => handleOpenPayment(delivery)}
-                            title="Encaisser"
-                            className={`h-7 w-7 p-0 bg-[#B8860B] hover:bg-[#9A7209] ${delivery.payment_status === 'paid' ? 'opacity-50' : ''}`}
-                          >
-                            <Wallet className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            onClick={() => handleViewDelivery(delivery)}
-                            title="Voir details"
-                            className="h-7 w-7 p-0 bg-[#B8860B] hover:bg-[#9A7209]"
-                          >
-                            <Eye className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            onClick={() => handleEditDelivery(delivery)}
-                            title="Modifier"
-                            className="h-7 w-7 p-0 bg-[#B8860B] hover:bg-[#9A7209]"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            onClick={() => handleGeneratePDF(delivery)}
-                            title="Telecharger BL"
-                            className="h-7 w-7 p-0 bg-[#B8860B] hover:bg-[#9A7209]"
-                          >
-                            <FileText className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            onClick={() => handleDeleteDelivery(delivery.id, delivery.delivery_number)}
-                            title="Supprimer"
-                            className="h-7 w-7 p-0 bg-[#B8860B] hover:bg-[#9A7209]"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 w-8 p-0 hover:bg-[#B8860B]/10"
+                            >
+                              <MoreHorizontal className="h-4 w-4 text-[#B8860B]" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-48">
+                            <DropdownMenuItem
+                              onClick={() => handleOpenPayment(delivery)}
+                              className={`cursor-pointer ${delivery.payment_status === 'paid' ? 'opacity-50' : ''}`}
+                            >
+                              <Wallet className="h-4 w-4 mr-2 text-[#B8860B]" />
+                              Encaisser
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => handleViewDelivery(delivery)}
+                              className="cursor-pointer"
+                            >
+                              <Eye className="h-4 w-4 mr-2 text-[#B8860B]" />
+                              Voir details
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => handleEditDelivery(delivery)}
+                              className="cursor-pointer"
+                            >
+                              <Pencil className="h-4 w-4 mr-2 text-[#B8860B]" />
+                              Modifier
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => handleGeneratePDF(delivery)}
+                              className="cursor-pointer"
+                            >
+                              <FileText className="h-4 w-4 mr-2 text-[#B8860B]" />
+                              Telecharger BL
+                            </DropdownMenuItem>
+                            {!isLivreur && (
+                              <>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  onClick={() => handleDeleteDelivery(delivery.id, delivery.delivery_number)}
+                                  className="cursor-pointer text-red-600 focus:text-red-600"
+                                >
+                                  <Trash2 className="h-4 w-4 mr-2" />
+                                  Supprimer
+                                </DropdownMenuItem>
+                              </>
+                            )}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -2357,19 +2271,20 @@ export default function LivraisonsPage() {
                 <p className="text-gray-500">Gérez vos tournées de livraison</p>
               </div>
 
-              <Dialog open={isRoundDialogOpen} onOpenChange={setIsRoundDialogOpen}>
-                <DialogTrigger asChild>
-                  <Button
-                    className="bg-[#B8860B] hover:bg-[#9A7209]"
-                    onClick={() => {
-                      resetRoundForm()
-                      setIsRoundDialogOpen(true)
-                    }}
-                  >
-                    <Plus className="mr-2 h-4 w-4" />
-                    Nouvelle Tournée
-                  </Button>
-                </DialogTrigger>
+              {!isLivreur && (
+                <Dialog open={isRoundDialogOpen} onOpenChange={setIsRoundDialogOpen}>
+                  <DialogTrigger asChild>
+                    <Button
+                      className="bg-[#B8860B] hover:bg-[#9A7209]"
+                      onClick={() => {
+                        resetRoundForm()
+                        setIsRoundDialogOpen(true)
+                      }}
+                    >
+                      <Plus className="mr-2 h-4 w-4" />
+                      Nouvelle Tournée
+                    </Button>
+                  </DialogTrigger>
                 <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
                   <DialogHeader>
                     <DialogTitle>Créer une nouvelle tournée</DialogTitle>
@@ -2461,7 +2376,8 @@ export default function LivraisonsPage() {
                     </div>
                   </form>
                 </DialogContent>
-              </Dialog>
+                </Dialog>
+              )}
             </div>
 
             {/* Stats */}
@@ -2515,15 +2431,17 @@ export default function LivraisonsPage() {
             <Card className="border-2 border-[#B8860B]">
               <CardHeader>
                 <div className="flex flex-col md:flex-row gap-4">
-                  <div className="relative flex-1">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                    <Input
-                      placeholder="Rechercher par numéro ou livreur..."
-                      value={roundSearchTerm}
-                      onChange={(e) => setRoundSearchTerm(e.target.value)}
-                      className="pl-10 border-2 border-[#B8860B]"
-                    />
-                  </div>
+                  {!isLivreur && (
+                    <div className="relative flex-1">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                      <Input
+                        placeholder="Rechercher par numéro ou livreur..."
+                        value={roundSearchTerm}
+                        onChange={(e) => setRoundSearchTerm(e.target.value)}
+                        className="pl-10 border-2 border-[#B8860B]"
+                      />
+                    </div>
+                  )}
                   <Select value={roundStatusFilter} onValueChange={setRoundStatusFilter}>
                     <SelectTrigger className="w-full md:w-48 border-2 border-[#B8860B]">
                       <SelectValue placeholder="Statut" />
@@ -2712,7 +2630,7 @@ export default function LivraisonsPage() {
                 {viewingRound && (
                   <div className="space-y-6">
                     {/* Header Info */}
-                    <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                       <div className="bg-gray-50 rounded-lg p-3">
                         <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
                           <Calendar className="h-4 w-4" />
@@ -2733,13 +2651,26 @@ export default function LivraisonsPage() {
                       </div>
                       <div className="bg-gray-50 rounded-lg p-3">
                         <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
-                          <Package className="h-4 w-4" />
+                          <Truck className="h-4 w-4" />
                           Livraisons
                         </div>
                         <p className="font-medium">
                           {viewingRound.delivery_round_items?.length || 0} BL
                         </p>
                       </div>
+                      <div className={`rounded-lg p-3 border-2 ${roundStatusColors[viewingRound.status].replace('bg-', 'bg-').replace('text-', 'border-')}`}>
+                        <div className="flex items-center gap-2 text-gray-700 text-sm mb-1 font-semibold">
+                          <CheckCircle2 className="h-4 w-4" />
+                          Statut Tournée
+                        </div>
+                        <p className="font-bold">
+                          <Badge className={roundStatusColors[viewingRound.status]}>
+                            {roundStatusLabels[viewingRound.status]}
+                          </Badge>
+                        </p>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                       <div className="bg-amber-50 border border-[#B8860B] rounded-lg p-3">
                         <div className="flex items-center gap-2 text-[#B8860B] text-sm mb-1">
                           <Package className="h-4 w-4" />
@@ -2756,6 +2687,36 @@ export default function LivraisonsPage() {
                       </div>
                       <div className="bg-gray-50 rounded-lg p-3">
                         <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
+                          <Package className="h-4 w-4" />
+                          Total articles
+                        </div>
+                        <p className="text-xl font-bold">
+                          {viewingRound.delivery_round_items?.reduce(
+                            (sum, item) => {
+                              const items = item.delivery?.delivery_items || []
+                              return sum + items.reduce((s, di) => s + (di.quantity_delivered || 0), 0)
+                            },
+                            0
+                          ) || 0}
+                        </p>
+                      </div>
+                      <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                        <div className="flex items-center gap-2 text-red-600 text-sm mb-1">
+                          <RotateCcw className="h-4 w-4" />
+                          Articles retournés
+                        </div>
+                        <p className="text-xl font-bold text-red-600">
+                          {viewingRound.delivery_round_items?.reduce(
+                            (sum, item) => {
+                              const items = item.delivery?.delivery_items || []
+                              return sum + items.reduce((s, di) => s + (di.quantity_returned || 0), 0)
+                            },
+                            0
+                          ) || 0}
+                        </p>
+                      </div>
+                      <div className="bg-gray-50 rounded-lg p-3">
+                        <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
                           <Clock className="h-4 w-4" />
                           Durée
                         </div>
@@ -2765,17 +2726,6 @@ export default function LivraisonsPage() {
                             : viewingRound.start_time
                               ? 'En cours...'
                               : 'Non démarré'}
-                        </p>
-                      </div>
-                      <div className={`rounded-lg p-3 border-2 ${roundStatusColors[viewingRound.status].replace('bg-', 'bg-').replace('text-', 'border-')}`}>
-                        <div className="flex items-center gap-2 text-gray-700 text-sm mb-1 font-semibold">
-                          <CheckCircle2 className="h-4 w-4" />
-                          Statut Tournée
-                        </div>
-                        <p className="font-bold">
-                          <Badge className={roundStatusColors[viewingRound.status]}>
-                            {roundStatusLabels[viewingRound.status]}
-                          </Badge>
                         </p>
                       </div>
                     </div>
@@ -2930,6 +2880,18 @@ export default function LivraisonsPage() {
                                           })}
                                         </TableBody>
                                       </Table>
+                                      <div className="flex justify-end mt-4 pt-3 border-t border-[#B8860B]">
+                                        <Button
+                                          onClick={() => {
+                                            setIsViewRoundDialogOpen(false)
+                                            handleOpenPayment(delivery)
+                                          }}
+                                          className="gap-2 bg-green-600 hover:bg-green-700"
+                                        >
+                                          <Wallet className="h-4 w-4" />
+                                          Encaisser
+                                        </Button>
+                                      </div>
                                     </div>
                                   </TableCell>
                                 </TableRow>
@@ -2992,6 +2954,29 @@ export default function LivraisonsPage() {
                             })()}
                           </p>
                         </div>
+                        <div className="flex items-center gap-4 border-t border-[#B8860B] pt-2">
+                          <h3 className="text-lg font-bold text-green-700">RNET-BLT</h3>
+                          <p className="text-2xl font-bold text-green-700">
+                            {(() => {
+                              const recetteBLT = viewingRound.delivery_round_items?.reduce(
+                                (sum, item) => {
+                                  const deliveryRecette = (item.delivery as any)?.delivery_items?.reduce(
+                                    (itemSum: number, deliveryItem: any) =>
+                                      itemSum + ((deliveryItem.quantity_delivered - deliveryItem.quantity_returned) * deliveryItem.unit_price),
+                                    0
+                                  ) || 0
+                                  return sum + deliveryRecette
+                                },
+                                0
+                              ) || 0
+                              const totalReste = viewingRound.delivery_round_items?.reduce(
+                                (sum, item) => sum + ((item.delivery as any)?.balance_due || 0),
+                                0
+                              ) || 0
+                              return formatPrice(recetteBLT - totalReste)
+                            })()}
+                          </p>
+                        </div>
                       </div>
                     </div>
 
@@ -3022,529 +3007,6 @@ export default function LivraisonsPage() {
                         >
                           <CheckCircle2 className="h-4 w-4 mr-2" />
                           Terminer la tournée
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </DialogContent>
-            </Dialog>
-          </>
-        )}
-
-        {/* RBLT - Retour des Livraisons Tab Content */}
-        {activeTab === 'rblt' && (
-          <>
-            {/* Header */}
-            <div className="flex items-center justify-between">
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900">Retour de Livraisons</h1>
-                <p className="text-gray-500">Gérez les retours de marchandises</p>
-              </div>
-
-              <Dialog open={isReturnDialogOpen} onOpenChange={setIsReturnDialogOpen}>
-                <DialogTrigger asChild>
-                  <Button
-                    className="bg-[#B8860B] hover:bg-[#9A7209]"
-                    onClick={() => {
-                      resetReturnForm()
-                      setIsReturnDialogOpen(true)
-                    }}
-                  >
-                    <Plus className="mr-2 h-4 w-4" />
-                    Nouveau Retour
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-                  <DialogHeader>
-                    <DialogTitle>Créer un bon de retour (RBLT)</DialogTitle>
-                  </DialogHeader>
-                  <form onSubmit={handleReturnSubmit} className="space-y-4">
-                    <div className="space-y-2">
-                      <Label>BLT (Tournée) *</Label>
-                      <Select
-                        value={selectedRoundForReturn}
-                        onValueChange={(value) => {
-                          setSelectedRoundForReturn(value)
-                          setReturnFormData({ ...returnFormData, delivery_id: '', client_id: '' })
-                          setSelectedDeliveryForReturn(null)
-                          setReturnItems([])
-                        }}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Sélectionner une tournée terminée" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {rounds.filter(r => r.status === 'completed').map((round) => (
-                            <SelectItem key={round.id} value={round.id}>
-                              {round.round_number} - {format(new Date(round.round_date), 'dd/MM/yyyy', { locale: fr })} - {round.driver?.full_name || 'Non assigné'}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    {selectedRoundForReturn && (
-                    <div className="space-y-2">
-                      <Label>Livraison source *</Label>
-                      <Select
-                        value={returnFormData.delivery_id}
-                        onValueChange={(value) => {
-                          const round = rounds.find(r => r.id === selectedRoundForReturn)
-                          const roundItem = round?.delivery_round_items?.find(ri => ri.delivery_id === value)
-                          const delivery = roundItem?.delivery as any
-                          if (delivery) {
-                            const fullDelivery = deliveries.find(d => d.id === value)
-                            if (fullDelivery) handleSelectDeliveryForReturn(fullDelivery)
-                          }
-                        }}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Sélectionner une livraison" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {(() => {
-                            const round = rounds.find(r => r.id === selectedRoundForReturn)
-                            return round?.delivery_round_items?.map((ri) => {
-                              const delivery = ri.delivery as any
-                              return (
-                                <SelectItem key={ri.delivery_id} value={ri.delivery_id}>
-                                  {delivery?.delivery_number} - {delivery?.client?.name}
-                                </SelectItem>
-                              )
-                            }) || []
-                          })()}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    )}
-
-                    <div className="space-y-2">
-                      <Label htmlFor="return_date">Date de retour</Label>
-                      <Input
-                        id="return_date"
-                        type="date"
-                        value={returnFormData.return_date}
-                        onChange={(e) =>
-                          setReturnFormData({ ...returnFormData, return_date: e.target.value })
-                        }
-                        required
-                      />
-                    </div>
-
-                    {selectedDeliveryForReturn && (
-                      <div className="border-t pt-4">
-                        <h3 className="font-medium mb-3">Articles à retourner</h3>
-                        <div className="space-y-2">
-                          {selectedDeliveryForReturn.delivery_items?.map((item, index) => (
-                            <div key={item.id} className="flex items-center gap-4 p-3 border rounded-lg">
-                              <div className="flex-1">
-                                <p className="font-medium">
-                                  {item.article?.code} - {item.article?.name}
-                                </p>
-                                <p className="text-sm text-gray-500">
-                                  Quantité livrée: {item.quantity_delivered}
-                                </p>
-                              </div>
-                              <div className="w-32">
-                                <Label htmlFor={`qty-${item.id}`} className="text-xs">
-                                  Qté retour
-                                </Label>
-                                <Input
-                                  id={`qty-${item.id}`}
-                                  type="number"
-                                  min="0"
-                                  max={item.quantity_delivered}
-                                  value={returnItems[index]?.quantity || 0}
-                                  onChange={(e) => {
-                                    const newQty = parseInt(e.target.value) || 0
-                                    const newItems = [...returnItems]
-                                    newItems[index] = {
-                                      ...newItems[index],
-                                      quantity: newQty,
-                                    }
-                                    setReturnItems(newItems)
-                                  }}
-                                  className="text-center"
-                                />
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="space-y-2">
-                      <Label htmlFor="return_notes">Notes</Label>
-                      <Input
-                        id="return_notes"
-                        value={returnFormData.notes}
-                        onChange={(e) =>
-                          setReturnFormData({ ...returnFormData, notes: e.target.value })
-                        }
-                        placeholder="Raison du retour"
-                      />
-                    </div>
-
-                    <div className="flex justify-end gap-2 pt-4">
-                      <Button
-                        type="button"
-                        onClick={() => setIsReturnDialogOpen(false)}
-                        className="bg-[#B8860B] hover:bg-[#9A7209]"
-                      >
-                        Annuler
-                      </Button>
-                      <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
-                        Créer le retour
-                      </Button>
-                    </div>
-                  </form>
-                </DialogContent>
-              </Dialog>
-            </div>
-
-            {/* Stats */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <Card className="border-2 border-[#B8860B]">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-bold text-gray-600">
-                    Total Retours
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex items-center gap-2">
-                    <RotateCcw className="h-8 w-8 text-red-600" />
-                    <span className="text-2xl font-bold">{returnStats.total}</span>
-                  </div>
-                </CardContent>
-              </Card>
-              <Card className="border-2 border-[#B8860B]">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-bold text-gray-600">
-                    En attente
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <span className="text-2xl font-bold text-yellow-600">{returnStats.pending}</span>
-                </CardContent>
-              </Card>
-              <Card className="border-2 border-[#B8860B]">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-bold text-gray-600">
-                    Validés
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <span className="text-2xl font-bold text-[#B8860B]">{returnStats.validated}</span>
-                </CardContent>
-              </Card>
-              <Card className="border-2 border-[#B8860B]">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-bold text-gray-600">
-                    Valeur Retours
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex items-center gap-2">
-                    <TrendingUp className="h-6 w-6 text-red-600" />
-                    <span className="text-xl font-bold text-red-600">
-                      {formatPrice(returnStats.totalValue)}
-                    </span>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* Search & Filters */}
-            <Card className="border-2 border-[#B8860B]">
-              <CardHeader>
-                <div className="flex flex-col md:flex-row gap-4">
-                  <div className="relative flex-1">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                    <Input
-                      placeholder="Rechercher par numéro, client ou BL..."
-                      value={returnSearchTerm}
-                      onChange={(e) => setReturnSearchTerm(e.target.value)}
-                      className="pl-10 border-2 border-[#B8860B]"
-                    />
-                  </div>
-                  <Select value={returnStatusFilter} onValueChange={setReturnStatusFilter}>
-                    <SelectTrigger className="w-full md:w-48 border-2 border-[#B8860B]">
-                      <SelectValue placeholder="Statut" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Tous les statuts</SelectItem>
-                      <SelectItem value="pending">En attente</SelectItem>
-                      <SelectItem value="validated">Validé</SelectItem>
-                      <SelectItem value="cancelled">Annulé</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Button variant="outline" onClick={fetchReturns}>
-                    <RefreshCw className="h-4 w-4 mr-2" />
-                    Actualiser
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {filteredReturns.length === 0 ? (
-                  <div className="text-center py-8 text-gray-500">
-                    Aucun retour trouvé
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto border-2 border-[#B8860B] rounded-lg">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Date</TableHead>
-                          <TableHead>N° RBLT</TableHead>
-                          <TableHead>N° BLT</TableHead>
-                          <TableHead className="text-center">Nombre BL</TableHead>
-                          <TableHead className="text-center">Nombre articles</TableHead>
-                          <TableHead className="text-right">Valeur BLT</TableHead>
-                          <TableHead className="text-right">Recette BLT</TableHead>
-                          <TableHead className="text-center">Articles retour</TableHead>
-                          <TableHead className="text-right">Valeur retour</TableHead>
-                          <TableHead className="text-right">Différence</TableHead>
-                          <TableHead>Statut</TableHead>
-                          <TableHead className="text-right">Actions</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {filteredReturns.map((ret) => {
-                          const linkedRound = ret.round as any
-                          const roundItems = linkedRound?.delivery_round_items || []
-                          const nbBL = roundItems.length
-                          const nbArticles = roundItems.reduce((sum: number, ri: any) => sum + (ri.delivery?.delivery_items?.length || 0), 0)
-                          const valeurBLT = roundItems.reduce((sum: number, ri: any) => sum + (ri.delivery?.total_ht || 0), 0)
-                          const recetteBLT = roundItems.reduce((sum: number, ri: any) => {
-                            const items = ri.delivery?.delivery_items || []
-                            return sum + items.reduce((s: number, di: any) => s + ((di.quantity_delivered - di.quantity_returned) * di.unit_price), 0)
-                          }, 0)
-                          const articlesRetour = ret.delivery_return_items?.filter(item => item.quantity_returned > 0).length || 0
-                          const valeurRetour = ret.total_ht || 0
-                          const difference = valeurBLT - recetteBLT
-
-                          return (
-                          <TableRow key={ret.id}>
-                            <TableCell>
-                              {format(new Date(ret.return_date), 'dd/MM/yyyy', { locale: fr })}
-                            </TableCell>
-                            <TableCell className="font-mono font-medium">
-                              {ret.return_number}
-                            </TableCell>
-                            <TableCell className="font-mono">
-                              {ret.round?.round_number || '-'}
-                            </TableCell>
-                            <TableCell className="text-center">
-                              <Badge variant="outline">{nbBL}</Badge>
-                            </TableCell>
-                            <TableCell className="text-center">
-                              {nbArticles}
-                            </TableCell>
-                            <TableCell className="text-right font-semibold">
-                              {formatPrice(valeurBLT)}
-                            </TableCell>
-                            <TableCell className="text-right font-semibold text-[#B8860B]">
-                              {formatPrice(recetteBLT)}
-                            </TableCell>
-                            <TableCell className="text-center">
-                              <Badge variant="outline" className="text-red-600 border-red-300">
-                                {articlesRetour}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="text-right font-semibold text-red-600">
-                              {formatPrice(valeurRetour)}
-                            </TableCell>
-                            <TableCell className="text-right font-semibold">
-                              {formatPrice(difference)}
-                            </TableCell>
-                            <TableCell>
-                              <Badge className={returnStatusColors[ret.status]}>
-                                {returnStatusLabels[ret.status]}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <div className="flex justify-end gap-1">
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  title="Voir détails"
-                                  onClick={() => handleViewReturn(ret)}
-                                >
-                                  <Eye className="h-4 w-4" />
-                                </Button>
-                                {ret.status === 'pending' && (
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    title="Valider"
-                                    onClick={() => handleValidateReturn(ret.id)}
-                                  >
-                                    <CheckCircle2 className="h-4 w-4 text-[#B8860B]" />
-                                  </Button>
-                                )}
-                                {ret.status === 'pending' && (
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    title="Annuler"
-                                    onClick={() => handleCancelReturn(ret.id)}
-                                  >
-                                    <XCircle className="h-4 w-4 text-orange-600" />
-                                  </Button>
-                                )}
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  title="Supprimer"
-                                  onClick={() => handleDeleteReturn(ret.id)}
-                                >
-                                  <Trash2 className="h-4 w-4 text-red-600" />
-                                </Button>
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                          )
-                        })}
-                      </TableBody>
-                    </Table>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* View Return Dialog */}
-            <Dialog open={isViewReturnDialogOpen} onOpenChange={setIsViewReturnDialogOpen}>
-              <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-                <DialogHeader>
-                  <DialogTitle className="flex items-center gap-3 text-xl">
-                    <RotateCcw className="h-6 w-6 text-red-600" />
-                    Bon de Retour {viewingReturn?.return_number}
-                    {viewingReturn && (
-                      <Badge className={`ml-2 ${returnStatusColors[viewingReturn.status]}`}>
-                        {returnStatusLabels[viewingReturn.status]}
-                      </Badge>
-                    )}
-                  </DialogTitle>
-                </DialogHeader>
-                {viewingReturn && (
-                  <div className="space-y-6">
-                    {/* Header Info */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                      <div className="bg-gray-50 rounded-lg p-3">
-                        <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
-                          <Calendar className="h-4 w-4" />
-                          Date
-                        </div>
-                        <p className="font-medium">
-                          {format(new Date(viewingReturn.return_date), 'dd MMMM yyyy', { locale: fr })}
-                        </p>
-                      </div>
-                      <div className="bg-gray-50 rounded-lg p-3">
-                        <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
-                          <User className="h-4 w-4" />
-                          Client
-                        </div>
-                        <p className="font-medium">
-                          {viewingReturn.client?.code} - {viewingReturn.client?.name}
-                        </p>
-                      </div>
-                      <div className="bg-gray-50 rounded-lg p-3">
-                        <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
-                          <Truck className="h-4 w-4" />
-                          BL Origine
-                        </div>
-                        <p className="font-medium">
-                          {viewingReturn.delivery?.delivery_number || '-'}
-                        </p>
-                      </div>
-                      <div className="bg-gray-50 rounded-lg p-3">
-                        <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
-                          <TrendingUp className="h-4 w-4" />
-                          Total HT
-                        </div>
-                        <p className="font-medium text-red-600">
-                          {formatPrice(viewingReturn.total_ht || 0)}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Return Reason */}
-                    {viewingReturn.return_reason && (
-                      <div className="bg-red-50 border border-red-200 rounded-lg p-3">
-                        <span className="font-medium text-red-800">Motif: </span>
-                        <span className="text-red-700">
-                          {returnReasons.find(r => r.value === viewingReturn.return_reason)?.label || viewingReturn.return_reason}
-                        </span>
-                      </div>
-                    )}
-
-                    {/* Return Items */}
-                    <div className="border rounded-xl overflow-hidden">
-                      <div className="bg-gray-50 px-4 py-3 border-b">
-                        <h3 className="font-semibold text-gray-700 flex items-center gap-2">
-                          <Package className="h-5 w-5" />
-                          Articles retournés
-                        </h3>
-                      </div>
-                      <Table>
-                        <TableHeader>
-                          <TableRow className="bg-gray-50">
-                            <TableHead>Article</TableHead>
-                            <TableHead className="text-center">Quantité</TableHead>
-                            <TableHead>Motif</TableHead>
-                            <TableHead className="text-right">Prix unitaire</TableHead>
-                            <TableHead className="text-right">Total</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {viewingReturn.delivery_return_items?.map((item) => (
-                            <TableRow key={item.id}>
-                              <TableCell>
-                                <span className="font-medium">{item.article?.code}</span>
-                                <span className="text-gray-500 ml-2">{item.article?.name}</span>
-                              </TableCell>
-                              <TableCell className="text-center font-medium">
-                                {item.quantity_returned}
-                              </TableCell>
-                              <TableCell>
-                                {returnReasons.find(r => r.value === item.return_reason)?.label || item.return_reason || '-'}
-                              </TableCell>
-                              <TableCell className="text-right">
-                                {formatPrice(item.unit_price || 0)}
-                              </TableCell>
-                              <TableCell className="text-right font-medium text-red-600">
-                                {formatPrice((item.quantity_returned || 0) * (item.unit_price || 0))}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
-
-                    {/* Notes */}
-                    {viewingReturn.notes && (
-                      <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
-                        <h3 className="font-semibold text-yellow-800 mb-2">Notes</h3>
-                        <p className="text-sm text-gray-700">{viewingReturn.notes}</p>
-                      </div>
-                    )}
-
-                    {/* Actions */}
-                    <div className="flex flex-wrap justify-end gap-3 pt-4 border-t">
-                      <Button className="bg-[#B8860B] hover:bg-[#9A7209]" onClick={() => setIsViewReturnDialogOpen(false)}>
-                        Fermer
-                      </Button>
-                      {viewingReturn.status === 'pending' && (
-                        <Button
-                          className="bg-[#B8860B] hover:bg-[#9A7209]"
-                          onClick={() => {
-                            handleValidateReturn(viewingReturn.id)
-                            setIsViewReturnDialogOpen(false)
-                          }}
-                        >
-                          <CheckCircle2 className="h-4 w-4 mr-2" />
-                          Valider le retour
                         </Button>
                       )}
                     </div>
@@ -3681,6 +3143,16 @@ export default function LivraisonsPage() {
                     </Select>
                   </div>
                   <div className="flex gap-2">
+                    <Button
+                      onClick={() => {
+                        setIsViewDialogOpen(false)
+                        handleOpenPayment(viewDelivery)
+                      }}
+                      className="gap-2 bg-green-600 hover:bg-green-700"
+                    >
+                      <Wallet className="h-4 w-4" />
+                      Encaisser
+                    </Button>
                     <Button
                       onClick={() => handleGeneratePDF(viewDelivery)}
                       className="gap-2 bg-[#B8860B] hover:bg-[#9A7209]"

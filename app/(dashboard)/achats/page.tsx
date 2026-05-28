@@ -98,7 +98,7 @@ const statusColors: Record<string, string> = {
   draft: 'bg-gray-100 text-gray-800',
   sent: 'bg-blue-100 text-blue-800',
   partial: 'bg-yellow-100 text-yellow-800',
-  received: 'bg-green-100 text-green-800',
+  received: 'bg-amber-100 text-[#9A7209]',
   cancelled: 'bg-red-100 text-red-800',
 }
 
@@ -149,7 +149,7 @@ export default function AchatsPage() {
           quantity,
           unit_price,
           total_ht,
-          supply:supplies(code, name, description)
+          supply:supplies!purchase_order_items_supply_id_fkey(code, name, description)
         )
       `)
       .order('created_at', { ascending: false })
@@ -163,13 +163,13 @@ export default function AchatsPage() {
   }
 
   // Handle PDF export
-  const handleExportPDF = (order: PurchaseOrder) => {
+  const handleExportPDF = async (order: PurchaseOrder) => {
     if (!order.supplier || !order.purchase_order_items) {
       alert('Données incomplètes pour générer le PDF')
       return
     }
 
-    generatePurchaseOrderPDF({
+    await generatePurchaseOrderPDF({
       id: order.id,
       po_number: order.po_number,
       order_date: order.order_date,
@@ -292,28 +292,86 @@ export default function AchatsPage() {
     }
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-
+  const handleSubmit = async () => {
     if (!formData.supplier_id) {
       alert('Veuillez sélectionner un fournisseur')
       return
     }
 
+    if (poItems.length === 0) {
+      alert('Veuillez ajouter au moins une fourniture')
+      return
+    }
+
     const total_ht = poItems.reduce((sum, item) => sum + (item.total_ht || 0), 0) || null
 
+    // Create the purchase order
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { error } = await (supabase.from('purchase_orders') as any).insert([{
-      po_number: generatePONumber(),
-      supplier_id: formData.supplier_id,
-      order_date: formData.order_date,
-      status: 'draft',
-      total_ht,
-    }])
+    const { data: newOrder, error } = await (supabase.from('purchase_orders') as any)
+      .insert([{
+        po_number: generatePONumber(),
+        supplier_id: formData.supplier_id,
+        order_date: formData.order_date,
+        status: 'draft',
+        total_ht,
+      }])
+      .select()
+      .single()
 
-    if (error) {
+    if (error || !newOrder) {
       console.error('Error creating purchase order:', error)
+      alert('Erreur lors de la création du bon de commande')
       return
+    }
+
+    // Insert the items - handle custom entries by creating supplies first
+    const itemsToInsert = []
+
+    for (const item of poItems) {
+      let supplyId = item.supply_id
+
+      // For custom entries, create a custom supply first
+      if (item.is_custom && !supplyId) {
+        const customCode = `CUSTOM-${Date.now()}`
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: newSupply, error: supplyError } = await (supabase.from('supplies') as any)
+          .insert([{
+            code: customCode,
+            name: item.supply_name,
+            price_ht: item.unit_price || 0,
+            is_custom: true,
+            is_active: true,
+          }])
+          .select()
+          .single()
+
+        if (supplyError || !newSupply) {
+          console.error('Error creating custom supply:', supplyError)
+          continue
+        }
+        supplyId = newSupply.id
+      }
+
+      if (supplyId) {
+        itemsToInsert.push({
+          purchase_order_id: newOrder.id,
+          supply_id: supplyId,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          total_ht: item.total_ht,
+        })
+      }
+    }
+
+    if (itemsToInsert.length > 0) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: itemsError } = await (supabase.from('purchase_order_items') as any)
+        .insert(itemsToInsert)
+
+      if (itemsError) {
+        console.error('Error creating purchase order items:', itemsError)
+        alert('Erreur lors de l\'ajout des articles')
+      }
     }
 
     fetchPurchaseOrders()
@@ -358,26 +416,41 @@ export default function AchatsPage() {
   }
 
   const handleSaveEdit = async () => {
-    if (!editingOrder) return
+    console.log('handleSaveEdit called')
+    console.log('editingOrder:', editingOrder)
+    console.log('editFormData:', editFormData)
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { error } = await (supabase.from('purchase_orders') as any)
-      .update({
-        supplier_id: editFormData.supplier_id,
-        order_date: editFormData.order_date,
-        status: editFormData.status,
-      })
-      .eq('id', editingOrder.id)
-
-    if (error) {
-      console.error('Error updating purchase order:', error)
-      alert('Erreur lors de la modification')
+    if (!editingOrder) {
+      console.log('No editingOrder, returning')
+      alert('Erreur: Aucune commande sélectionnée')
       return
     }
 
-    fetchPurchaseOrders()
-    setIsEditDialogOpen(false)
-    setEditingOrder(null)
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase.from('purchase_orders') as any)
+        .update({
+          supplier_id: editFormData.supplier_id,
+          order_date: editFormData.order_date,
+          status: editFormData.status,
+        })
+        .eq('id', editingOrder.id)
+
+      if (error) {
+        console.error('Error updating purchase order:', error)
+        alert('Erreur lors de la modification: ' + error.message)
+        return
+      }
+
+      console.log('Update successful')
+      alert('Bon de commande modifié avec succès')
+      fetchPurchaseOrders()
+      setIsEditDialogOpen(false)
+      setEditingOrder(null)
+    } catch (err) {
+      console.error('Exception:', err)
+      alert('Erreur: ' + (err as Error).message)
+    }
   }
 
   // Delete order
@@ -420,14 +493,14 @@ export default function AchatsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Achats</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Bon de Commande</h1>
           <p className="text-gray-500">Gérez vos bons de commande fournisseurs</p>
         </div>
 
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
             <Button
-              className="bg-green-600 hover:bg-green-700"
+              className="bg-[#B8860B] hover:bg-[#9A7209]"
               onClick={() => {
                 resetForm()
                 setIsDialogOpen(true)
@@ -441,7 +514,7 @@ export default function AchatsPage() {
             <DialogHeader>
               <DialogTitle>Nouveau bon de commande fournisseur</DialogTitle>
             </DialogHeader>
-            <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Fournisseur *</Label>
@@ -491,7 +564,7 @@ export default function AchatsPage() {
                         Saisie libre
                       </Label>
                     </div>
-                    <Link href="/fournitures" className="text-sm text-green-600 hover:underline flex items-center gap-1">
+                    <Link href="/fournitures" className="text-sm text-[#B8860B] hover:underline flex items-center gap-1">
                       <Package className="h-4 w-4" />
                       Gérer les fournitures
                     </Link>
@@ -601,14 +674,17 @@ export default function AchatsPage() {
               </div>
 
               <div className="flex justify-end gap-2 pt-4">
-                <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
                   Annuler
                 </Button>
-                <Button type="submit" className="bg-green-600 hover:bg-green-700">
+                <Button
+                  className="bg-[#B8860B] hover:bg-[#9A7209]"
+                  onClick={handleSubmit}
+                >
                   Créer le BC
                 </Button>
               </div>
-            </form>
+            </div>
           </DialogContent>
         </Dialog>
       </div>
@@ -658,7 +734,7 @@ export default function AchatsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <span className="text-2xl font-bold text-green-600">
+            <span className="text-2xl font-bold text-[#B8860B]">
               {purchaseOrders.filter((o) => o.status === 'received').length}
             </span>
           </CardContent>
@@ -806,7 +882,7 @@ export default function AchatsPage() {
                 </div>
                 <div>
                   <p className="text-xs text-gray-500 uppercase">Total HT</p>
-                  <p className="font-bold text-green-600 text-lg">
+                  <p className="font-bold text-[#B8860B] text-lg">
                     {viewingOrder.total_ht ? formatPrice(viewingOrder.total_ht) : 'Non renseigné'}
                   </p>
                 </div>
@@ -881,64 +957,72 @@ export default function AchatsPage() {
               Modifier le BC {editingOrder?.po_number}
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Fournisseur</Label>
-              <Select
-                value={editFormData.supplier_id}
-                onValueChange={(value) => setEditFormData({ ...editFormData, supplier_id: value })}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {suppliers.map((supplier) => (
-                    <SelectItem key={supplier.id} value={supplier.id}>
-                      {supplier.code} - {supplier.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
+          {editingOrder && (
+            <div className="space-y-4">
               <div className="space-y-2">
-                <Label>Date de commande</Label>
-                <Input
-                  type="date"
-                  value={editFormData.order_date}
-                  onChange={(e) => setEditFormData({ ...editFormData, order_date: e.target.value })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Statut</Label>
+                <Label>Fournisseur</Label>
                 <Select
-                  value={editFormData.status}
-                  onValueChange={(value) => setEditFormData({ ...editFormData, status: value })}
+                  value={editFormData.supplier_id}
+                  onValueChange={(value) => setEditFormData({ ...editFormData, supplier_id: value })}
                 >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="draft">Brouillon</SelectItem>
-                    <SelectItem value="sent">Envoyée</SelectItem>
-                    <SelectItem value="partial">Partielle</SelectItem>
-                    <SelectItem value="received">Reçue</SelectItem>
-                    <SelectItem value="cancelled">Annulée</SelectItem>
+                    {suppliers.map((supplier) => (
+                      <SelectItem key={supplier.id} value={supplier.id}>
+                        {supplier.code} - {supplier.name}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
-            </div>
 
-            <div className="flex justify-end gap-2 pt-4 border-t">
-              <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>
-                Annuler
-              </Button>
-              <Button onClick={handleSaveEdit} className="bg-orange-600 hover:bg-orange-700">
-                Enregistrer
-              </Button>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Date de commande</Label>
+                  <Input
+                    type="date"
+                    value={editFormData.order_date}
+                    onChange={(e) => setEditFormData({ ...editFormData, order_date: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Statut</Label>
+                  <Select
+                    value={editFormData.status}
+                    onValueChange={(value) => setEditFormData({ ...editFormData, status: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="draft">Brouillon</SelectItem>
+                      <SelectItem value="sent">Envoyée</SelectItem>
+                      <SelectItem value="partial">Partielle</SelectItem>
+                      <SelectItem value="received">Reçue</SelectItem>
+                      <SelectItem value="cancelled">Annulée</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-4 border-t">
+                <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>
+                  Annuler
+                </Button>
+                <Button
+                  onClick={() => {
+                    console.log('Enregistrer clicked, editingOrder:', editingOrder)
+                    handleSaveEdit()
+                  }}
+                  className="bg-orange-600 hover:bg-orange-700"
+                >
+                  Enregistrer
+                </Button>
+              </div>
             </div>
-          </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

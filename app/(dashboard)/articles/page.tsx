@@ -31,6 +31,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Plus, Search, Edit, Trash2, Package, Eye, Leaf, Droplets, Carrot, Box, AlertCircle, RefreshCw } from 'lucide-react'
+import { toast } from 'sonner'
 
 interface Category {
   id: string
@@ -60,6 +61,7 @@ interface Article {
   weight_gross: number | null
   packaging_id: string | null
   min_stock: number
+  cr: number | null
   is_active: boolean
   created_at: string
   category?: Category
@@ -94,6 +96,7 @@ export default function ArticlesPage() {
     weight_gross: '',
     packaging_id: '',
     min_stock: '0',
+    cr: '',
   })
 
   const fetchData = useCallback(async () => {
@@ -161,6 +164,7 @@ export default function ArticlesPage() {
       weight_gross: formData.weight_gross ? parseFloat(formData.weight_gross) : null,
       packaging_id: formData.packaging_id || null,
       min_stock: parseInt(formData.min_stock),
+      cr: formData.cr ? parseFloat(formData.cr) : null,
     }
 
     if (editingArticle) {
@@ -201,6 +205,7 @@ export default function ArticlesPage() {
       weight_gross: article.weight_gross?.toString() || '',
       packaging_id: article.packaging_id || '',
       min_stock: article.min_stock.toString(),
+      cr: article.cr?.toString() || '',
     })
     setIsDialogOpen(true)
   }
@@ -214,7 +219,15 @@ export default function ArticlesPage() {
     if (confirm('Êtes-vous sûr de vouloir supprimer cet article ?')) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { error } = await (supabase.from('articles') as any).delete().eq('id', id)
-      if (!error) {
+      if (error) {
+        console.error('Error deleting article:', error)
+        if (error.code === '23503') {
+          toast.error('Impossible de supprimer cet article car il est utilisé dans des ventes, commandes ou autres documents.')
+        } else {
+          toast.error(`Erreur lors de la suppression: ${error.message}`)
+        }
+      } else {
+        toast.success('Article supprimé avec succès')
         fetchData()
       }
     }
@@ -235,6 +248,7 @@ export default function ArticlesPage() {
       weight_gross: '',
       packaging_id: '',
       min_stock: '0',
+      cr: '',
     })
   }
 
@@ -282,7 +296,7 @@ export default function ArticlesPage() {
 
   const getCategoryBadgeColor = (categoryName: string | undefined) => {
     if (!categoryName) return 'bg-gray-100 text-gray-800'
-    if (categoryName.includes('Olive')) return 'bg-green-100 text-green-800'
+    if (categoryName.includes('Olive')) return 'bg-amber-100 text-[#9A7209]'
     if (categoryName.includes('Sauce') || categoryName.includes('Harissa') || categoryName.includes('Vinaigre')) return 'bg-red-100 text-red-800'
     if (categoryName.includes('Cornichon') || categoryName.includes('Citron') || categoryName.includes('Câpre') || categoryName.includes('Légumes')) return 'bg-orange-100 text-orange-800'
     return 'bg-gray-100 text-gray-800'
@@ -311,7 +325,7 @@ export default function ArticlesPage() {
             <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
               <DialogTrigger asChild>
                 <Button
-                  className="bg-green-600 hover:bg-green-700"
+                  className="bg-[#B8860B] hover:bg-[#9A7209]"
                   onClick={() => {
                     resetForm()
                     setIsDialogOpen(true)
@@ -438,6 +452,19 @@ export default function ArticlesPage() {
                     />
                   </div>
                   <div className="space-y-2">
+                    <Label htmlFor="cr">CR (DH)</Label>
+                    <Input
+                      id="cr"
+                      type="number"
+                      step="0.01"
+                      value={formData.cr}
+                      onChange={(e) =>
+                        setFormData({ ...formData, cr: e.target.value })
+                      }
+                      placeholder="Coût de revient"
+                    />
+                  </div>
+                  <div className="space-y-2">
                     <Label htmlFor="unit">Unité</Label>
                     <Select
                       value={formData.unit}
@@ -500,7 +527,7 @@ export default function ArticlesPage() {
                   >
                     Annuler
                   </Button>
-                  <Button type="submit" className="bg-green-600 hover:bg-green-700">
+                  <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
                     {editingArticle ? 'Modifier' : 'Créer'}
                   </Button>
                 </div>
@@ -520,7 +547,7 @@ export default function ArticlesPage() {
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-2">
-                <Package className="h-8 w-8 text-green-600" />
+                <Package className="h-8 w-8 text-[#B8860B]" />
                 <span className="text-2xl font-bold">{articles.length}</span>
               </div>
             </CardContent>
@@ -533,7 +560,7 @@ export default function ArticlesPage() {
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-2">
-                <Leaf className="h-8 w-8 text-green-500" />
+                <Leaf className="h-8 w-8 text-[#DAA520]" />
                 <span className="text-2xl font-bold">{olivesCount}</span>
               </div>
             </CardContent>
@@ -637,7 +664,7 @@ export default function ArticlesPage() {
                       <TableHead>Emballage</TableHead>
                       <TableHead className="text-right">Prix HT</TableHead>
                       <TableHead className="text-center">Poids</TableHead>
-                      <TableHead>Statut</TableHead>
+                      <TableHead className="text-right">CR (DH)</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -676,13 +703,8 @@ export default function ArticlesPage() {
                         <TableCell className="text-center text-sm">
                           {article.weight_net ? `${article.weight_net} kg` : '-'}
                         </TableCell>
-                        <TableCell>
-                          <Badge
-                            variant={article.is_active ? 'default' : 'secondary'}
-                            className={article.is_active ? 'bg-green-100 text-green-800' : ''}
-                          >
-                            {article.is_active ? 'Actif' : 'Inactif'}
-                          </Badge>
+                        <TableCell className="text-right font-medium">
+                          {article.cr ? formatPrice(article.cr) : '-'}
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">
@@ -774,11 +796,17 @@ export default function ArticlesPage() {
                     </p>
                   </div>
                 </div>
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-4 gap-4">
                   <div>
                     <Label className="text-gray-500">Prix HT</Label>
-                    <p className="font-bold text-green-600">
+                    <p className="font-bold text-[#B8860B]">
                       {viewingArticle.price_ht > 0 ? formatPrice(viewingArticle.price_ht) : '-'}
+                    </p>
+                  </div>
+                  <div>
+                    <Label className="text-gray-500">CR</Label>
+                    <p className="font-bold text-gray-700">
+                      {viewingArticle.cr ? formatPrice(viewingArticle.cr) : '-'}
                     </p>
                   </div>
                   <div>
@@ -813,7 +841,7 @@ export default function ArticlesPage() {
                   </Button>
                   <ProtectedModule module="articles" action="edit">
                     <Button
-                      className="bg-green-600 hover:bg-green-700"
+                      className="bg-[#B8860B] hover:bg-[#9A7209]"
                       onClick={() => {
                         setIsViewDialogOpen(false)
                         handleEdit(viewingArticle)

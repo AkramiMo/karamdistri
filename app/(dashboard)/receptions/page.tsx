@@ -61,11 +61,6 @@ interface Reception {
     quantity_expected: number
     quantity_received: number
     unit_price: number
-    article: {
-      code: string
-      name: string
-      description: string | null
-    }
   }[]
 }
 
@@ -82,21 +77,22 @@ interface PurchaseOrder {
   total_ht: number
   purchase_order_items?: {
     id: string
-    article_id: string
+    supply_id: string
     quantity: number
     unit_price: number
-    article: {
+    supply: {
       code: string
       name: string
     }
   }[]
 }
 
-interface Article {
+interface Supply {
   id: string
   code: string
   name: string
   price_ht: number
+  is_active?: boolean
 }
 
 interface ReceptionItem {
@@ -113,7 +109,7 @@ export default function ReceptionsPage() {
   const [receptions, setReceptions] = useState<Reception[]>([])
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([])
-  const [articles, setArticles] = useState<Article[]>([])
+  const [supplies, setSupplies] = useState<Supply[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
@@ -160,8 +156,7 @@ export default function ReceptionsPage() {
             article_id,
             quantity_expected,
             quantity_received,
-            unit_price,
-            article:articles(code, name, description)
+            unit_price
           )
         `)
         .order('created_at', { ascending: false })
@@ -191,34 +186,38 @@ export default function ReceptionsPage() {
   }
 
   const fetchPurchaseOrders = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('purchase_orders')
       .select(`
         id, po_number, supplier_id, total_ht,
         purchase_order_items(
-          id, article_id, quantity, unit_price,
-          article:articles(code, name)
+          id, supply_id, quantity, unit_price,
+          supply:supplies!purchase_order_items_supply_id_fkey(code, name)
         )
       `)
-      .in('status', ['sent', 'partial'])
+      .in('status', ['draft', 'sent', 'partial'])
       .order('created_at', { ascending: false })
+
+    if (error) {
+      console.error('Error fetching purchase orders:', error)
+    }
     setPurchaseOrders(data || [])
   }
 
-  const fetchArticles = async () => {
+  const fetchSupplies = async () => {
+    // Fetch all supplies (including inactive) for viewing existing receptions
     const { data } = await supabase
-      .from('articles')
-      .select('id, code, name, price_ht')
-      .eq('is_active', true)
+      .from('supplies')
+      .select('id, code, name, price_ht, is_active')
       .order('name')
-    setArticles(data || [])
+    setSupplies(data || [])
   }
 
   useEffect(() => {
     fetchReceptions()
     fetchSuppliers()
     fetchPurchaseOrders()
-    fetchArticles()
+    fetchSupplies()
   }, [])
 
   // Generate reception number
@@ -249,13 +248,13 @@ export default function ReceptionsPage() {
   }
 
   // Handle PDF export
-  const handleExportPDF = (reception: Reception) => {
+  const handleExportPDF = async (reception: Reception) => {
     if (!reception.supplier || !reception.reception_items) {
       alert('Données incomplètes pour générer le PDF')
       return
     }
 
-    generateReceptionPDF({
+    await generateReceptionPDF({
       id: reception.id,
       reception_number: reception.reception_number,
       reception_date: reception.reception_date,
@@ -270,16 +269,19 @@ export default function ReceptionsPage() {
         address: reception.supplier.address,
       },
       purchase_order: reception.purchase_order,
-      reception_items: reception.reception_items.map(item => ({
-        article: {
-          code: item.article.code,
-          name: item.article.name,
-          description: item.article.description,
-        },
-        quantity_expected: item.quantity_expected,
-        quantity_received: item.quantity_received,
-        unit_price: item.unit_price,
-      })),
+      reception_items: reception.reception_items.map(item => {
+        const supply = supplies.find(s => s.id === item.article_id)
+        return {
+          article: {
+            code: supply?.code || '-',
+            name: supply?.name || '-',
+            description: null,
+          },
+          quantity_expected: item.quantity_expected,
+          quantity_received: item.quantity_received,
+          unit_price: item.unit_price,
+        }
+      }),
     }, companySettings)
   }
 
@@ -296,9 +298,9 @@ export default function ReceptionsPage() {
       // Pre-fill items from PO
       if (po.purchase_order_items) {
         setReceptionItems(po.purchase_order_items.map(item => ({
-          article_id: item.article_id,
-          article_name: item.article.name,
-          article_code: item.article.code,
+          article_id: item.supply_id,
+          article_name: item.supply?.name || '',
+          article_code: item.supply?.code || '',
           quantity_ordered: item.quantity,
           quantity_received: item.quantity, // Default to full reception
           unit_price: item.unit_price,
@@ -311,8 +313,8 @@ export default function ReceptionsPage() {
   const addItem = () => {
     if (!selectedArticle || !selectedQuantityReceived || !selectedPrice) return
 
-    const article = articles.find(a => a.id === selectedArticle)
-    if (!article) return
+    const supply = supplies.find(s => s.id === selectedArticle)
+    if (!supply) return
 
     const quantityOrdered = parseInt(selectedQuantityOrdered) || 0
     const quantityReceived = parseInt(selectedQuantityReceived)
@@ -320,9 +322,9 @@ export default function ReceptionsPage() {
     const total_ht = unit_price * quantityReceived
 
     setReceptionItems([...receptionItems, {
-      article_id: article.id,
-      article_name: article.name,
-      article_code: article.code,
+      article_id: supply.id,
+      article_name: supply.name,
+      article_code: supply.code,
       quantity_ordered: quantityOrdered,
       quantity_received: quantityReceived,
       unit_price,
@@ -346,11 +348,11 @@ export default function ReceptionsPage() {
     setReceptionItems(items)
   }
 
-  const handleArticleSelect = (articleId: string) => {
-    const article = articles.find(a => a.id === articleId)
-    if (article) {
-      setSelectedArticle(articleId)
-      setSelectedPrice(article.price_ht.toString())
+  const handleSupplySelect = (supplyId: string) => {
+    const supply = supplies.find(s => s.id === supplyId)
+    if (supply) {
+      setSelectedArticle(supplyId)
+      setSelectedPrice(supply.price_ht.toString())
     }
   }
 
@@ -525,7 +527,7 @@ export default function ReceptionsPage() {
             <DialogTrigger asChild>
               <ProtectedModule module="receptions" action="create">
                 <Button
-                  className="bg-green-600 hover:bg-green-700"
+                  className="bg-[#B8860B] hover:bg-[#9A7209]"
                   onClick={() => {
                     resetForm()
                     setIsDialogOpen(true)
@@ -544,21 +546,25 @@ export default function ReceptionsPage() {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Bon de commande (optionnel)</Label>
-                    <Select
+                    <select
                       value={formData.purchase_order_id}
-                      onValueChange={handlePurchaseOrderSelect}
+                      onChange={(e) => {
+                        if (e.target.value) {
+                          handlePurchaseOrderSelect(e.target.value)
+                        } else {
+                          setFormData({ ...formData, purchase_order_id: '' })
+                          setReceptionItems([])
+                        }
+                      }}
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:border-ring"
                     >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Sélectionner un BC" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {purchaseOrders.map((po) => (
-                          <SelectItem key={po.id} value={po.id}>
-                            {po.po_number}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                      <option value="">Sélectionner un BC</option>
+                      {purchaseOrders.map((po) => (
+                        <option key={po.id} value={po.id}>
+                          {po.po_number}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div className="space-y-2">
                     <Label>Fournisseur *</Label>
@@ -599,49 +605,58 @@ export default function ReceptionsPage() {
                 </div>
 
                 <div className="border-t pt-4">
-                  <h3 className="font-medium mb-3">Articles reçus</h3>
-                  <div className="flex gap-2 mb-4">
-                    <Select value={selectedArticle} onValueChange={handleArticleSelect}>
-                      <SelectTrigger className="flex-1">
-                        <SelectValue placeholder="Ajouter un article" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {articles.map((article) => (
-                          <SelectItem key={article.id} value={article.id}>
-                            {article.code} - {article.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Input
-                      type="number"
-                      min="0"
-                      value={selectedQuantityOrdered}
-                      onChange={(e) => setSelectedQuantityOrdered(e.target.value)}
-                      className="w-24"
-                      placeholder="Cmd"
-                      title="Quantité commandée"
-                    />
-                    <Input
-                      type="number"
-                      min="1"
-                      value={selectedQuantityReceived}
-                      onChange={(e) => setSelectedQuantityReceived(e.target.value)}
-                      className="w-24"
-                      placeholder="Reçu"
-                      title="Quantité reçue"
-                    />
-                    <Input
-                      type="number"
-                      step="0.01"
-                      value={selectedPrice}
-                      onChange={(e) => setSelectedPrice(e.target.value)}
-                      className="w-32"
-                      placeholder="Prix"
-                    />
-                    <Button type="button" onClick={addItem} variant="outline">
-                      <Plus className="h-4 w-4" />
-                    </Button>
+                  <h3 className="font-medium mb-3">Fournitures reçues</h3>
+                  <div className="grid grid-cols-12 gap-2 mb-4 items-end">
+                    <div className="col-span-5">
+                      <Label className="text-xs text-gray-500 mb-1 block">Fourniture</Label>
+                      <Select value={selectedArticle} onValueChange={handleSupplySelect}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Sélectionner une fourniture" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {supplies.filter(s => s.is_active !== false).map((supply) => (
+                            <SelectItem key={supply.id} value={supply.id}>
+                              {supply.code} - {supply.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="col-span-2">
+                      <Label className="text-xs text-gray-500 mb-1 block">Qte Cmd</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        value={selectedQuantityOrdered}
+                        onChange={(e) => setSelectedQuantityOrdered(e.target.value)}
+                        placeholder="0"
+                      />
+                    </div>
+                    <div className="col-span-2">
+                      <Label className="text-xs text-gray-500 mb-1 block">Qte Reçue</Label>
+                      <Input
+                        type="number"
+                        min="1"
+                        value={selectedQuantityReceived}
+                        onChange={(e) => setSelectedQuantityReceived(e.target.value)}
+                        placeholder="1"
+                      />
+                    </div>
+                    <div className="col-span-2">
+                      <Label className="text-xs text-gray-500 mb-1 block">Prix HT</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={selectedPrice}
+                        onChange={(e) => setSelectedPrice(e.target.value)}
+                        placeholder="0.00"
+                      />
+                    </div>
+                    <div className="col-span-1">
+                      <Button type="button" onClick={addItem} variant="outline" className="w-full">
+                        <Plus className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </div>
 
                   {receptionItems.length > 0 && (
@@ -649,7 +664,7 @@ export default function ReceptionsPage() {
                       <TableHeader>
                         <TableRow>
                           <TableHead>Code</TableHead>
-                          <TableHead>Article</TableHead>
+                          <TableHead>Fourniture</TableHead>
                           <TableHead className="text-right">Qté Cmd</TableHead>
                           <TableHead className="text-right">Qté Reçue</TableHead>
                           <TableHead className="text-right">Prix unit.</TableHead>
@@ -704,7 +719,7 @@ export default function ReceptionsPage() {
                   <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                     Annuler
                   </Button>
-                  <Button type="submit" className="bg-green-600 hover:bg-green-700">
+                  <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
                     Créer le BR
                   </Button>
                 </div>
@@ -722,7 +737,7 @@ export default function ReceptionsPage() {
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-2">
-                <PackageCheck className="h-8 w-8 text-green-600" />
+                <PackageCheck className="h-8 w-8 text-[#B8860B]" />
                 <span className="text-2xl font-bold">{receptions.length}</span>
               </div>
             </CardContent>
@@ -751,7 +766,7 @@ export default function ReceptionsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <span className="text-2xl font-bold text-green-600">
+              <span className="text-2xl font-bold text-[#B8860B]">
                 {formatPrice(receptions.reduce((sum, r) => sum + (r.total_ht || 0), 0))}
               </span>
             </CardContent>
@@ -879,39 +894,46 @@ export default function ReceptionsPage() {
                 </div>
 
                 <div className="border-t pt-4">
-                  <h3 className="font-medium mb-3">Articles reçus</h3>
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Code</TableHead>
-                        <TableHead>Article</TableHead>
-                        <TableHead className="text-right">Qté Cmd</TableHead>
-                        <TableHead className="text-right">Qté Reçue</TableHead>
-                        <TableHead className="text-right">Prix unit.</TableHead>
-                        <TableHead className="text-right">Total HT</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {viewingReception.reception_items?.map((item) => (
-                        <TableRow key={item.id}>
-                          <TableCell>{item.article.code}</TableCell>
-                          <TableCell>{item.article.name}</TableCell>
-                          <TableCell className="text-right">{item.quantity_expected}</TableCell>
-                          <TableCell className="text-right">{item.quantity_received}</TableCell>
-                          <TableCell className="text-right">{formatPrice(item.unit_price)}</TableCell>
-                          <TableCell className="text-right">{formatPrice(item.quantity_received * item.unit_price)}</TableCell>
+                  <h3 className="font-medium mb-3">Fournitures reçues</h3>
+                  {(!viewingReception.reception_items || viewingReception.reception_items.length === 0) ? (
+                    <p className="text-gray-500 text-center py-4">Aucun article dans ce bon de réception</p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Code</TableHead>
+                          <TableHead>Fourniture</TableHead>
+                          <TableHead className="text-right">Qté Cmd</TableHead>
+                          <TableHead className="text-right">Qté Reçue</TableHead>
+                          <TableHead className="text-right">Prix unit.</TableHead>
+                          <TableHead className="text-right">Total HT</TableHead>
                         </TableRow>
-                      ))}
-                      <TableRow>
-                        <TableCell colSpan={5} className="text-right font-medium">
-                          Total HT:
-                        </TableCell>
-                        <TableCell className="text-right font-bold text-green-600">
-                          {formatPrice(viewingReception.total_ht)}
-                        </TableCell>
-                      </TableRow>
-                    </TableBody>
-                  </Table>
+                      </TableHeader>
+                      <TableBody>
+                        {viewingReception.reception_items.map((item) => {
+                          const supply = supplies.find(s => s.id === item.article_id)
+                          return (
+                            <TableRow key={item.id}>
+                              <TableCell>{supply?.code || '-'}</TableCell>
+                              <TableCell>{supply?.name || '-'}</TableCell>
+                              <TableCell className="text-right">{item.quantity_expected}</TableCell>
+                              <TableCell className="text-right">{item.quantity_received}</TableCell>
+                              <TableCell className="text-right">{formatPrice(item.unit_price)}</TableCell>
+                              <TableCell className="text-right">{formatPrice(item.quantity_received * item.unit_price)}</TableCell>
+                            </TableRow>
+                          )
+                        })}
+                        <TableRow>
+                          <TableCell colSpan={5} className="text-right font-medium">
+                            Total HT:
+                          </TableCell>
+                          <TableCell className="text-right font-bold text-[#B8860B]">
+                            {formatPrice(viewingReception.total_ht)}
+                          </TableCell>
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  )}
                 </div>
 
                 <div className="flex justify-end gap-2 pt-4">

@@ -30,7 +30,7 @@ import {
 } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Search, Users, Plus, Pencil, Trash2, UserCheck, UserX, Shield } from 'lucide-react'
+import { Search, Users, Plus, Pencil, Trash2, UserCheck, UserX, Shield, Key } from 'lucide-react'
 import type { Role } from '@/types/database'
 
 interface UserWithRole {
@@ -208,6 +208,42 @@ export default function UsersPage() {
     }
   }
 
+  const handleResetPassword = async (userId: string, email: string) => {
+    const newPassword = prompt(`Entrez le nouveau mot de passe pour ${email} (minimum 6 caracteres):`)
+
+    if (!newPassword) return
+
+    if (newPassword.length < 6) {
+      alert('Le mot de passe doit contenir au moins 6 caracteres')
+      return
+    }
+
+    try {
+      const response = await fetch('/api/admin/users', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId,
+          newPassword,
+        }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        alert(`Erreur: ${data.error}`)
+        return
+      }
+
+      alert('Mot de passe mis a jour avec succes!')
+    } catch (error) {
+      console.error('Error:', error)
+      alert('Erreur lors de la mise a jour du mot de passe')
+    }
+  }
+
   const resetForm = () => {
     setFormData({
       email: '',
@@ -240,7 +276,7 @@ export default function UsersPage() {
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
               <Button
-                className="bg-green-600 hover:bg-green-700"
+                className="bg-[#B8860B] hover:bg-[#9A7209]"
                 onClick={() => {
                   resetForm()
                   setIsDialogOpen(true)
@@ -309,7 +345,7 @@ export default function UsersPage() {
                   <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                     Annuler
                   </Button>
-                  <Button type="submit" className="bg-green-600 hover:bg-green-700">
+                  <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
                     Creer l'utilisateur
                   </Button>
                 </div>
@@ -341,8 +377,8 @@ export default function UsersPage() {
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-2">
-                <UserCheck className="h-6 w-6 text-green-600" />
-                <span className="text-2xl font-bold text-green-600">
+                <UserCheck className="h-6 w-6 text-[#B8860B]" />
+                <span className="text-2xl font-bold text-[#B8860B]">
                   {users.filter((u) => u.is_active).length}
                 </span>
               </div>
@@ -445,7 +481,7 @@ export default function UsersPage() {
                           <Badge
                             className={
                               user.is_active
-                                ? 'bg-green-100 text-green-800'
+                                ? 'bg-amber-100 text-[#9A7209]'
                                 : 'bg-red-100 text-red-800'
                             }
                           >
@@ -465,13 +501,21 @@ export default function UsersPage() {
                             <Button
                               variant="ghost"
                               size="icon"
+                              title="Reinitialiser mot de passe"
+                              onClick={() => handleResetPassword(user.id, user.email)}
+                            >
+                              <Key className="h-4 w-4 text-amber-600" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
                               title={user.is_active ? 'Desactiver' : 'Activer'}
                               onClick={() => handleToggleActive(user.id, user.is_active)}
                             >
                               {user.is_active ? (
                                 <UserX className="h-4 w-4 text-orange-600" />
                               ) : (
-                                <UserCheck className="h-4 w-4 text-green-600" />
+                                <UserCheck className="h-4 w-4 text-[#B8860B]" />
                               )}
                             </Button>
                             <Button

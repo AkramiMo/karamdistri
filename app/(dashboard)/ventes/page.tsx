@@ -39,14 +39,20 @@ interface Sale {
   id: string
   sale_number: string
   delivery_id: string | null
-  client_id: string
+  client_id: string | null
+  return_id: string | null
+  rblt_number: string | null
   sale_date: string
   total_ht: number | null
   total_ttc: number | null
+  amount_paid: number | null
+  balance_due: number | null
+  mb: number | null
   payment_method: string | null
   payment_status: string
   client?: { name: string; code: string }
   delivery?: { delivery_number: string }
+  return?: { round?: { round_number: string } }
 }
 
 interface Delivery {
@@ -57,6 +63,13 @@ interface Delivery {
   client?: { name: string }
 }
 
+interface SaleDelivery {
+  delivery_number: string
+  client_code: string
+  recette_bl: number
+  status: string
+}
+
 interface Client {
   id: string
   code: string
@@ -64,17 +77,19 @@ interface Client {
 }
 
 const paymentStatusColors: Record<string, string> = {
-  pending: 'bg-yellow-100 text-yellow-800',
+  pending: 'bg-red-100 text-red-800',
+  paid: 'bg-amber-100 text-[#9A7209]',
   partial: 'bg-blue-100 text-blue-800',
-  paid: 'bg-green-100 text-green-800',
+  returned: 'bg-orange-100 text-orange-800',
   cancelled: 'bg-red-100 text-red-800',
 }
 
 const paymentStatusLabels: Record<string, string> = {
-  pending: 'En attente',
-  partial: 'Partiel',
-  paid: 'Payé',
-  cancelled: 'Annulé',
+  pending: 'Non réglée',
+  paid: 'Réglée',
+  partial: 'Partiellement réglée',
+  returned: 'Retour',
+  cancelled: 'Annulée',
 }
 
 const paymentMethodLabels: Record<string, string> = {
@@ -82,6 +97,22 @@ const paymentMethodLabels: Record<string, string> = {
   check: 'Chèque',
   transfer: 'Virement',
   card: 'Carte',
+}
+
+const deliveryStatusColors: Record<string, string> = {
+  pending: 'bg-gray-100 text-gray-800',
+  in_progress: 'bg-blue-100 text-blue-800',
+  delivered: 'bg-green-100 text-green-800',
+  partial: 'bg-orange-100 text-orange-800',
+  returned: 'bg-red-100 text-red-800',
+}
+
+const deliveryStatusLabels: Record<string, string> = {
+  pending: 'En attente',
+  in_progress: 'En cours',
+  delivered: 'Livrée',
+  partial: 'Partielle',
+  returned: 'Retournée',
 }
 
 export default function VentesPage() {
@@ -93,6 +124,8 @@ export default function VentesPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [viewingSale, setViewingSale] = useState<Sale | null>(null)
+  const [saleDeliveries, setSaleDeliveries] = useState<SaleDelivery[]>([])
+  const [isLoadingDeliveries, setIsLoadingDeliveries] = useState(false)
   const [selectedSales, setSelectedSales] = useState<Set<string>>(new Set())
   const supabase = createClient()
 
@@ -102,9 +135,8 @@ export default function VentesPage() {
     sale_date: new Date().toISOString().split('T')[0],
     total_ht: '',
     payment_method: 'cash',
-    payment_status: 'pending',
+    payment_status: 'paid',
   })
-  const [addToCaisse, setAddToCaisse] = useState(false)
 
   const fetchSales = async () => {
     setIsLoading(true)
@@ -113,7 +145,8 @@ export default function VentesPage() {
       .select(`
         *,
         client:clients(name, code),
-        delivery:deliveries(delivery_number)
+        delivery:deliveries(delivery_number),
+        return:delivery_returns(round:delivery_rounds(round_number))
       `)
       .order('created_at', { ascending: false })
 
@@ -205,6 +238,27 @@ export default function VentesPage() {
     // Generate sequential sale number
     const saleNumber = await generateSaleNumber()
 
+    const selectedClient = clients.find(c => c.id === formData.client_id)
+
+    // Récupérer les montants payés de la livraison si elle existe
+    let amountPaid = 0
+    let balanceDue = total_ttc
+    let paymentStatus = formData.payment_status
+
+    if (formData.delivery_id) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: deliveryData } = await (supabase.from('deliveries') as any)
+        .select('amount_paid, balance_due, payment_status')
+        .eq('id', formData.delivery_id)
+        .single()
+
+      if (deliveryData) {
+        amountPaid = deliveryData.amount_paid || 0
+        balanceDue = deliveryData.balance_due ?? total_ttc
+        paymentStatus = deliveryData.payment_status || formData.payment_status
+      }
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: saleData, error } = await (supabase.from('sales') as any).insert([{
       sale_number: saleNumber,
@@ -213,29 +267,120 @@ export default function VentesPage() {
       sale_date: formData.sale_date,
       total_ht,
       total_ttc,
+      amount_paid: amountPaid,
+      balance_due: balanceDue,
       payment_method: formData.payment_method,
-      payment_status: formData.payment_status,
+      payment_status: paymentStatus,
     }]).select().single()
 
     if (error) {
       console.error('Error creating sale:', error)
+      alert(`Erreur création vente: ${error.message}`)
       return
     }
 
-    // Ajouter à la caisse si demandé et paiement effectué
-    if (addToCaisse && (formData.payment_status === 'paid' || formData.payment_status === 'partial')) {
-      const clientName = clients.find(c => c.id === formData.client_id)?.name || ''
+    // Insérer les articles vendus dans articles_vendus si un BL est lié
+    let calculatedMB = 0
+    if (saleData && formData.delivery_id) {
+      // Récupérer les articles du BL avec le CR
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabase.from('cash_register') as any).insert([{
-        operation_type: 'in',
-        category: 'vente',
-        amount: total_ttc,
-        reference: saleNumber,
-        reference_id: saleData?.id || null,
-        notes: `Vente ${saleNumber} - ${clientName}`,
-        transaction_date: formData.sale_date,
-      }])
+      const { data: deliveryItems, error: diError } = await (supabase
+        .from('delivery_items')
+        .select('id, article_id, quantity_delivered, quantity_returned, unit_price, article:articles(code, name, cr)')
+        .eq('delivery_id', formData.delivery_id) as any)
+
+      if (diError) {
+        console.error('Error fetching delivery items:', diError)
+      } else if (deliveryItems && deliveryItems.length > 0) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const articlesVendusData: any[] = []
+        for (const di of deliveryItems) {
+          const qtySold = (di.quantity_delivered || 0) - (di.quantity_returned || 0)
+          if (qtySold > 0) {
+            // Calculer la marge pour cet article: (Prix HT - CR) * quantité
+            const articleCR = di.article?.cr || 0
+            const articleMarge = (di.unit_price - articleCR) * qtySold
+            calculatedMB += articleMarge
+
+            articlesVendusData.push({
+              sale_id: saleData.id,
+              sale_date: formData.sale_date,
+              sale_number: saleNumber,
+              article_id: di.article_id,
+              article_code: di.article?.code || '',
+              client_id: formData.client_id,
+              client_code: selectedClient?.code || '',
+              quantity_sold: qtySold,
+              delivery_id: formData.delivery_id,
+            })
+          }
+        }
+        if (articlesVendusData.length > 0) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { error: avError } = await (supabase.from('articles_vendus') as any).insert(articlesVendusData)
+          if (avError) {
+            console.error('Error inserting articles vendus:', avError)
+          }
+
+          // Déduire du stock chaque article vendu
+          for (const av of articlesVendusData) {
+            // Mouvement de stock (sortie)
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            await (supabase.from('stock_movements') as any).insert([{
+              article_id: av.article_id,
+              quantity: -av.quantity_sold,
+              movement_type: 'out',
+              reference_type: 'vente',
+              reference_id: saleData.id,
+              notes: `Vente ${saleNumber} - ${av.article_code}`,
+            }])
+
+            // Mettre à jour le stock
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const { data: existingStock } = await (supabase.from('stock') as any)
+              .select('id, quantity')
+              .eq('article_id', av.article_id)
+              .eq('warehouse', 'principal')
+              .single()
+
+            if (existingStock) {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              await (supabase.from('stock') as any)
+                .update({ quantity: existingStock.quantity - av.quantity_sold, updated_at: new Date().toISOString() })
+                .eq('id', existingStock.id)
+            } else {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              await (supabase.from('stock') as any).insert([{
+                article_id: av.article_id,
+                quantity: -av.quantity_sold,
+                warehouse: 'principal',
+              }])
+            }
+          }
+        }
+
+        // Mettre à jour la vente avec le MB calculé
+        if (calculatedMB !== 0) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await (supabase.from('sales') as any)
+            .update({ mb: calculatedMB })
+            .eq('id', saleData.id)
+        }
+      }
     }
+
+    // Ajouter automatiquement à la caisse
+    const clientName = selectedClient?.name || ''
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase.from('cash_register') as any).insert([{
+      operation_type: 'in',
+      category: 'vente',
+      amount: total_ttc,
+      reference: saleNumber,
+      reference_id: saleData?.id || null,
+      notes: `Vente ${saleNumber} - ${clientName}`,
+      transaction_date: formData.sale_date,
+    }])
 
     fetchSales()
     setIsDialogOpen(false)
@@ -243,20 +388,109 @@ export default function VentesPage() {
   }
 
   const resetForm = () => {
-    setAddToCaisse(false)
     setFormData({
       delivery_id: '',
       client_id: '',
       sale_date: new Date().toISOString().split('T')[0],
       total_ht: '',
       payment_method: 'cash',
-      payment_status: 'pending',
+      payment_status: 'paid',
     })
+  }
+
+  const fetchSaleDeliveries = async (sale: Sale) => {
+    setIsLoadingDeliveries(true)
+    setSaleDeliveries([])
+
+    try {
+      // Si la vente a un return_id (RBLT), charger les BL depuis le round
+      if (sale.return_id) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: returnData } = await (supabase
+          .from('delivery_returns')
+          .select('round_id')
+          .eq('id', sale.return_id)
+          .single() as any)
+
+        if (returnData?.round_id) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: roundItems } = await (supabase
+            .from('delivery_round_items')
+            .select(`
+              delivery:deliveries(
+                delivery_number,
+                status,
+                client:clients(code),
+                delivery_items(
+                  quantity_delivered,
+                  quantity_returned,
+                  unit_price
+                )
+              )
+            `)
+            .eq('round_id', returnData.round_id) as any)
+
+          if (roundItems) {
+            const deliveriesList: SaleDelivery[] = roundItems
+              .filter((item: any) => item.delivery)
+              .map((item: any) => {
+                const recetteBL = item.delivery.delivery_items?.reduce(
+                  (sum: number, di: any) => sum + ((di.quantity_delivered - di.quantity_returned) * di.unit_price),
+                  0
+                ) || 0
+                return {
+                  delivery_number: item.delivery.delivery_number,
+                  client_code: item.delivery.client?.code || '-',
+                  recette_bl: recetteBL,
+                  status: item.delivery.status || 'pending',
+                }
+              })
+            setSaleDeliveries(deliveriesList)
+          }
+        }
+      }
+      // Sinon charger le BL unique si delivery_id existe
+      else if (sale.delivery_id) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: deliveryData } = await (supabase
+          .from('deliveries')
+          .select(`
+            delivery_number,
+            status,
+            client:clients(code),
+            delivery_items(
+              quantity_delivered,
+              quantity_returned,
+              unit_price
+            )
+          `)
+          .eq('id', sale.delivery_id)
+          .single() as any)
+
+        if (deliveryData) {
+          const recetteBL = deliveryData.delivery_items?.reduce(
+            (sum: number, di: any) => sum + ((di.quantity_delivered - di.quantity_returned) * di.unit_price),
+            0
+          ) || 0
+          setSaleDeliveries([{
+            delivery_number: deliveryData.delivery_number,
+            client_code: deliveryData.client?.code || '-',
+            recette_bl: recetteBL,
+            status: deliveryData.status || 'pending',
+          }])
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching sale deliveries:', error)
+    }
+    setIsLoadingDeliveries(false)
   }
 
   const handleViewSale = (sale: Sale) => {
     setViewingSale(sale)
+    setSaleDeliveries([])
     setIsViewDialogOpen(true)
+    fetchSaleDeliveries(sale)
   }
 
   // Selection handlers
@@ -317,7 +551,8 @@ export default function VentesPage() {
   const filteredSales = sales.filter(
     (sale) =>
       sale.sale_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      sale.client?.name?.toLowerCase().includes(searchTerm.toLowerCase())
+      sale.client?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      sale.rblt_number?.toLowerCase().includes(searchTerm.toLowerCase())
   )
 
   const formatPrice = (price: number | null) => {
@@ -350,7 +585,7 @@ export default function VentesPage() {
             <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
               <DialogTrigger asChild>
                 <Button
-                  className="bg-green-600 hover:bg-green-700"
+                  className="bg-[#B8860B] hover:bg-[#9A7209]"
                   onClick={() => {
                     resetForm()
                     setIsDialogOpen(true)
@@ -454,36 +689,20 @@ export default function VentesPage() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="pending">En attente</SelectItem>
-                        <SelectItem value="partial">Partiel</SelectItem>
-                        <SelectItem value="paid">Payé</SelectItem>
+                        <SelectItem value="paid">Réglée</SelectItem>
+                        <SelectItem value="partial">Partiellement réglée</SelectItem>
+                        <SelectItem value="returned">Retour</SelectItem>
+                        <SelectItem value="cancelled">Annulée</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                 </div>
 
-                {/* Option pour ajouter à la caisse */}
-                {(formData.payment_status === 'paid' || formData.payment_status === 'partial') && (
-                  <div className="flex items-center space-x-3 p-4 bg-green-50 border border-green-200 rounded-lg">
-                    <Checkbox
-                      id="addToCaisse"
-                      checked={addToCaisse}
-                      onCheckedChange={(checked) => setAddToCaisse(checked === true)}
-                    />
-                    <div className="flex items-center gap-2">
-                      <Wallet className="h-4 w-4 text-green-600" />
-                      <Label htmlFor="addToCaisse" className="text-sm font-medium cursor-pointer">
-                        Ajouter cette vente à la caisse
-                      </Label>
-                    </div>
-                  </div>
-                )}
-
                 <div className="flex justify-end gap-2 pt-4">
                   <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                     Annuler
                   </Button>
-                  <Button type="submit" className="bg-green-600 hover:bg-green-700">
+                  <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
                     Créer la vente
                   </Button>
                 </div>
@@ -502,7 +721,7 @@ export default function VentesPage() {
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-2">
-                <DollarSign className="h-6 w-6 text-green-600" />
+                <DollarSign className="h-6 w-6 text-[#B8860B]" />
                 <span className="text-2xl font-bold">{formatPrice(todayTotal)}</span>
               </div>
             </CardContent>
@@ -514,30 +733,30 @@ export default function VentesPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <span className="text-2xl font-bold text-green-600">{formatPrice(monthTotal)}</span>
+              <span className="text-2xl font-bold text-[#B8860B]">{formatPrice(monthTotal)}</span>
             </CardContent>
           </Card>
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-gray-600">
-                En attente
+                Réglées
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <span className="text-2xl font-bold text-yellow-600">
-                {sales.filter((s) => s.payment_status === 'pending').length}
+              <span className="text-2xl font-bold text-[#B8860B]">
+                {sales.filter((s) => s.payment_status === 'paid').length}
               </span>
             </CardContent>
           </Card>
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-gray-600">
-                Encaissées
+                Part. réglées
               </CardTitle>
             </CardHeader>
             <CardContent>
               <span className="text-2xl font-bold text-blue-600">
-                {sales.filter((s) => s.payment_status === 'paid').length}
+                {sales.filter((s) => s.payment_status === 'partial').length}
               </span>
             </CardContent>
           </Card>
@@ -555,16 +774,6 @@ export default function VentesPage() {
                   className="pl-10"
                 />
               </div>
-              {selectedSales.size > 0 && (
-                <Button
-                  variant="destructive"
-                  onClick={handleDeleteSelected}
-                  className="gap-2"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  Supprimer ({selectedSales.size})
-                </Button>
-              )}
             </div>
           </CardHeader>
           <CardContent>
@@ -578,52 +787,42 @@ export default function VentesPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-12">
-                      <Checkbox
-                        checked={selectedSales.size === filteredSales.length && filteredSales.length > 0}
-                        onCheckedChange={(checked) => {
-                          if (checked) {
-                            setSelectedSales(new Set(filteredSales.map(s => s.id)))
-                          } else {
-                            setSelectedSales(new Set())
-                          }
-                        }}
-                      />
-                    </TableHead>
+                    <TableHead>Date</TableHead>
                     <TableHead>N° Vente</TableHead>
+                    <TableHead>Code Client</TableHead>
                     <TableHead>Client</TableHead>
                     <TableHead>BL</TableHead>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Paiement</TableHead>
+                    <TableHead className="text-right">Recette</TableHead>
+                    <TableHead className="text-right">Encaissé</TableHead>
+                    <TableHead className="text-right">Solde</TableHead>
                     <TableHead>Statut</TableHead>
-                    <TableHead className="text-right">Total TTC</TableHead>
+                    <TableHead className="text-right">Total HT</TableHead>
+                    <TableHead className="text-right">MB</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filteredSales.map((sale) => (
-                    <TableRow key={sale.id} className={selectedSales.has(sale.id) ? 'bg-red-50' : ''}>
-                      <TableCell>
-                        <Checkbox
-                          checked={selectedSales.has(sale.id)}
-                          onCheckedChange={() => toggleSaleSelection(sale.id)}
-                        />
-                      </TableCell>
-                      <TableCell className="font-medium">{sale.sale_number}</TableCell>
-                      <TableCell>{sale.client?.name}</TableCell>
-                      <TableCell>{sale.delivery?.delivery_number || '-'}</TableCell>
+                    <TableRow key={sale.id}>
                       <TableCell>
                         {format(new Date(sale.sale_date), 'dd/MM/yyyy', { locale: fr })}
                       </TableCell>
-                      <TableCell>
-                        {sale.payment_method ? paymentMethodLabels[sale.payment_method] : '-'}
-                      </TableCell>
+                      <TableCell className="font-medium">{sale.sale_number}</TableCell>
+                      <TableCell className="font-mono text-sm">{sale.client?.code || sale.rblt_number || '--'}</TableCell>
+                      <TableCell>{sale.client?.name || (sale.rblt_number ? '---' : '--')}</TableCell>
+                      <TableCell className="font-mono text-sm">{sale.return?.round?.round_number || sale.delivery?.delivery_number || '-'}</TableCell>
+                      <TableCell className="text-right">{formatPrice(sale.total_ttc)}</TableCell>
+                      <TableCell className="text-right text-green-600">{formatPrice(sale.amount_paid || 0)}</TableCell>
+                      <TableCell className="text-right text-red-600">{formatPrice(sale.balance_due || 0)}</TableCell>
                       <TableCell>
                         <Badge className={paymentStatusColors[sale.payment_status]}>
                           {paymentStatusLabels[sale.payment_status]}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right">{formatPrice(sale.total_ttc)}</TableCell>
+                      <TableCell className="text-right">{formatPrice(sale.total_ht)}</TableCell>
+                      <TableCell className="text-right font-medium">
+                        {sale.mb !== null ? formatPrice(sale.mb) : '-'}
+                      </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
                           <Button
@@ -654,10 +853,10 @@ export default function VentesPage() {
 
         {/* View Sale Dialog */}
         <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
-          <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
-                <DollarSign className="h-5 w-5 text-green-600" />
+                <DollarSign className="h-5 w-5 text-[#B8860B]" />
                 Vente {viewingSale?.sale_number}
               </DialogTitle>
             </DialogHeader>
@@ -667,7 +866,9 @@ export default function VentesPage() {
                   <div className="space-y-2">
                     <h3 className="font-semibold text-gray-700">Client</h3>
                     <div className="bg-gray-50 p-3 rounded-lg">
-                      <p className="font-medium">{viewingSale.client?.code} - {viewingSale.client?.name}</p>
+                      <p className="font-medium">
+                        {viewingSale.client?.code || viewingSale.rblt_number || '--'} - {viewingSale.client?.name || (viewingSale.rblt_number ? '---' : '--')}
+                      </p>
                     </div>
                   </div>
                   <div className="space-y-2">
@@ -677,12 +878,10 @@ export default function VentesPage() {
                         <span className="text-gray-600">Date:</span>{' '}
                         {format(new Date(viewingSale.sale_date), 'dd MMMM yyyy', { locale: fr })}
                       </p>
-                      {viewingSale.delivery && (
-                        <p className="text-sm">
-                          <span className="text-gray-600">BL:</span>{' '}
-                          {viewingSale.delivery.delivery_number}
-                        </p>
-                      )}
+                      <p className="text-sm">
+                        <span className="text-gray-600">{viewingSale.return?.round ? 'BLT:' : 'BL:'}</span>{' '}
+                        <span className="font-mono">{viewingSale.return?.round?.round_number || viewingSale.delivery?.delivery_number || '-'}</span>
+                      </p>
                       <p className="text-sm">
                         <span className="text-gray-600">Mode:</span>{' '}
                         {viewingSale.payment_method ? paymentMethodLabels[viewingSale.payment_method] : '-'}
@@ -697,20 +896,53 @@ export default function VentesPage() {
                   </div>
                 </div>
 
+                {/* Bons de Livraison */}
+                <div className="border-t pt-4">
+                  <h3 className="font-semibold text-gray-700 mb-3">Bons de Livraison</h3>
+                  {isLoadingDeliveries ? (
+                    <div className="text-center py-4 text-gray-500">Chargement...</div>
+                  ) : saleDeliveries.length === 0 ? (
+                    <div className="text-center py-4 text-gray-500">Aucun BL</div>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>N° BL</TableHead>
+                          <TableHead>Code Client</TableHead>
+                          <TableHead className="text-right">Recette BL</TableHead>
+                          <TableHead>Statut</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {saleDeliveries.map((delivery, index) => (
+                          <TableRow key={index}>
+                            <TableCell className="font-mono text-sm">{delivery.delivery_number}</TableCell>
+                            <TableCell className="font-mono text-sm">{delivery.client_code}</TableCell>
+                            <TableCell className="text-right font-medium">{formatPrice(delivery.recette_bl)}</TableCell>
+                            <TableCell>
+                              <Badge className={deliveryStatusColors[delivery.status] || 'bg-gray-100 text-gray-800'}>
+                                {deliveryStatusLabels[delivery.status] || delivery.status}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </div>
+
                 <div className="border-t pt-4">
                   <div className="flex justify-end">
                     <div className="w-64 space-y-2">
-                      <div className="flex justify-between text-sm">
-                        <span className="text-gray-600">Total HT:</span>
-                        <span className="font-medium">{formatPrice(viewingSale.total_ht)}</span>
+                      <div className="flex justify-between text-lg font-bold">
+                        <span>Total HT:</span>
+                        <span className="text-[#B8860B]">{formatPrice(viewingSale.total_ht)}</span>
                       </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-gray-600">TVA (20%):</span>
-                        <span className="font-medium">{formatPrice((viewingSale.total_ht || 0) * 0.2)}</span>
-                      </div>
-                      <div className="flex justify-between text-lg font-bold border-t pt-2">
-                        <span>Total TTC:</span>
-                        <span className="text-green-600">{formatPrice(viewingSale.total_ttc)}</span>
+                      <div className="flex justify-between text-lg font-bold">
+                        <span>Marge (MB):</span>
+                        <span className={viewingSale.mb !== null && viewingSale.mb >= 0 ? 'text-green-600' : 'text-red-600'}>
+                          {viewingSale.mb !== null ? formatPrice(viewingSale.mb) : '-'}
+                        </span>
                       </div>
                     </div>
                   </div>

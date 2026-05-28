@@ -240,7 +240,7 @@ export default function ClientPricesPage() {
                     {selectedClientData.code}
                   </Badge>
                   <span className="font-medium">{selectedClientData.name}</span>
-                  <Badge className="bg-green-100 text-green-800">
+                  <Badge className="bg-amber-100 text-[#9A7209]">
                     {customPricesCount} prix personnalises
                   </Badge>
                 </div>
@@ -270,8 +270,8 @@ export default function ClientPricesPage() {
               </CardHeader>
               <CardContent>
                 <div className="flex items-center gap-2">
-                  <DollarSign className="h-6 w-6 text-green-600" />
-                  <span className="text-2xl font-bold text-green-600">{customPricesCount}</span>
+                  <DollarSign className="h-6 w-6 text-[#B8860B]" />
+                  <span className="text-2xl font-bold text-[#B8860B]">{customPricesCount}</span>
                 </div>
               </CardContent>
             </Card>
@@ -353,7 +353,7 @@ export default function ClientPricesPage() {
                                 className="w-32 text-right"
                               />
                               {customPrice !== null && (
-                                <Badge className="bg-green-100 text-green-800">
+                                <Badge className="bg-amber-100 text-[#9A7209]">
                                   <Check className="h-3 w-3" />
                                 </Badge>
                               )}
@@ -364,7 +364,7 @@ export default function ClientPricesPage() {
                               <Badge
                                 className={
                                   priceDiff > 0
-                                    ? 'bg-green-100 text-green-800'
+                                    ? 'bg-amber-100 text-[#9A7209]'
                                     : priceDiff < 0
                                     ? 'bg-red-100 text-red-800'
                                     : 'bg-gray-100 text-gray-800'
@@ -379,7 +379,7 @@ export default function ClientPricesPage() {
                               {editedPrices[article.id] !== undefined && (
                                 <Button
                                   size="sm"
-                                  className="bg-green-600 hover:bg-green-700"
+                                  className="bg-[#B8860B] hover:bg-[#9A7209]"
                                   onClick={() => handleSavePrice(article.id, article.price_ht)}
                                   disabled={savingArticleId === article.id}
                                 >

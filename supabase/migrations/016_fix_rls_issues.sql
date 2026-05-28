@@ -120,6 +120,7 @@ $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public;
 
 -- Fix generate_sequence_number function (if exists)
+DROP FUNCTION IF EXISTS public.generate_sequence_number(TEXT, TEXT);
 CREATE OR REPLACE FUNCTION public.generate_sequence_number(p_prefix TEXT, p_table TEXT)
 RETURNS TEXT AS $$
 DECLARE

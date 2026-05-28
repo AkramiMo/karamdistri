@@ -81,7 +81,7 @@ export default function ResetPasswordPage() {
 
   if (isValidToken === null) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-50 to-green-100 p-4">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-amber-50 to-amber-100 p-4">
         <Card className="w-full max-w-md">
           <CardContent className="pt-6">
             <div className="text-center">Verification...</div>
@@ -93,7 +93,7 @@ export default function ResetPasswordPage() {
 
   if (isValidToken === false) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-50 to-green-100 p-4">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-amber-50 to-amber-100 p-4">
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
             <div className="mx-auto mb-4 w-16 h-16 bg-red-100 rounded-full flex items-center justify-center">
@@ -106,7 +106,7 @@ export default function ResetPasswordPage() {
           </CardHeader>
           <CardContent>
             <Link href="/forgot-password">
-              <Button className="w-full bg-green-600 hover:bg-green-700">
+              <Button className="w-full bg-[#B8860B] hover:bg-[#9A7209]">
                 Demander un nouveau lien
               </Button>
             </Link>
@@ -118,11 +118,11 @@ export default function ResetPasswordPage() {
 
   if (isSuccess) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-50 to-green-100 p-4">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-amber-50 to-amber-100 p-4">
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
-            <div className="mx-auto mb-4 w-16 h-16 bg-green-100 rounded-full flex items-center justify-center">
-              <CheckCircle className="w-8 h-8 text-green-600" />
+            <div className="mx-auto mb-4 w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center">
+              <CheckCircle className="w-8 h-8 text-[#B8860B]" />
             </div>
             <CardTitle className="text-2xl">Mot de passe modifie</CardTitle>
             <CardDescription>
@@ -140,11 +140,11 @@ export default function ResetPasswordPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-50 to-green-100 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-amber-50 to-amber-100 p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
-          <div className="mx-auto mb-4 w-16 h-16 bg-green-100 rounded-full flex items-center justify-center">
-            <Lock className="w-8 h-8 text-green-600" />
+          <div className="mx-auto mb-4 w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center">
+            <Lock className="w-8 h-8 text-[#B8860B]" />
           </div>
           <CardTitle className="text-2xl">Nouveau mot de passe</CardTitle>
           <CardDescription>
@@ -189,7 +189,7 @@ export default function ResetPasswordPage() {
 
             <Button
               type="submit"
-              className="w-full bg-green-600 hover:bg-green-700"
+              className="w-full bg-[#B8860B] hover:bg-[#9A7209]"
               disabled={isLoading}
             >
               {isLoading ? 'Mise a jour...' : 'Mettre a jour le mot de passe'}

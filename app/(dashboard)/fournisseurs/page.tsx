@@ -152,7 +152,7 @@ export default function FournisseursPage() {
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
             <Button
-              className="bg-green-600 hover:bg-green-700"
+              className="bg-[#B8860B] hover:bg-[#9A7209]"
               onClick={() => {
                 resetForm()
                 setIsDialogOpen(true)
@@ -234,7 +234,7 @@ export default function FournisseursPage() {
                 <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                   Annuler
                 </Button>
-                <Button type="submit" className="bg-green-600 hover:bg-green-700">
+                <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
                   {editingSupplier ? 'Modifier' : 'Créer'}
                 </Button>
               </div>
