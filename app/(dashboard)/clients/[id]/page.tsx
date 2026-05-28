@@ -126,6 +126,10 @@ interface ClientBalance {
   total_factures: number
   reglement_factures: number
   reste_factures: number
+  // Totaux
+  total_due: number
+  total_paid: number
+  balance: number
 }
 
 const categoryLabels: Record<string, string> = {
@@ -216,6 +220,10 @@ export default function ClientDetailPage() {
     total_factures: 0,
     reglement_factures: 0,
     reste_factures: 0,
+    // Totaux
+    total_due: 0,
+    total_paid: 0,
+    balance: 0,
   })
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('info')
@@ -305,6 +313,10 @@ export default function ClientDetailPage() {
         total_factures: totalFactures,
         reglement_factures: reglementFactures,
         reste_factures: resteFactures,
+        // Totaux
+        total_due: totalBL + totalFactures,
+        total_paid: reglementBL + reglementFactures,
+        balance: resteBL + resteFactures,
       })
     } catch (error) {
       console.error('Error fetching client data:', error)
