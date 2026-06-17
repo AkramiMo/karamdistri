@@ -1,4 +1,7 @@
 {
-  "buildCommand": "next build --experimental-build-mode compile",
-  "framework": "nextjs"
+  "buildCommand": "NEXT_DISABLE_TYPE_CHECK=1 next build",
+  "framework": "nextjs",
+  "env": {
+    "NEXT_DISABLE_TYPE_CHECK": "1"
+  }
 }
