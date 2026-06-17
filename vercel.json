@@ -1,0 +1,4 @@
+{
+  "buildCommand": "next build --experimental-build-mode compile",
+  "framework": "nextjs"
+}
