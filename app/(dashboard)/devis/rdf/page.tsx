@@ -57,6 +57,10 @@ interface DDF {
   ddf_number: string
   supplier_id: string
   supplier?: Supplier
+  request_date?: string
+  response_deadline?: string | null
+  status?: string
+  notes?: string | null
 }
 
 interface RDFItem {
@@ -135,7 +139,8 @@ export default function RDFPage() {
 
   const fetchRDFs = useCallback(async () => {
     setIsLoading(true)
-    const { data, error } = await supabase
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (supabase as any)
       .from('supplier_quote_responses')
       .select(`
         *,
@@ -146,7 +151,7 @@ export default function RDFPage() {
       .order('created_at', { ascending: false })
 
     if (!error && data) {
-      setRdfs(data)
+      setRdfs(data as RDF[])
     }
     setIsLoading(false)
   }, [supabase])
@@ -162,13 +167,14 @@ export default function RDFPage() {
   }, [supabase])
 
   const fetchDDFs = useCallback(async () => {
-    const { data } = await supabase
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await (supabase as any)
       .from('supplier_quote_requests')
       .select('id, ddf_number, supplier_id, supplier:suppliers(id, code, name)')
       .in('status', ['draft', 'sent', 'received'])
       .order('created_at', { ascending: false })
 
-    if (data) setDdfs(data)
+    if (data) setDdfs(data as DDF[])
   }, [supabase])
 
   useEffect(() => {
@@ -181,12 +187,13 @@ export default function RDFPage() {
     const year = new Date().getFullYear()
     const prefix = `RDF-${year}-`
 
-    const { data } = await supabase
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await (supabase as any)
       .from('supplier_quote_responses')
       .select('rdf_number')
       .like('rdf_number', `${prefix}%`)
       .order('rdf_number', { ascending: false })
-      .limit(1)
+      .limit(1) as { data: { rdf_number: string }[] | null }
 
     if (data && data.length > 0) {
       const lastNum = parseInt(data[0].rdf_number.replace(prefix, '')) || 0
@@ -260,7 +267,8 @@ export default function RDFPage() {
 
     if (editingRDF) {
       // Update existing RDF
-      const { error } = await supabase
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase as any)
         .from('supplier_quote_responses')
         .update({
           ddf_id: formData.ddf_id || null,
@@ -280,7 +288,8 @@ export default function RDFPage() {
       }
 
       // Delete old items and insert new ones
-      await supabase
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any)
         .from('supplier_quote_response_items')
         .delete()
         .eq('rdf_id', editingRDF.id)
@@ -294,11 +303,13 @@ export default function RDFPage() {
         unit_price: typeof item.unit_price === 'string' ? parseFloat(item.unit_price) || 0 : item.unit_price,
       }))
 
-      await supabase.from('supplier_quote_response_items').insert(itemsToInsert)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any).from('supplier_quote_response_items').insert(itemsToInsert)
 
       // Update DDF status to received if linked
       if (formData.ddf_id) {
-        await supabase
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabase as any)
           .from('supplier_quote_requests')
           .update({ status: 'received' })
           .eq('id', formData.ddf_id)
@@ -307,7 +318,8 @@ export default function RDFPage() {
       // Create new RDF
       const rdfNumber = await generateRDFNumber()
 
-      const { data: newRDF, error } = await supabase
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: newRDF, error } = await (supabase as any)
         .from('supplier_quote_responses')
         .insert([
           {
@@ -341,11 +353,13 @@ export default function RDFPage() {
         unit_price: typeof item.unit_price === 'string' ? parseFloat(item.unit_price) || 0 : item.unit_price,
       }))
 
-      await supabase.from('supplier_quote_response_items').insert(itemsToInsert)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any).from('supplier_quote_response_items').insert(itemsToInsert)
 
       // Update DDF status to received if linked
       if (formData.ddf_id) {
-        await supabase
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabase as any)
           .from('supplier_quote_requests')
           .update({ status: 'received' })
           .eq('id', formData.ddf_id)
@@ -389,13 +403,16 @@ export default function RDFPage() {
   const handleDelete = async (id: string) => {
     if (!confirm('Êtes-vous sûr de vouloir supprimer ce devis reçu ?')) return
 
-    await supabase.from('supplier_quote_response_items').delete().eq('rdf_id', id)
-    await supabase.from('supplier_quote_responses').delete().eq('id', id)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase as any).from('supplier_quote_response_items').delete().eq('rdf_id', id)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase as any).from('supplier_quote_responses').delete().eq('id', id)
     fetchRDFs()
   }
 
   const handleUpdateStatus = async (id: string, newStatus: string) => {
-    await supabase
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase as any)
       .from('supplier_quote_responses')
       .update({ status: newStatus })
       .eq('id', id)
@@ -862,9 +879,9 @@ export default function RDFPage() {
                         <TableCell className="font-mono">{item.supply_code}</TableCell>
                         <TableCell>{item.supply_name}</TableCell>
                         <TableCell className="text-center">{item.quantity}</TableCell>
-                        <TableCell className="text-right">{formatPrice(item.unit_price)}</TableCell>
+                        <TableCell className="text-right">{formatPrice(typeof item.unit_price === 'number' ? item.unit_price : parseFloat(String(item.unit_price)) || 0)}</TableCell>
                         <TableCell className="text-right font-medium">
-                          {formatPrice(item.quantity * item.unit_price)}
+                          {formatPrice(item.quantity * (typeof item.unit_price === 'number' ? item.unit_price : parseFloat(String(item.unit_price)) || 0))}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -889,15 +906,6 @@ export default function RDFPage() {
               )}
 
               <div className="flex justify-end gap-2 pt-4 border-t">
-                {viewingRDF.status === 'accepted' && (
-                  <Button
-                    onClick={() => handleConvertToBC(viewingRDF)}
-                    className="bg-blue-600 hover:bg-blue-700"
-                  >
-                    <ShoppingCart className="h-4 w-4 mr-2" />
-                    Convertir en BC
-                  </Button>
-                )}
                 <Button variant="outline" onClick={() => setIsViewDialogOpen(false)}>
                   Fermer
                 </Button>

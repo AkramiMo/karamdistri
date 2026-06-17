@@ -589,6 +589,70 @@ export interface Database {
           updated_at?: string
         }
       }
+      client_quote_requests: {
+        Row: {
+          id: string
+          ddc_number: string
+          client_id: string
+          request_date: string
+          validity_date: string | null
+          status: string
+          total_ht: number
+          notes: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          ddc_number: string
+          client_id: string
+          request_date?: string
+          validity_date?: string | null
+          status?: string
+          total_ht?: number
+          notes?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          ddc_number?: string
+          client_id?: string
+          request_date?: string
+          validity_date?: string | null
+          status?: string
+          total_ht?: number
+          notes?: string | null
+          created_at?: string
+        }
+      }
+      client_quote_request_items: {
+        Row: {
+          id: string
+          ddc_id: string
+          article_id: string
+          article_code: string
+          article_name: string
+          quantity: number
+          unit_price: number
+        }
+        Insert: {
+          id?: string
+          ddc_id: string
+          article_id: string
+          article_code: string
+          article_name: string
+          quantity: number
+          unit_price: number
+        }
+        Update: {
+          id?: string
+          ddc_id?: string
+          article_id?: string
+          article_code?: string
+          article_name?: string
+          quantity?: number
+          unit_price?: number
+        }
+      }
     }
   }
 }

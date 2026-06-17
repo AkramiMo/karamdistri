@@ -128,7 +128,8 @@ export default function DDFPage() {
 
   const fetchDDFs = useCallback(async () => {
     setIsLoading(true)
-    const { data, error } = await supabase
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (supabase as any)
       .from('supplier_quote_requests')
       .select(`
         *,
@@ -138,7 +139,7 @@ export default function DDFPage() {
       .order('created_at', { ascending: false })
 
     if (!error && data) {
-      setDdfs(data)
+      setDdfs(data as DDF[])
     }
     setIsLoading(false)
   }, [supabase])
@@ -173,12 +174,13 @@ export default function DDFPage() {
     const year = new Date().getFullYear()
     const prefix = `DDF-${year}-`
 
-    const { data } = await supabase
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await (supabase as any)
       .from('supplier_quote_requests')
       .select('ddf_number')
       .like('ddf_number', `${prefix}%`)
       .order('ddf_number', { ascending: false })
-      .limit(1)
+      .limit(1) as { data: { ddf_number: string }[] | null }
 
     if (data && data.length > 0) {
       const lastNum = parseInt(data[0].ddf_number.replace(prefix, '')) || 0
@@ -238,7 +240,8 @@ export default function DDFPage() {
 
     if (editingDDF) {
       // Update existing DDF
-      const { error } = await supabase
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase as any)
         .from('supplier_quote_requests')
         .update({
           supplier_id: formData.supplier_id,
@@ -255,7 +258,8 @@ export default function DDFPage() {
       }
 
       // Delete old items and insert new ones
-      await supabase
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any)
         .from('supplier_quote_request_items')
         .delete()
         .eq('ddf_id', editingDDF.id)
@@ -269,12 +273,14 @@ export default function DDFPage() {
         estimated_price: item.estimated_price,
       }))
 
-      await supabase.from('supplier_quote_request_items').insert(itemsToInsert)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any).from('supplier_quote_request_items').insert(itemsToInsert)
     } else {
       // Create new DDF
       const ddfNumber = await generateDDFNumber()
 
-      const { data: newDDF, error } = await supabase
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: newDDF, error } = await (supabase as any)
         .from('supplier_quote_requests')
         .insert([
           {
@@ -305,7 +311,8 @@ export default function DDFPage() {
         estimated_price: item.estimated_price,
       }))
 
-      await supabase.from('supplier_quote_request_items').insert(itemsToInsert)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any).from('supplier_quote_request_items').insert(itemsToInsert)
     }
 
     resetForm()
@@ -342,13 +349,16 @@ export default function DDFPage() {
   const handleDelete = async (id: string) => {
     if (!confirm('Êtes-vous sûr de vouloir supprimer cette demande de devis ?')) return
 
-    await supabase.from('supplier_quote_request_items').delete().eq('ddf_id', id)
-    await supabase.from('supplier_quote_requests').delete().eq('id', id)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase as any).from('supplier_quote_request_items').delete().eq('ddf_id', id)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase as any).from('supplier_quote_requests').delete().eq('id', id)
     fetchDDFs()
   }
 
   const handleUpdateStatus = async (id: string, newStatus: string) => {
-    await supabase
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase as any)
       .from('supplier_quote_requests')
       .update({ status: newStatus })
       .eq('id', id)
