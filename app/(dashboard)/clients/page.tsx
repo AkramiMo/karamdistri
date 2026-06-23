@@ -28,6 +28,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Plus, Search, Edit, Trash2, Users, MapPin, Store, Utensils, ShoppingBag, Package, Eye, DollarSign, Upload, Image, X, Building2, FileText, Loader2 } from 'lucide-react'
@@ -81,6 +82,9 @@ const categoryColors: Record<string, string> = {
 export default function ClientsPage() {
   const [clients, setClients] = useState<Client[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [isDeleting, setIsDeleting] = useState<string | null>(null)
+  const [selectedClients, setSelectedClients] = useState<Set<string>>(new Set())
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
@@ -409,11 +413,77 @@ export default function ClientsPage() {
   }
 
   const handleDelete = async (id: string) => {
-    if (confirm('Êtes-vous sûr de vouloir supprimer ce client ?')) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { error } = await (supabase.from('clients') as any).delete().eq('id', id)
-      if (!error) {
-        fetchClients()
+    if (confirm('Êtes-vous sûr de vouloir supprimer ce client et toutes ses données liées ?')) {
+      setIsDeleting(id)
+      try {
+        const response = await supabase
+          .from('clients')
+          .delete()
+          .eq('id', id)
+
+        if (response.error) {
+          alert('Erreur: ' + response.error.message)
+        } else {
+          fetchClients()
+        }
+      } catch (err) {
+        console.error('Exception:', err)
+        alert('Exception: ' + String(err))
+      } finally {
+        setIsDeleting(null)
+      }
+    }
+  }
+
+  const toggleSelectClient = (id: string) => {
+    const newSelected = new Set(selectedClients)
+    if (newSelected.has(id)) {
+      newSelected.delete(id)
+    } else {
+      newSelected.add(id)
+    }
+    setSelectedClients(newSelected)
+  }
+
+  const toggleSelectAll = () => {
+    if (selectedClients.size === filteredClients.length) {
+      setSelectedClients(new Set())
+    } else {
+      setSelectedClients(new Set(filteredClients.map(c => c.id)))
+    }
+  }
+
+  const handleBulkDelete = async () => {
+    if (selectedClients.size === 0) return
+
+    if (confirm(`Êtes-vous sûr de vouloir supprimer ${selectedClients.size} client(s) et toutes leurs données liées ?`)) {
+      setIsBulkDeleting(true)
+      const ids = Array.from(selectedClients)
+      let errors = 0
+
+      for (const id of ids) {
+        try {
+          const response = await supabase
+            .from('clients')
+            .delete()
+            .eq('id', id)
+
+          if (response.error) {
+            errors++
+            console.error('Erreur suppression:', response.error)
+          }
+        } catch (err) {
+          errors++
+          console.error('Exception:', err)
+        }
+      }
+
+      setIsBulkDeleting(false)
+      setSelectedClients(new Set())
+      fetchClients()
+
+      if (errors > 0) {
+        alert(`${ids.length - errors} client(s) supprimé(s), ${errors} erreur(s)`)
       }
     }
   }
@@ -860,6 +930,28 @@ export default function ClientsPage() {
             </div>
           </CardHeader>
           <CardContent>
+            {(isDeleting || isBulkDeleting) && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-3">
+                <Loader2 className="h-5 w-5 animate-spin text-red-600" />
+                <span className="text-red-700">Suppression en cours... Veuillez patienter.</span>
+              </div>
+            )}
+            {selectedClients.size > 0 && !isBulkDeleting && (
+              <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between">
+                <span className="text-amber-800">
+                  {selectedClients.size} client(s) sélectionné(s)
+                </span>
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" onClick={() => setSelectedClients(new Set())}>
+                    Désélectionner
+                  </Button>
+                  <Button variant="destructive" size="sm" onClick={handleBulkDelete}>
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Supprimer la sélection
+                  </Button>
+                </div>
+              </div>
+            )}
             {isLoading ? (
               <div className="text-center py-8 text-gray-500">Chargement...</div>
             ) : filteredClients.length === 0 ? (
@@ -878,6 +970,12 @@ export default function ClientsPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-12">
+                        <Checkbox
+                          checked={selectedClients.size === filteredClients.length && filteredClients.length > 0}
+                          onCheckedChange={toggleSelectAll}
+                        />
+                      </TableHead>
                       <TableHead>Code</TableHead>
                       <TableHead>Nom</TableHead>
                       <TableHead>Contact</TableHead>
@@ -890,7 +988,13 @@ export default function ClientsPage() {
                   </TableHeader>
                   <TableBody>
                     {filteredClients.map((client) => (
-                      <TableRow key={client.id}>
+                      <TableRow key={client.id} className={selectedClients.has(client.id) ? 'bg-red-50' : ''}>
+                        <TableCell>
+                          <Checkbox
+                            checked={selectedClients.has(client.id)}
+                            onCheckedChange={() => toggleSelectClient(client.id)}
+                          />
+                        </TableCell>
                         <TableCell className="font-medium">{client.code}</TableCell>
                         <TableCell>
                           <div>
@@ -966,8 +1070,13 @@ export default function ClientsPage() {
                                   size="icon"
                                   className="text-red-600"
                                   onClick={() => handleDelete(client.id)}
+                                  disabled={isDeleting === client.id}
                                 >
-                                  <Trash2 className="h-4 w-4" />
+                                  {isDeleting === client.id ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="h-4 w-4" />
+                                  )}
                                 </Button>
                               </ProtectedModule>
                             )}
