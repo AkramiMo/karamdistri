@@ -8,7 +8,6 @@ interface ReceptionItem {
     name: string
     description: string | null
   }
-  quantity_expected: number
   quantity_received: number
   unit_price: number
 }
@@ -38,14 +37,16 @@ interface Reception {
 export async function generateReceptionPDF(reception: Reception, company?: CompanySettings): Promise<void> {
   const doc = new jsPDF()
   const settings = company || defaultCompanySettings
+  const pageWidth = doc.internal.pageSize.width
 
-  // Header - Logo
+  // Header - Logo with white background
+  let logoHeight = 25
   try {
-    const logoUrl = '/logo.jpg'
+    const logoUrl = '/Logo.png'
     const img = new Image()
     img.crossOrigin = 'anonymous'
 
-    await new Promise<void>((resolve, reject) => {
+    await new Promise<void>((resolve) => {
       img.onload = () => {
         // Calculate aspect ratio to fit logo
         const maxWidth = 50
@@ -62,7 +63,13 @@ export async function generateReceptionPDF(reception: Reception, company?: Compa
           height = maxHeight
         }
 
-        doc.addImage(img, 'JPEG', 20, 10, width, height)
+        logoHeight = height
+
+        // White background for logo (larger rectangle to cover any artifacts)
+        doc.setFillColor(255, 255, 255)
+        doc.rect(15, 5, width + 10, height + 10, 'F')
+
+        doc.addImage(img, 'PNG', 20, 10, width, height)
         resolve()
       }
       img.onerror = () => {
@@ -83,11 +90,12 @@ export async function generateReceptionPDF(reception: Reception, company?: Compa
     doc.text(settings.company_name, 20, 25)
   }
 
+  // Company info - with more space after logo
   doc.setFontSize(10)
   doc.setFont('helvetica', 'normal')
   doc.setTextColor(100, 100, 100)
 
-  let headerY = 38
+  let headerY = 10 + logoHeight + 8  // More space between logo and company info
   const companyAddress = formatCompanyAddress(settings)
   if (companyAddress) {
     doc.text(companyAddress, 20, headerY)
@@ -101,51 +109,46 @@ export async function generateReceptionPDF(reception: Reception, company?: Compa
     doc.text(`Email: ${settings.email}`, 20, headerY)
   }
 
-  // Reception title
-  doc.setFontSize(18)
+  // Reception title - CENTERED
+  doc.setFontSize(20)
   doc.setFont('helvetica', 'bold')
-  doc.setTextColor(0, 0, 0)
-  doc.text('BON DE RECEPTION', 130, 25)
+  doc.setTextColor(76, 175, 80)
+  doc.text('BON DE RECEPTION', pageWidth / 2, 25, { align: 'center' })
 
-  // BR info box
+  // BR info box - on the right (fond blanc, pas gris)
   doc.setFontSize(10)
   doc.setFont('helvetica', 'normal')
   doc.setDrawColor(200, 200, 200)
-  doc.setFillColor(245, 245, 245)
-  doc.roundedRect(140, 30, 55, 30, 2, 2, 'FD')
+  doc.setFillColor(255, 255, 255)
+  doc.roundedRect(135, 32, 60, 28, 2, 2, 'FD')
 
-  doc.text(`N°: ${reception.reception_number}`, 145, 38)
-  doc.text(`Date: ${formatDate(reception.reception_date)}`, 145, 45)
+  doc.setTextColor(0, 0, 0)
+  doc.text(`N°: ${reception.reception_number}`, 140, 40)
+  doc.text(`Date: ${formatDate(reception.reception_date)}`, 140, 47)
   if (reception.purchase_order?.po_number) {
-    doc.text(`Ref BC: ${reception.purchase_order.po_number}`, 145, 52)
+    doc.text(`Ref BC: ${reception.purchase_order.po_number}`, 140, 54)
   }
 
-  // Supplier info
+  // Supplier info - ON THE RIGHT
   doc.setFontSize(12)
   doc.setFont('helvetica', 'bold')
-  doc.text('Fournisseur', 20, 60)
+  doc.setTextColor(0, 0, 0)
+  doc.text('Fournisseur', 135, 68)
 
   doc.setFontSize(10)
   doc.setFont('helvetica', 'normal')
-  doc.setDrawColor(34, 139, 34)
+  doc.setDrawColor(76, 175, 80)
   doc.setFillColor(255, 255, 255)
-  doc.roundedRect(20, 63, 80, 35, 2, 2, 'D')
+  doc.roundedRect(135, 71, 60, 30, 2, 2, 'D')
 
   doc.setFont('helvetica', 'bold')
-  doc.text(`${reception.supplier.code} - ${reception.supplier.name}`, 25, 72)
+  doc.text(`${reception.supplier.code}`, 140, 79)
   doc.setFont('helvetica', 'normal')
+  doc.text(`${reception.supplier.name}`, 140, 85)
 
-  let yPos = 78
-  if (reception.supplier.contact_name) {
-    doc.text(`Contact: ${reception.supplier.contact_name}`, 25, yPos)
-    yPos += 5
-  }
+  let yPos = 91
   if (reception.supplier.phone) {
-    doc.text(`Tel: ${reception.supplier.phone}`, 25, yPos)
-    yPos += 5
-  }
-  if (reception.supplier.address) {
-    doc.text(`${reception.supplier.address}`, 25, yPos)
+    doc.text(`Tel: ${reception.supplier.phone}`, 140, yPos)
   }
 
   // Items table
@@ -153,15 +156,14 @@ export async function generateReceptionPDF(reception: Reception, company?: Compa
     (index + 1).toString(),
     item.article.code,
     item.article.description || item.article.name,
-    item.quantity_expected.toString(),
     item.quantity_received.toString(),
     formatPrice(item.unit_price),
     formatPrice(item.quantity_received * item.unit_price),
   ])
 
   autoTable(doc, {
-    startY: 105,
-    head: [['#', 'Code', 'Designation', 'Qte Cmd', 'Qte Reçue', 'Prix Unit.', 'Total HT']],
+    startY: 110,
+    head: [['#', 'Code', 'Désignation', 'Qté Reçue', 'Prix Unit.', 'Total HT']],
     body: tableData,
     theme: 'striped',
     headStyles: {
@@ -169,23 +171,24 @@ export async function generateReceptionPDF(reception: Reception, company?: Compa
       textColor: [255, 255, 255],
       fontStyle: 'bold',
       halign: 'center',
+      fontSize: 9,
     },
     columnStyles: {
-      0: { halign: 'center', cellWidth: 8 },
-      1: { halign: 'center', cellWidth: 20 },
-      2: { halign: 'left', cellWidth: 55 },
-      3: { halign: 'center', cellWidth: 18 },
-      4: { halign: 'center', cellWidth: 18 },
-      5: { halign: 'right', cellWidth: 22 },
-      6: { halign: 'right', cellWidth: 22 },
+      0: { halign: 'center', cellWidth: 10 },
+      1: { halign: 'center', cellWidth: 25 },
+      2: { halign: 'left', cellWidth: 70 },
+      3: { halign: 'center', cellWidth: 25 },
+      4: { halign: 'right', cellWidth: 30 },
+      5: { halign: 'right', cellWidth: 30 },
     },
     styles: {
       fontSize: 9,
-      cellPadding: 3,
+      cellPadding: 4,
     },
     alternateRowStyles: {
       fillColor: [245, 245, 245],
     },
+    margin: { left: 14, right: 14 },
   })
 
   // Get the Y position after the table
@@ -259,7 +262,6 @@ export async function generateReceptionPDF(reception: Reception, company?: Compa
 
   // Footer with company identifiers
   const pageHeight = doc.internal.pageSize.height
-  const pageWidth = doc.internal.pageSize.width
 
   // Top border for footer
   doc.setDrawColor(200, 200, 200)

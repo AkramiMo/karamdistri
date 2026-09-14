@@ -314,7 +314,10 @@ export default function LivraisonsPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [dateFilter, setDateFilter] = useState<string>('')
+  const [selectedBLMonth, setSelectedBLMonth] = useState(() => new Date().toISOString().slice(0, 7)) // YYYY-MM format, default to current month
   const [showOnlyWithBalance, setShowOnlyWithBalance] = useState(false)
+  const [showOnlyNotInSale, setShowOnlyNotInSale] = useState(false)
+  const [deliveryIdsInSales, setDeliveryIdsInSales] = useState<Set<string>>(new Set())
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [viewDelivery, setViewDelivery] = useState<Delivery | null>(null)
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
@@ -362,6 +365,7 @@ export default function LivraisonsPage() {
   const [editingItems, setEditingItems] = useState<Record<string, { quantity_returned: number }>>({})
   const [roundSearchTerm, setRoundSearchTerm] = useState('')
   const [roundStatusFilter, setRoundStatusFilter] = useState<string>('all')
+  const [selectedBLTMonth, setSelectedBLTMonth] = useState(() => new Date().toISOString().slice(0, 7)) // YYYY-MM format, default to current month
   const [roundFormData, setRoundFormData] = useState({
     driver_id: '',
     round_date: new Date().toISOString().split('T')[0],
@@ -386,20 +390,33 @@ export default function LivraisonsPage() {
     setLoadError(null)
 
     try {
+      // Build deliveries query with optional month filter
+      const buildDeliveriesQuery = () => {
+        let query = supabase
+          .from('deliveries')
+          .select(`
+            id, delivery_number, order_id, client_id, status, delivery_date, total_ht, total_ttc, amount_paid, balance_due, payment_status, notes,
+            client:clients(code, name, contact_name, phone, address, city, gps_lat, gps_lng),
+            order:orders(order_number),
+            delivery_items(id, article_id, quantity_ordered, quantity_delivered, quantity_returned, unit_price, article:articles(code, name, description))
+          `)
+
+        // Filter by month if not "all"
+        if (selectedBLMonth !== 'all') {
+          const startDate = `${selectedBLMonth}-01`
+          const [year, month] = selectedBLMonth.split('-').map(Number)
+          const nextMonth = month === 12 ? 1 : month + 1
+          const nextYear = month === 12 ? year + 1 : year
+          const endDate = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`
+          query = query.gte('delivery_date', startDate).lt('delivery_date', endDate)
+        }
+
+        return query.order('created_at', { ascending: false }).limit(500)
+      }
+
       // Fetch all data in parallel for faster loading
       const [deliveriesResult, ordersResult, clientsResult] = await Promise.all([
-        querySimple(() =>
-          supabase
-            .from('deliveries')
-            .select(`
-              id, delivery_number, order_id, client_id, status, delivery_date, total_ht, total_ttc, amount_paid, balance_due, payment_status, notes,
-              client:clients(code, name, contact_name, phone, address, city, gps_lat, gps_lng),
-              order:orders(order_number),
-              delivery_items(id, article_id, quantity_ordered, quantity_delivered, quantity_returned, unit_price, article:articles(code, name, description))
-            `)
-            .order('created_at', { ascending: false })
-            .limit(30)
-        ),
+        querySimple(() => buildDeliveriesQuery()),
         querySimple(() =>
           supabase
             .from('orders')
@@ -423,6 +440,42 @@ export default function LivraisonsPage() {
         throw new Error(`Erreur livraisons: ${deliveriesResult.error.message || 'Erreur inconnue'}`)
       }
 
+      // Récupérer les IDs des BL comptabilisés :
+      // 1. BL liés directement à une vente (sales.delivery_id)
+      // 2. BL dans une tournée complétée (delivery_round_items)
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const [salesResult, roundItemsResult] = await Promise.all([
+        // Toutes les ventes (on filtrera côté client pour delivery_id non null)
+        (supabase as any)
+          .from('sales')
+          .select('delivery_id'),
+        // Tous les BL dans des tournées
+        (supabase as any)
+          .from('delivery_round_items')
+          .select('delivery_id')
+      ])
+
+      const salesDeliveryIds = new Set<string>()
+
+      // Ajouter les BL des ventes directes (filtrer les null côté client)
+      if (salesResult.data) {
+        salesResult.data.forEach((s: { delivery_id: string | null }) => {
+          if (s.delivery_id !== null && s.delivery_id !== undefined) {
+            salesDeliveryIds.add(s.delivery_id)
+          }
+        })
+      }
+
+      // Ajouter les BL des tournées
+      if (roundItemsResult.data) {
+        roundItemsResult.data.forEach((item: { delivery_id: string }) => {
+          if (item.delivery_id) salesDeliveryIds.add(item.delivery_id)
+        })
+      }
+
+      setDeliveryIdsInSales(salesDeliveryIds)
+
       setDeliveries((deliveriesResult.data as Delivery[]) || [])
       setOrders((ordersResult.data as Order[]) || [])
       setClients((clientsResult.data as ClientSimple[]) || [])
@@ -432,7 +485,7 @@ export default function LivraisonsPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [supabase])
+  }, [supabase, selectedBLMonth])
 
   useEffect(() => {
     fetchData()
@@ -880,8 +933,17 @@ export default function LivraisonsPage() {
       round.round_number.toLowerCase().includes(roundSearchTerm.toLowerCase()) ||
       round.driver?.full_name?.toLowerCase().includes(roundSearchTerm.toLowerCase())
     const matchesStatus = roundStatusFilter === 'all' || round.status === roundStatusFilter
-    return matchesSearch && matchesStatus
+    const matchesMonth = selectedBLTMonth === 'all' || round.round_date.startsWith(selectedBLTMonth)
+    return matchesSearch && matchesStatus && matchesMonth
   })
+
+  // Generate list of available months from BLT rounds data
+  const currentMonth = new Date().toISOString().slice(0, 7)
+  const bltMonthsFromRounds = rounds.map(r => r.round_date.slice(0, 7))
+  if (!bltMonthsFromRounds.includes(currentMonth)) {
+    bltMonthsFromRounds.push(currentMonth)
+  }
+  const availableBLTMonths = Array.from(new Set(bltMonthsFromRounds)).sort((a, b) => b.localeCompare(a))
 
   const roundStats = {
     total: rounds.length,
@@ -1026,7 +1088,7 @@ export default function LivraisonsPage() {
         })),
       }
 
-      await generateDeliveryNotePDF(orderData, companySettings, '/logo.jpg')
+      await generateDeliveryNotePDF(orderData, companySettings, '/Logo.png')
     } catch (error) {
       console.error('Error generating PDF:', error)
       alert('Erreur lors de la generation du PDF')
@@ -1794,6 +1856,13 @@ export default function LivraisonsPage() {
     }
   }
 
+  // Generate list of available months from BL deliveries data
+  const blMonthsFromDeliveries = deliveries.map(d => d.delivery_date?.slice(0, 7) || '').filter(m => m)
+  if (!blMonthsFromDeliveries.includes(currentMonth)) {
+    blMonthsFromDeliveries.push(currentMonth)
+  }
+  const availableBLMonths = Array.from(new Set(blMonthsFromDeliveries)).sort((a, b) => b.localeCompare(a))
+
   const filteredDeliveries = deliveries.filter(
     (delivery) => {
       const matchesSearch = delivery.delivery_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -1801,11 +1870,14 @@ export default function LivraisonsPage() {
         delivery.client?.code?.toLowerCase().includes(searchTerm.toLowerCase())
       const matchesStatus = statusFilter === 'all' || delivery.status === statusFilter
       const matchesDate = !dateFilter || delivery.delivery_date === dateFilter
+      const matchesMonth = selectedBLMonth === 'all' || (delivery.delivery_date && delivery.delivery_date.startsWith(selectedBLMonth))
       // Calculate reste (balance) for filtering
       const recetteBL = delivery.delivery_items?.reduce((sum, item) => sum + ((item.quantity_delivered - item.quantity_returned) * item.unit_price), 0) || 0
       const reste = recetteBL - (delivery.amount_paid || 0)
       const matchesBalance = !showOnlyWithBalance || reste > 0
-      return matchesSearch && matchesStatus && matchesDate && matchesBalance
+      // Filter for BL not yet linked to a sale (any status, not in sales)
+      const matchesNotInSale = !showOnlyNotInSale || !deliveryIdsInSales.has(delivery.id)
+      return matchesSearch && matchesStatus && matchesDate && matchesMonth && matchesBalance && matchesNotInSale
     }
   )
 
@@ -1821,6 +1893,8 @@ export default function LivraisonsPage() {
   const totalCA = deliveries.reduce((sum, d) => sum + (d.total_ht || 0), 0)
   const deliveredCount = deliveries.filter(d => d.status === 'delivered').length
   const pendingCount = deliveries.filter(d => d.status === 'pending' || d.status === 'in_progress').length
+  // BL livrés mais non encore comptabilisés dans une vente
+  const notInSaleCount = deliveries.filter(d => d.status === 'delivered' && !deliveryIdsInSales.has(d.id)).length
 
   return (
     <ProtectedModule module="livraisons">
@@ -2044,6 +2118,23 @@ export default function LivraisonsPage() {
                   </CardContent>
                 </Card>
               )}
+              {!isLivreur && (
+                <Card className={`border-2 ${notInSaleCount > 0 ? 'border-orange-500 bg-orange-50' : 'border-[#B8860B]'}`}>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-bold text-gray-600">
+                      Non comptabilises
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className={`h-6 w-6 ${notInSaleCount > 0 ? 'text-orange-500' : 'text-gray-400'}`} />
+                      <span className={`text-2xl font-bold ${notInSaleCount > 0 ? 'text-orange-600' : 'text-gray-400'}`}>
+                        {notInSaleCount}
+                      </span>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
             </div>
 
             <Card className="border-2 border-[#B8860B]">
@@ -2060,6 +2151,19 @@ export default function LivraisonsPage() {
                       className="pl-10 border-2 border-[#B8860B]"
                     />
                   </div>
+                  <Select value={selectedBLMonth} onValueChange={setSelectedBLMonth}>
+                    <SelectTrigger className="w-44 border-2 border-[#B8860B]">
+                      <SelectValue placeholder="Mois" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Tous les mois</SelectItem>
+                      {availableBLMonths.map((month) => (
+                        <SelectItem key={month} value={month}>
+                          {format(new Date(month + '-01'), 'MMMM yyyy', { locale: fr })}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <Input
                     type="date"
                     value={dateFilter}
@@ -2090,6 +2194,17 @@ export default function LivraisonsPage() {
                     />
                     <Label htmlFor="showOnlyWithBalance" className="text-sm font-medium cursor-pointer whitespace-nowrap">
                       Reste &gt; 0
+                    </Label>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id="showOnlyNotInSale"
+                      checked={showOnlyNotInSale}
+                      onCheckedChange={(checked) => setShowOnlyNotInSale(checked === true)}
+                      className="border-orange-500 data-[state=checked]:bg-orange-500"
+                    />
+                    <Label htmlFor="showOnlyNotInSale" className="text-sm font-medium cursor-pointer whitespace-nowrap text-orange-600">
+                      Non comptabilises
                     </Label>
                   </div>
                   <Button onClick={selectAllPending} className="gap-2 bg-[#B8860B] hover:bg-[#9A7209]">
@@ -2171,9 +2286,16 @@ export default function LivraisonsPage() {
                         {delivery.client?.city || '-'}
                       </TableCell>
                       <TableCell>
-                        <Badge className={statusColors[delivery.status]}>
-                          {statusLabels[delivery.status]}
-                        </Badge>
+                        <div className="flex items-center gap-1">
+                          <Badge className={statusColors[delivery.status]}>
+                            {statusLabels[delivery.status]}
+                          </Badge>
+                          {delivery.status === 'delivered' && !deliveryIdsInSales.has(delivery.id) && (
+                            <span title="BL non comptabilise dans une vente">
+                              <AlertCircle className="h-4 w-4 text-orange-500" />
+                            </span>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>
                         <Badge className={paymentStatusColors[delivery.payment_status || 'pending']}>
@@ -2442,6 +2564,19 @@ export default function LivraisonsPage() {
                       />
                     </div>
                   )}
+                  <Select value={selectedBLTMonth} onValueChange={setSelectedBLTMonth}>
+                    <SelectTrigger className="w-full md:w-44 border-2 border-[#B8860B]">
+                      <SelectValue placeholder="Mois" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Tous les mois</SelectItem>
+                      {availableBLTMonths.map((month) => (
+                        <SelectItem key={month} value={month}>
+                          {format(new Date(month + '-01'), 'MMMM yyyy', { locale: fr })}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <Select value={roundStatusFilter} onValueChange={setRoundStatusFilter}>
                     <SelectTrigger className="w-full md:w-48 border-2 border-[#B8860B]">
                       <SelectValue placeholder="Statut" />

@@ -108,31 +108,46 @@ export default function RolesPage() {
   const handleSave = async () => {
     setIsSaving(true)
 
-    const rolePermissions = permissions.filter((p) => p.role_id === selectedRole)
+    try {
+      // Supprimer toutes les permissions existantes pour ce rôle
+      await supabase
+        .from('role_permissions')
+        .delete()
+        .eq('role_id', selectedRole)
 
-    for (const perm of rolePermissions) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { error } = await (supabase.from('role_permissions') as any).upsert(
-        {
-          role_id: perm.role_id,
-          module_id: perm.module_id,
+      // Préparer toutes les permissions à insérer
+      const permissionsToInsert = modules.map((module) => {
+        const perm = getPermission(module.id)
+        return {
+          role_id: selectedRole,
+          module_id: module.id,
           can_view: perm.can_view,
           can_create: perm.can_create,
           can_edit: perm.can_edit,
           can_delete: perm.can_delete,
-        },
-        {
-          onConflict: 'role_id,module_id',
         }
-      )
+      })
+
+      // Insérer toutes les permissions en une seule requête
+      const { error } = await supabase
+        .from('role_permissions')
+        .insert(permissionsToInsert)
 
       if (error) {
-        console.error('Error saving permission:', error)
+        console.error('Error saving permissions:', error)
+        alert('Erreur lors de la sauvegarde des permissions')
+      } else {
+        // Recharger les permissions après sauvegarde
+        const { data: permissionsData } = await supabase.from('role_permissions').select('*')
+        if (permissionsData) setPermissions(permissionsData as RolePermission[])
+        alert('Permissions sauvegardées avec succès !')
       }
+    } catch (err) {
+      console.error('Error:', err)
+      alert('Erreur lors de la sauvegarde')
     }
 
     setIsSaving(false)
-    alert('Permissions sauvegardées avec succès !')
   }
 
   const selectedRoleName = roles.find((r) => r.id === selectedRole)?.name

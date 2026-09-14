@@ -1,0 +1,7 @@
+-- Notes de développement (pas de modifications SQL dans cette migration)
+-- dans vente il y ventes , articles vendus :
+-- ajouter dans ventes une page nommée Vente en kg
+-- 1. dans cette page on aurra le total de la quantité vendue en kg pour un article.
+-- dans graphiques :
+-- 2. ajouter dans graphiques , un graphique ( diagramme en baton ) reprenant la quantité verndue par article pour le mois en cours / les autres mois .
+-- 3. ajouter un graphique MB (marge bebificaire) par jour/semaine/Mois .

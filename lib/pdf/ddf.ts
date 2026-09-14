@@ -35,7 +35,7 @@ export async function generateDDFPDF(ddf: DDF, company?: CompanySettings): Promi
 
   // Header - Logo
   try {
-    const logoUrl = '/logo.jpg'
+    const logoUrl = '/Logo.png'
     const img = new Image()
     img.crossOrigin = 'anonymous'
 
@@ -55,7 +55,7 @@ export async function generateDDFPDF(ddf: DDF, company?: CompanySettings): Promi
           height = maxHeight
         }
 
-        doc.addImage(img, 'JPEG', 20, 10, width, height)
+        doc.addImage(img, 'PNG', 20, 10, width, height)
         resolve()
       }
       img.onerror = () => {

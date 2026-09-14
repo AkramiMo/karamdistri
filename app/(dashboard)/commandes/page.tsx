@@ -44,13 +44,19 @@ import {
 } from '@/components/ui/popover'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Search, Eye, ShoppingCart, Trash2, FileText, Truck, Download, Users, Package, Check, ChevronsUpDown, Pencil } from 'lucide-react'
+import { Plus, Search, Eye, ShoppingCart, Trash2, FileText, Truck, Download, Users, Package, Check, ChevronsUpDown, Pencil, AlertCircle, X } from 'lucide-react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { generateInvoicePDF, generateDeliveryNotePDF } from '@/lib/pdf/invoice'
 import { useCompanySettings } from '@/hooks/useCompanySettings'
 import { useAuth } from '@/hooks/useAuth'
 import { cn } from '@/lib/utils'
+
+// Helper pour accepter "." et "," comme séparateurs décimaux
+const parseDecimalInput = (value: string): number => {
+  const normalized = value.replace(',', '.')
+  return parseFloat(normalized) || 0
+}
 
 interface OrderItemDB {
   id: string
@@ -105,6 +111,7 @@ interface Article {
   description: string | null
   price_ht: number
   tva_rate: number
+  cr: number | null
 }
 
 interface OrderItem {
@@ -117,6 +124,7 @@ interface OrderItem {
   total_ht: number
   lot_id?: string
   lot_number?: string
+  price_source?: PriceSource
 }
 
 const statusColors: Record<string, string> = {
@@ -152,6 +160,24 @@ interface ClientPrice {
   custom_price: number
 }
 
+interface DDC {
+  id: string
+  ddc_number: string
+  request_date: string
+  status: string
+  total_ht: number
+}
+
+interface DDCItem {
+  article_id: string
+  article_code: string
+  article_name: string
+  quantity: number
+  unit_price: number
+}
+
+type PriceSource = 'catalogue' | 'ddc' | 'libre'
+
 interface Lot {
   id: string
   lot_number: string
@@ -183,6 +209,8 @@ export default function CommandesPage() {
   const [stockByLot, setStockByLot] = useState<StockByLot[]>([])
   const [clientPrices, setClientPrices] = useState<ClientPrice[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
@@ -213,6 +241,13 @@ export default function CommandesPage() {
   const [selectedArticle, setSelectedArticle] = useState('')
   const [selectedQuantity, setSelectedQuantity] = useState('1')
   const [selectedLot, setSelectedLot] = useState('')
+
+  // Source de prix
+  const [priceSource, setPriceSource] = useState<PriceSource>('catalogue')
+  const [clientDDCs, setClientDDCs] = useState<DDC[]>([])
+  const [selectedDDC, setSelectedDDC] = useState('')
+  const [ddcItems, setDdcItems] = useState<DDCItem[]>([])
+  const [manualPrice, setManualPrice] = useState('')
 
   // Combobox open states
   const [clientOpen, setClientOpen] = useState(false)
@@ -259,7 +294,7 @@ export default function CommandesPage() {
   const fetchArticles = async () => {
     const { data } = await supabase
       .from('articles')
-      .select('id, code, name, description, price_ht, tva_rate')
+      .select('id, code, name, description, price_ht, tva_rate, cr')
       .eq('is_active', true)
       .order('code')
     setArticles(data || [])
@@ -317,12 +352,62 @@ export default function CommandesPage() {
     setClientPrices(data || [])
   }
 
-  // Get price for an article (client price if exists, otherwise default)
-  const getArticlePrice = (articleId: string): number => {
+  // Fetch validated DDCs for a client
+  const fetchClientDDCs = async (clientId: string) => {
+    if (!clientId) {
+      setClientDDCs([])
+      setSelectedDDC('')
+      setDdcItems([])
+      return
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await (supabase.from('client_quote_requests') as any)
+      .select('id, ddc_number, request_date, status, total_ht')
+      .eq('client_id', clientId)
+      .eq('status', 'accepted') // Only validated DDCs
+      .order('request_date', { ascending: false })
+    setClientDDCs(data || [])
+  }
+
+  // Fetch DDC items when a DDC is selected
+  const fetchDDCItems = async (ddcId: string) => {
+    if (!ddcId) {
+      setDdcItems([])
+      return
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await (supabase.from('client_quote_request_items') as any)
+      .select('article_id, article_code, article_name, quantity, unit_price')
+      .eq('ddc_id', ddcId)
+    setDdcItems(data || [])
+  }
+
+  // Get price for an article based on price source
+  const getArticlePrice = (articleId: string, source?: PriceSource): number => {
+    const effectiveSource = source || priceSource
+
+    if (effectiveSource === 'ddc' && selectedDDC) {
+      // Use DDC price
+      const ddcItem = ddcItems.find(item => item.article_id === articleId)
+      if (ddcItem) return ddcItem.unit_price
+    }
+
+    if (effectiveSource === 'libre') {
+      // For libre, return 0 - user will enter manually
+      return 0
+    }
+
+    // Default: catalogue (client price if exists, otherwise article price)
     const clientPrice = clientPrices.find(cp => cp.article_id === articleId)
     if (clientPrice) return clientPrice.custom_price
     const article = articles.find(a => a.id === articleId)
     return article?.price_ht || 0
+  }
+
+  // Get CR (Coût de Revient) for an article
+  const getArticleCR = (articleId: string): number | null => {
+    const article = articles.find(a => a.id === articleId) as (Article & { cr?: number }) | undefined
+    return article?.cr ?? null
   }
 
   useEffect(() => {
@@ -333,33 +418,58 @@ export default function CommandesPage() {
     fetchStockByLot()
   }, [])
 
-  // Fetch client prices when client changes
+  // Fetch client prices and DDCs when client changes
   useEffect(() => {
     if (formData.client_id) {
       fetchClientPrices(formData.client_id)
+      fetchClientDDCs(formData.client_id)
     } else {
       setClientPrices([])
+      setClientDDCs([])
+      setSelectedDDC('')
+      setDdcItems([])
     }
+    // Reset price source when client changes
+    setPriceSource('catalogue')
+    setSelectedDDC('')
+    setDdcItems([])
   }, [formData.client_id])
 
-  const generateOrderNumber = async (): Promise<string> => {
-    // Query database for all order numbers and find the max numerically
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data } = await (supabase.from('orders') as any)
-      .select('order_number')
-      .like('order_number', 'BCC%')
-
-    if (data && data.length > 0) {
-      const numbers = data
-        .map((d: { order_number: string }) => parseInt(d.order_number.replace('BCC', '')))
-        .filter((n: number) => !isNaN(n))
-
-      if (numbers.length > 0) {
-        const maxNum = Math.max(...numbers)
-        return `BCC${maxNum + 1}`
-      }
+  // Fetch DDC items when DDC selection changes
+  useEffect(() => {
+    if (selectedDDC) {
+      fetchDDCItems(selectedDDC)
+    } else {
+      setDdcItems([])
     }
-    return `BCC${401}`
+  }, [selectedDDC])
+
+  const generateOrderNumber = async (): Promise<string> => {
+    try {
+      // Query database for all order numbers and find the max numerically
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase.from('orders') as any)
+        .select('order_number')
+        .like('order_number', 'BCC%')
+
+      if (error) {
+        return `BCC${Date.now().toString().slice(-6)}`
+      }
+
+      if (data && data.length > 0) {
+        const numbers = data
+          .map((d: { order_number: string }) => parseInt(d.order_number.replace('BCC', '')))
+          .filter((n: number) => !isNaN(n))
+
+        if (numbers.length > 0) {
+          const maxNum = Math.max(...numbers)
+          return `BCC${maxNum + 1}`
+        }
+      }
+      return `BCC${401}`
+    } catch {
+      return `BCC${Date.now().toString().slice(-6)}`
+    }
   }
 
   const addItem = () => {
@@ -369,7 +479,7 @@ export default function CommandesPage() {
     if (!article) return
 
     const lot = selectedLot ? lots.find(l => l.id === selectedLot) : null
-    const quantity = parseInt(selectedQuantity)
+    const quantity = parseDecimalInput(selectedQuantity)
 
     // Vérifier le stock disponible
     const availableStock = getAvailableStock(selectedArticle, selectedLot || null)
@@ -387,7 +497,18 @@ export default function CommandesPage() {
       return
     }
 
-    const unitPrice = getArticlePrice(selectedArticle)
+    // Get price based on source
+    let unitPrice: number
+    if (priceSource === 'libre') {
+      unitPrice = parseDecimalInput(manualPrice)
+      if (unitPrice <= 0) {
+        alert('Veuillez saisir un prix valide en mode saisie libre')
+        return
+      }
+    } else {
+      unitPrice = getArticlePrice(selectedArticle)
+    }
+
     const total_ht = unitPrice * quantity
 
     setOrderItems([...orderItems, {
@@ -400,11 +521,13 @@ export default function CommandesPage() {
       total_ht,
       lot_id: lot?.id,
       lot_number: lot?.lot_number,
+      price_source: priceSource,
     }])
 
     setSelectedArticle('')
     setSelectedQuantity('1')
     setSelectedLot('')
+    setManualPrice('')
   }
 
   const removeItem = (index: number) => {
@@ -413,64 +536,116 @@ export default function CommandesPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    setErrorMessage(null)
 
     if (!formData.client_id || orderItems.length === 0) {
-      alert('Veuillez selectionner un client et ajouter au moins un article')
+      setErrorMessage('Veuillez sélectionner un client et ajouter au moins un article')
       return
     }
 
-    const total_ht = orderItems.reduce((sum, item) => sum + item.total_ht, 0)
-    const total_tva = total_ht * 0.2 // 20% TVA
-    const total_ttc = total_ht + total_tva
+    if (isSubmitting) return
 
-    // Generate unique order number from database
-    const orderNumber = await generateOrderNumber()
+    setIsSubmitting(true)
 
-    // Create order
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: orderData, error: orderError } = await (supabase.from('orders') as any)
-      .insert([{
-        order_number: orderNumber,
-        client_id: formData.client_id,
-        order_date: formData.order_date,
-        status: 'pending',
-        total_ht,
-        total_tva,
-        total_ttc,
-        notes: formData.notes || null,
-      }])
-      .select()
-      .single()
+    let orderNumber = ''
 
-    if (orderError) {
-      console.error('Error creating order:', orderError)
-      alert(`Erreur lors de la création: ${orderError.message || orderError.code || JSON.stringify(orderError)}`)
-      return
+    try {
+      const total_ht = orderItems.reduce((sum, item) => sum + item.total_ht, 0)
+      const total_tva = total_ht * 0.2 // 20% TVA
+      const total_ttc = total_ht + total_tva
+
+      // Generate unique order number from database
+      try {
+        orderNumber = await generateOrderNumber()
+      } catch (numErr) {
+        orderNumber = `BCC${Date.now().toString().slice(-6)}`
+      }
+
+      // Create order
+      let orderData: any = null
+      let orderError: any = null
+
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const result = await (supabase.from('orders') as any)
+          .insert([{
+            order_number: orderNumber,
+            client_id: formData.client_id,
+            order_date: formData.order_date,
+            status: 'confirmed',
+            total_ht,
+            total_tva,
+            total_ttc,
+            notes: formData.notes || null,
+          }])
+          .select()
+          .single()
+
+        orderData = result.data
+        orderError = result.error
+      } catch (insertErr) {
+        orderError = insertErr
+      }
+
+      if (orderError) {
+        console.error('Error creating order:', orderError)
+        const errorMsg = orderError.message || orderError.code || JSON.stringify(orderError)
+        setErrorMessage(`Erreur lors de la création de la commande: ${errorMsg}`)
+        return
+      }
+
+      if (!orderData) {
+        console.error('No order data returned')
+        setErrorMessage('Erreur: La commande n\'a pas pu être créée. Aucune donnée retournée par le serveur.')
+        return
+      }
+
+      // Create order items
+      const itemsToInsert = orderItems.map(item => ({
+        order_id: orderData.id,
+        article_id: item.article_id,
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        discount_percent: 0,
+        total_ht: item.total_ht,
+        lot_id: item.lot_id || null,
+      }))
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: itemsError } = await (supabase.from('order_items') as any).insert(itemsToInsert).select()
+
+      if (itemsError) {
+        console.error('Error creating order items:', itemsError)
+        // Analyser l'erreur pour donner un message clair
+        let errorMsg = ''
+        const rawError = itemsError.message || JSON.stringify(itemsError)
+
+        if (rawError.includes('invalid input syntax for type integer')) {
+          errorMsg = 'Les quantités décimales ne sont pas supportées. Utilisez des nombres entiers ou contactez l\'administrateur pour activer les quantités décimales.'
+        } else if (rawError.includes('violates foreign key constraint')) {
+          errorMsg = 'Un des articles sélectionnés n\'existe plus dans la base de données.'
+        } else if (rawError.includes('permission denied') || rawError.includes('policy')) {
+          errorMsg = 'Vous n\'avez pas les permissions nécessaires pour créer des articles de commande.'
+        } else {
+          errorMsg = `Erreur lors de l'ajout des articles: ${rawError}`
+        }
+
+        setErrorMessage(errorMsg)
+        // La commande a été créée mais sans articles - on la supprime pour éviter l'incohérence
+        await (supabase.from('orders') as any).delete().eq('id', orderData.id)
+        return
+      }
+
+      await fetchOrders()
+      setIsDialogOpen(false)
+      resetForm()
+      setIsSubmitting(false)
+    } catch (error: any) {
+      console.error('Unexpected error:', error)
+      setErrorMessage(`Une erreur inattendue est survenue: ${error?.message || 'Erreur inconnue'}`)
+    } finally {
+      setIsSubmitting(false)
     }
-
-    if (!orderData) {
-      console.error('No order data returned')
-      alert('Erreur: Aucune donnée retournée lors de la création')
-      return
-    }
-
-    // Create order items
-    const itemsToInsert = orderItems.map(item => ({
-      order_id: orderData.id,
-      article_id: item.article_id,
-      quantity: item.quantity,
-      unit_price: item.unit_price,
-      discount_percent: 0,
-      total_ht: item.total_ht,
-      lot_id: item.lot_id || null,
-    }))
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (supabase.from('order_items') as any).insert(itemsToInsert)
-
-    fetchOrders()
-    setIsDialogOpen(false)
-    resetForm()
   }
 
   const handleViewOrder = (order: Order) => {
@@ -657,6 +832,17 @@ export default function CommandesPage() {
   }
 
   const handleCreateBL = async (order: Order) => {
+    // Vérifier si un BL existe déjà pour cette commande
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: existingDeliveries } = await (supabase.from('deliveries') as any)
+      .select('id, delivery_number')
+      .eq('order_id', order.id)
+
+    if (existingDeliveries && existingDeliveries.length > 0) {
+      alert(`Un BL existe déjà pour cette commande: ${existingDeliveries[0].delivery_number}`)
+      return
+    }
+
     if (!confirm(`Créer un Bon de Livraison pour la commande ${order.order_number} ?`)) return
 
     // Générer le numéro BL
@@ -729,6 +915,12 @@ export default function CommandesPage() {
     setOrderItems([])
     setSelectedArticle('')
     setSelectedQuantity('1')
+    setPriceSource('catalogue')
+    setSelectedDDC('')
+    setDdcItems([])
+    setManualPrice('')
+    setClientDDCs([])
+    setErrorMessage(null)
   }
 
   // Edit order functions
@@ -784,7 +976,7 @@ export default function CommandesPage() {
     const article = articles.find(a => a.id === editSelectedArticle)
     if (!article) return
 
-    const quantity = parseInt(editSelectedQuantity)
+    const quantity = parseDecimalInput(editSelectedQuantity)
     const unitPrice = getEditArticlePrice(editSelectedArticle)
     const total_ht = unitPrice * quantity
 
@@ -924,6 +1116,25 @@ export default function CommandesPage() {
               <DialogHeader>
                 <DialogTitle>Nouvelle commande</DialogTitle>
               </DialogHeader>
+
+              {/* Message d'erreur */}
+              {errorMessage && (
+                <div className="bg-red-50 border-2 border-red-400 rounded-lg p-4 flex items-start gap-3">
+                  <AlertCircle className="h-5 w-5 text-red-600 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <h4 className="font-semibold text-red-800">Erreur de création</h4>
+                    <p className="text-red-700 text-sm mt-1">{errorMessage}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setErrorMessage(null)}
+                    className="text-red-600 hover:text-red-800"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+              )}
+
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
@@ -996,17 +1207,114 @@ export default function CommandesPage() {
                   />
                 </div>
 
+                {/* Source de prix */}
+                {formData.client_id && (
+                  <div className="border-t pt-4 space-y-4">
+                    <div className="flex items-center gap-4">
+                      <Label className="font-medium">Source de prix :</Label>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          variant={priceSource === 'catalogue' ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() => {
+                            setPriceSource('catalogue')
+                            setSelectedDDC('')
+                            setDdcItems([])
+                          }}
+                          className={priceSource === 'catalogue' ? 'bg-[#B8860B] hover:bg-[#9A7209]' : ''}
+                        >
+                          Catalogue
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={priceSource === 'ddc' ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() => setPriceSource('ddc')}
+                          className={priceSource === 'ddc' ? 'bg-blue-600 hover:bg-blue-700' : ''}
+                          disabled={clientDDCs.length === 0}
+                        >
+                          DDC {clientDDCs.length > 0 && `(${clientDDCs.length})`}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={priceSource === 'libre' ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() => {
+                            setPriceSource('libre')
+                            setSelectedDDC('')
+                            setDdcItems([])
+                          }}
+                          className={priceSource === 'libre' ? 'bg-green-600 hover:bg-green-700' : ''}
+                        >
+                          Saisie libre
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* DDC Selector */}
+                    {priceSource === 'ddc' && clientDDCs.length > 0 && (
+                      <div className="flex items-center gap-4">
+                        <Label>DDC validé :</Label>
+                        <Select value={selectedDDC} onValueChange={setSelectedDDC}>
+                          <SelectTrigger className="w-[300px] bg-blue-50">
+                            <SelectValue placeholder="Sélectionner un DDC" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {clientDDCs.map((ddc) => (
+                              <SelectItem key={ddc.id} value={ddc.id}>
+                                {ddc.ddc_number} - {format(new Date(ddc.request_date), 'dd/MM/yyyy', { locale: fr })} ({formatPrice(ddc.total_ht)})
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {selectedDDC && ddcItems.length > 0 && (
+                          <Badge className="bg-blue-100 text-blue-800">
+                            {ddcItems.length} articles
+                          </Badge>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Info message */}
+                    <div className="text-sm text-gray-500">
+                      {priceSource === 'catalogue' && (
+                        <span>Prix depuis le catalogue (prix client personnalisé si existant)</span>
+                      )}
+                      {priceSource === 'ddc' && !selectedDDC && (
+                        <span className="text-orange-600">Sélectionnez un DDC validé pour utiliser ses prix</span>
+                      )}
+                      {priceSource === 'ddc' && selectedDDC && (
+                        <span className="text-blue-600">Les prix seront pris du DDC sélectionné</span>
+                      )}
+                      {priceSource === 'libre' && (
+                        <span className="text-green-600">Saisissez le prix manuellement (CR affiché pour référence)</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 <div className="border-t pt-4">
                   <h3 className="font-medium mb-3">
                     Articles
-                    {clientPrices.length > 0 && (
+                    {clientPrices.length > 0 && priceSource === 'catalogue' && (
                       <Badge className="ml-2 bg-amber-100 text-[#9A7209]">
                         {clientPrices.length} prix personnalises
                       </Badge>
                     )}
-                    {selectedArticle && (
+                    {priceSource === 'ddc' && selectedDDC && ddcItems.length > 0 && (
                       <Badge className="ml-2 bg-blue-100 text-blue-800">
-                        Stock total: {getLotsWithStockForArticle(selectedArticle).reduce((sum, s) => sum + s.quantity, 0)}
+                        DDC: {ddcItems.length} articles
+                      </Badge>
+                    )}
+                    {priceSource === 'libre' && (
+                      <Badge className="ml-2 bg-green-100 text-green-800">
+                        Saisie libre
+                      </Badge>
+                    )}
+                    {selectedArticle && (
+                      <Badge className="ml-2 bg-gray-100 text-gray-800">
+                        Stock: {getLotsWithStockForArticle(selectedArticle).reduce((sum, s) => sum + s.quantity, 0)}
                       </Badge>
                     )}
                   </h3>
@@ -1097,13 +1405,38 @@ export default function CommandesPage() {
                       </SelectContent>
                     </Select>
                     <Input
-                      type="number"
-                      min="1"
+                      type="text"
+                      inputMode="decimal"
                       value={selectedQuantity}
-                      onChange={(e) => setSelectedQuantity(e.target.value)}
+                      onChange={(e) => setSelectedQuantity(e.target.value.replace(/[^0-9.,]/g, ''))}
                       className="w-24 bg-[#F5E6C8]"
                       placeholder="Qte"
                     />
+                    {/* Prix et CR pour mode libre */}
+                    {priceSource === 'libre' && selectedArticle && (
+                      <div className="flex items-center gap-2">
+                        <div className="text-sm text-gray-500">
+                          CR: <span className="font-medium text-orange-600">{formatPrice(getArticleCR(selectedArticle) || 0)}</span>
+                        </div>
+                        <Input
+                          type="text"
+                          inputMode="decimal"
+                          value={manualPrice}
+                          onChange={(e) => setManualPrice(e.target.value.replace(/[^0-9.,]/g, ''))}
+                          className="w-28 bg-green-50 border-green-300"
+                          placeholder="Prix HT"
+                        />
+                      </div>
+                    )}
+                    {/* Afficher le prix qui sera appliqué */}
+                    {priceSource !== 'libre' && selectedArticle && (
+                      <div className="text-sm text-gray-600 flex items-center">
+                        Prix: <span className="font-medium ml-1 text-[#9A7209]">{formatPrice(getArticlePrice(selectedArticle))}</span>
+                        {priceSource === 'ddc' && !ddcItems.find(i => i.article_id === selectedArticle) && (
+                          <span className="ml-2 text-orange-500 text-xs">(non dans DDC)</span>
+                        )}
+                      </div>
+                    )}
                     <Button type="button" onClick={addItem} className="bg-[#B8860B] hover:bg-[#9A7209] text-white">
                       Ajouter
                     </Button>
@@ -1152,7 +1485,17 @@ export default function CommandesPage() {
                                   {item.quantity}
                                 </span>
                               </TableCell>
-                              <TableCell className="text-right">{formatPrice(item.unit_price)}</TableCell>
+                              <TableCell className="text-right">
+                                <div className="flex items-center justify-end gap-1">
+                                  {formatPrice(item.unit_price)}
+                                  {item.price_source === 'ddc' && (
+                                    <Badge className="bg-blue-50 text-blue-600 text-[10px] px-1">DDC</Badge>
+                                  )}
+                                  {item.price_source === 'libre' && (
+                                    <Badge className="bg-green-50 text-green-600 text-[10px] px-1">Libre</Badge>
+                                  )}
+                                </div>
+                              </TableCell>
                               <TableCell className="text-right">{formatPrice(item.total_ht)}</TableCell>
                               <TableCell>
                                 <Button
@@ -1185,8 +1528,8 @@ export default function CommandesPage() {
                   <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                     Annuler
                   </Button>
-                  <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
-                    Creer la commande
+                  <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]" disabled={isSubmitting}>
+                    {isSubmitting ? 'Création en cours...' : 'Creer la commande'}
                   </Button>
                 </div>
               </form>
@@ -1673,10 +2016,10 @@ export default function CommandesPage() {
                     </PopoverContent>
                   </Popover>
                   <Input
-                    type="number"
-                    min="1"
+                    type="text"
+                    inputMode="decimal"
                     value={editSelectedQuantity}
-                    onChange={(e) => setEditSelectedQuantity(e.target.value)}
+                    onChange={(e) => setEditSelectedQuantity(e.target.value.replace(/[^0-9.,]/g, ''))}
                     className="w-24 bg-[#F5E6C8]"
                     placeholder="Qte"
                   />
@@ -1707,20 +2050,21 @@ export default function CommandesPage() {
                           </TableCell>
                           <TableCell className="text-right">
                             <Input
-                              type="number"
-                              min="1"
-                              value={item.quantity}
-                              onChange={(e) => updateEditItemQuantity(index, parseInt(e.target.value) || 1)}
+                              type="text"
+                              inputMode="decimal"
+                              key={`qty-${index}-${item.article_id}`}
+                              defaultValue={item.quantity}
+                              onBlur={(e) => updateEditItemQuantity(index, parseDecimalInput(e.target.value) || 1)}
                               className="w-20 text-right"
                             />
                           </TableCell>
                           <TableCell className="text-right">
                             <Input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={item.unit_price}
-                              onChange={(e) => updateEditItemPrice(index, parseFloat(e.target.value) || 0)}
+                              type="text"
+                              inputMode="decimal"
+                              key={`price-${index}-${item.article_id}`}
+                              defaultValue={item.unit_price}
+                              onBlur={(e) => updateEditItemPrice(index, parseDecimalInput(e.target.value))}
                               className="w-24 text-right"
                             />
                           </TableCell>

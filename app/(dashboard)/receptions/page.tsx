@@ -30,7 +30,8 @@ import {
 } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Search, Eye, PackageCheck, Trash2, FileDown } from 'lucide-react'
+import { Plus, Search, Eye, PackageCheck, Trash2, FileDown, Upload, FileText, Image, Camera, Download, X, Pencil } from 'lucide-react'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { generateReceptionPDF } from '@/lib/pdf/reception'
@@ -61,6 +62,12 @@ interface Reception {
     quantity_expected: number
     quantity_received: number
     unit_price: number
+  }[]
+  reception_documents?: {
+    id: string
+    nom: string
+    type: string
+    chemin: string
   }[]
 }
 
@@ -93,6 +100,12 @@ interface Supply {
   name: string
   price_ht: number
   is_active?: boolean
+  category_id?: string | null
+}
+
+interface SupplyCategory {
+  id: string
+  name: string
 }
 
 interface ReceptionItem {
@@ -105,14 +118,26 @@ interface ReceptionItem {
   total_ht: number
 }
 
+interface ReceptionDocument {
+  id?: string
+  nom: string
+  type: 'pdf' | 'image' | 'scan'
+  chemin: string
+  file?: File
+}
+
 export default function ReceptionsPage() {
   const [receptions, setReceptions] = useState<Reception[]>([])
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([])
   const [supplies, setSupplies] = useState<Supply[]>([])
+  const [supplyCategories, setSupplyCategories] = useState<SupplyCategory[]>([])
+  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('all')
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
+  const [editingReception, setEditingReception] = useState<Reception | null>(null)
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [viewingReception, setViewingReception] = useState<Reception | null>(null)
   const supabase = createClient()
@@ -130,6 +155,16 @@ export default function ReceptionsPage() {
   const [selectedQuantityOrdered, setSelectedQuantityOrdered] = useState('0')
   const [selectedQuantityReceived, setSelectedQuantityReceived] = useState('1')
   const [selectedPrice, setSelectedPrice] = useState('')
+  const [supplySearch, setSupplySearch] = useState('')
+  const [showSupplyDropdown, setShowSupplyDropdown] = useState(false)
+  const [isDropdownHovered, setIsDropdownHovered] = useState(false)
+
+  // Documents state
+  const [documents, setDocuments] = useState<ReceptionDocument[]>([])
+  const [isDragging, setIsDragging] = useState(false)
+  const [isUploading, setIsUploading] = useState(false)
+  const fileInputRef = useState<HTMLInputElement | null>(null)
+  const cameraInputRef = useState<HTMLInputElement | null>(null)
 
   const fetchReceptions = async () => {
     setIsLoading(true)
@@ -157,6 +192,12 @@ export default function ReceptionsPage() {
             quantity_expected,
             quantity_received,
             unit_price
+          ),
+          reception_documents(
+            id,
+            nom,
+            type,
+            chemin
           )
         `)
         .order('created_at', { ascending: false })
@@ -208,9 +249,16 @@ export default function ReceptionsPage() {
     // Fetch all supplies (including inactive) for viewing existing receptions
     const { data } = await supabase
       .from('supplies')
-      .select('id, code, name, price_ht, is_active')
+      .select('id, code, name, price_ht, is_active, category_id')
       .order('name')
     setSupplies(data || [])
+  }
+
+  const fetchSupplyCategories = async () => {
+    const { data } = await supabase.from('supply_categories')
+      .select('id, name')
+      .order('name')
+    setSupplyCategories(data || [])
   }
 
   useEffect(() => {
@@ -218,6 +266,7 @@ export default function ReceptionsPage() {
     fetchSuppliers()
     fetchPurchaseOrders()
     fetchSupplies()
+    fetchSupplyCategories()
   }, [])
 
   // Generate reception number
@@ -277,7 +326,6 @@ export default function ReceptionsPage() {
             name: supply?.name || '-',
             description: null,
           },
-          quantity_expected: item.quantity_expected,
           quantity_received: item.quantity_received,
           unit_price: item.unit_price,
         }
@@ -316,9 +364,9 @@ export default function ReceptionsPage() {
     const supply = supplies.find(s => s.id === selectedArticle)
     if (!supply) return
 
-    const quantityOrdered = parseInt(selectedQuantityOrdered) || 0
-    const quantityReceived = parseInt(selectedQuantityReceived)
-    const unit_price = parseFloat(selectedPrice)
+    const quantityOrdered = parseDecimalInput(selectedQuantityOrdered)
+    const quantityReceived = parseDecimalInput(selectedQuantityReceived)
+    const unit_price = parseDecimalInput(selectedPrice)
     const total_ht = unit_price * quantityReceived
 
     setReceptionItems([...receptionItems, {
@@ -335,14 +383,16 @@ export default function ReceptionsPage() {
     setSelectedQuantityOrdered('0')
     setSelectedQuantityReceived('1')
     setSelectedPrice('')
+    setSupplySearch('')
   }
 
   const removeItem = (index: number) => {
     setReceptionItems(receptionItems.filter((_, i) => i !== index))
   }
 
-  const updateItemQuantity = (index: number, newQuantity: number) => {
+  const updateItemQuantity = (index: number, newQuantityStr: string) => {
     const items = [...receptionItems]
+    const newQuantity = parseDecimalInput(newQuantityStr)
     items[index].quantity_received = newQuantity
     items[index].total_ht = newQuantity * items[index].unit_price
     setReceptionItems(items)
@@ -352,9 +402,28 @@ export default function ReceptionsPage() {
     const supply = supplies.find(s => s.id === supplyId)
     if (supply) {
       setSelectedArticle(supplyId)
-      setSelectedPrice(supply.price_ht.toString())
+      setSelectedPrice((supply.price_ht ?? 0).toString())
+      setSupplySearch(`${supply.code} - ${supply.name}`)
+      setShowSupplyDropdown(false)
+      setIsDropdownHovered(false)
     }
   }
+
+  // Filtrer les fournitures selon la catégorie et la recherche
+  const filteredSuppliesForSelect = supplies
+    .filter(s => s.is_active !== false)
+    .filter(s => {
+      // Filtre par catégorie
+      if (selectedCategoryFilter !== 'all' && s.category_id !== selectedCategoryFilter) {
+        return false
+      }
+      // Filtre par recherche textuelle
+      if (!supplySearch) return true
+      const search = supplySearch.toLowerCase()
+      return s.code.toLowerCase().includes(search) ||
+             s.name.toLowerCase().includes(search)
+    })
+    .slice(0, 20) // Limiter à 20 résultats
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -454,6 +523,11 @@ export default function ReceptionsPage() {
         }])
     }
 
+    // Upload documents
+    if (documents.length > 0) {
+      await uploadDocuments(newReception.id)
+    }
+
     fetchReceptions()
     fetchPurchaseOrders()
     setIsDialogOpen(false)
@@ -486,6 +560,90 @@ export default function ReceptionsPage() {
     setIsViewDialogOpen(true)
   }
 
+  const handleEdit = (reception: Reception) => {
+    setEditingReception(reception)
+    setFormData({
+      supplier_id: reception.supplier_id,
+      purchase_order_id: reception.purchase_order_id || '',
+      reception_date: reception.reception_date,
+      notes: reception.notes || '',
+    })
+
+    // Pré-remplir les articles
+    if (reception.reception_items) {
+      const items: ReceptionItem[] = reception.reception_items.map(item => {
+        const supply = supplies.find(s => s.id === item.article_id)
+        return {
+          article_id: item.article_id,
+          article_name: supply?.name || '',
+          article_code: supply?.code || '',
+          quantity_ordered: item.quantity_expected,
+          quantity_received: item.quantity_received,
+          unit_price: item.unit_price,
+          total_ht: item.quantity_received * item.unit_price,
+        }
+      })
+      setReceptionItems(items)
+    }
+
+    setIsEditDialogOpen(true)
+  }
+
+  const handleUpdate = async (e: React.FormEvent) => {
+    e.preventDefault()
+
+    if (!editingReception || !formData.supplier_id || receptionItems.length === 0) {
+      alert('Veuillez sélectionner un fournisseur et ajouter des articles')
+      return
+    }
+
+    const total_ht = receptionItems.reduce((sum, item) => sum + item.total_ht, 0)
+
+    // Mettre à jour la réception
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: receptionError } = await (supabase.from('receptions') as any)
+      .update({
+        purchase_order_id: formData.purchase_order_id || null,
+        supplier_id: formData.supplier_id,
+        reception_date: formData.reception_date,
+        total_ht,
+        notes: formData.notes || null,
+      })
+      .eq('id', editingReception.id)
+
+    if (receptionError) {
+      console.error('Error updating reception:', receptionError)
+      alert('Erreur lors de la mise à jour du BR')
+      return
+    }
+
+    // Supprimer les anciens articles
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase.from('reception_items') as any).delete().eq('reception_id', editingReception.id)
+
+    // Insérer les nouveaux articles
+    const itemsToInsert = receptionItems.map(item => ({
+      reception_id: editingReception.id,
+      article_id: item.article_id,
+      quantity_expected: item.quantity_ordered,
+      quantity_received: item.quantity_received,
+      unit_price: item.unit_price,
+    }))
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: itemsError } = await (supabase.from('reception_items') as any)
+      .insert(itemsToInsert)
+
+    if (itemsError) {
+      console.error('Error updating reception items:', itemsError)
+    }
+
+    fetchReceptions()
+    setIsEditDialogOpen(false)
+    setEditingReception(null)
+    resetForm()
+  }
+
   const resetForm = () => {
     setFormData({
       supplier_id: '',
@@ -498,6 +656,15 @@ export default function ReceptionsPage() {
     setSelectedQuantityOrdered('0')
     setSelectedQuantityReceived('1')
     setSelectedPrice('')
+    setSupplySearch('')
+    setSelectedCategoryFilter('all')
+    // Clear documents and revoke object URLs
+    documents.forEach(doc => {
+      if (doc.chemin.startsWith('blob:')) {
+        URL.revokeObjectURL(doc.chemin)
+      }
+    })
+    setDocuments([])
   }
 
   const filteredReceptions = receptions.filter(
@@ -512,6 +679,91 @@ export default function ReceptionsPage() {
       style: 'currency',
       currency: 'MAD',
     }).format(price)
+  }
+
+  // Helper pour parser les nombres avec virgule ou point comme séparateur décimal
+  const parseDecimalInput = (value: string): number => {
+    if (!value) return 0
+    // Remplacer la virgule par un point pour le parsing
+    const normalized = value.replace(',', '.')
+    const parsed = parseFloat(normalized)
+    return isNaN(parsed) ? 0 : parsed
+  }
+
+  // Document handling functions
+  const getDocumentType = (file: File): 'pdf' | 'image' | 'scan' => {
+    if (file.type === 'application/pdf') return 'pdf'
+    return 'image'
+  }
+
+  const handleFileSelect = (files: FileList | null, type?: 'scan') => {
+    if (!files) return
+
+    const newDocs: ReceptionDocument[] = Array.from(files).map(file => ({
+      nom: file.name,
+      type: type === 'scan' ? 'scan' : getDocumentType(file),
+      chemin: URL.createObjectURL(file),
+      file: file,
+    }))
+
+    setDocuments([...documents, ...newDocs])
+  }
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(true)
+  }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+    handleFileSelect(e.dataTransfer.files)
+  }
+
+  const removeDocument = (index: number) => {
+    const doc = documents[index]
+    if (doc.chemin.startsWith('blob:')) {
+      URL.revokeObjectURL(doc.chemin)
+    }
+    setDocuments(documents.filter((_, i) => i !== index))
+  }
+
+  const uploadDocuments = async (receptionId: string) => {
+    for (const doc of documents) {
+      if (!doc.file) continue
+
+      const fileExt = doc.file.name.split('.').pop()
+      const fileName = `${receptionId}/${Date.now()}-${doc.nom}`
+
+      // Upload to Supabase Storage
+      const { error: uploadError } = await supabase.storage
+        .from('reception-documents')
+        .upload(fileName, doc.file)
+
+      if (uploadError) {
+        console.error('Error uploading document:', uploadError)
+        continue
+      }
+
+      // Get public URL
+      const { data: { publicUrl } } = supabase.storage
+        .from('reception-documents')
+        .getPublicUrl(fileName)
+
+      // Save to database
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase.from('reception_documents') as any).insert({
+        reception_id: receptionId,
+        nom: doc.nom,
+        type: doc.type,
+        chemin: publicUrl,
+      })
+    }
   }
 
   return (
@@ -538,11 +790,11 @@ export default function ReceptionsPage() {
                 </Button>
               </ProtectedModule>
             </DialogTrigger>
-            <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+            <DialogContent resizable className="w-[900px] min-w-[600px] min-h-[500px] max-h-[90vh]">
               <DialogHeader>
                 <DialogTitle>Nouveau bon de réception</DialogTitle>
               </DialogHeader>
-              <form onSubmit={handleSubmit} className="space-y-4">
+              <form onSubmit={handleSubmit} className="space-y-4 flex-1 flex flex-col">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Bon de commande (optionnel)</Label>
@@ -604,116 +856,292 @@ export default function ReceptionsPage() {
                   </div>
                 </div>
 
-                <div className="border-t pt-4">
-                  <h3 className="font-medium mb-3">Fournitures reçues</h3>
-                  <div className="grid grid-cols-12 gap-2 mb-4 items-end">
-                    <div className="col-span-5">
-                      <Label className="text-xs text-gray-500 mb-1 block">Fourniture</Label>
-                      <Select value={selectedArticle} onValueChange={handleSupplySelect}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Sélectionner une fourniture" />
+                <Tabs defaultValue="fournitures" className="border-t pt-4">
+                  <TabsList className="grid w-full grid-cols-2">
+                    <TabsTrigger value="fournitures">Fournitures</TabsTrigger>
+                    <TabsTrigger value="documents">
+                      Documents {documents.length > 0 && `(${documents.length})`}
+                    </TabsTrigger>
+                  </TabsList>
+
+                  <TabsContent value="fournitures" className="mt-4 flex-1 min-h-[300px]">
+                    {/* Filtre par catégorie */}
+                    <div className="mb-4">
+                      <Label className="text-xs text-gray-500 mb-1 block">Filtrer par catégorie</Label>
+                      <Select
+                        value={selectedCategoryFilter}
+                        onValueChange={(value) => {
+                          setSelectedCategoryFilter(value)
+                          setSupplySearch('')
+                          setSelectedArticle('')
+                          setShowSupplyDropdown(value !== 'all')
+                        }}
+                      >
+                        <SelectTrigger className="w-full md:w-64">
+                          <SelectValue placeholder="Toutes les catégories" />
                         </SelectTrigger>
                         <SelectContent>
-                          {supplies.filter(s => s.is_active !== false).map((supply) => (
-                            <SelectItem key={supply.id} value={supply.id}>
-                              {supply.code} - {supply.name}
+                          <SelectItem value="all">Toutes les catégories</SelectItem>
+                          {supplyCategories.map((cat) => (
+                            <SelectItem key={cat.id} value={cat.id}>
+                              {cat.name}
                             </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
                     </div>
-                    <div className="col-span-2">
-                      <Label className="text-xs text-gray-500 mb-1 block">Qte Cmd</Label>
-                      <Input
-                        type="number"
-                        min="0"
-                        value={selectedQuantityOrdered}
-                        onChange={(e) => setSelectedQuantityOrdered(e.target.value)}
-                        placeholder="0"
-                      />
+
+                    <div className="grid grid-cols-12 gap-2 mb-4 items-end">
+                      <div className="col-span-6 relative">
+                        <Label className="text-xs text-gray-500 mb-1 block">Fourniture (tapez pour rechercher)</Label>
+                        <Input
+                          type="text"
+                          placeholder="Rechercher: code ou nom (ex: etq 5 ove)"
+                          value={supplySearch}
+                          onChange={(e) => {
+                            setSupplySearch(e.target.value)
+                            setSelectedArticle('')
+                            setShowSupplyDropdown(true)
+                          }}
+                          onFocus={() => setShowSupplyDropdown(true)}
+                          onBlur={() => {
+                            if (!isDropdownHovered) {
+                              setTimeout(() => setShowSupplyDropdown(false), 150)
+                            }
+                          }}
+                        />
+                        {showSupplyDropdown && (selectedCategoryFilter !== 'all' || supplySearch) && filteredSuppliesForSelect.length > 0 && (
+                          <div
+                            className="absolute z-[100] w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-80 overflow-y-auto"
+                            onMouseEnter={() => setIsDropdownHovered(true)}
+                            onMouseLeave={() => setIsDropdownHovered(false)}
+                          >
+                            {filteredSuppliesForSelect.map((supply) => (
+                              <div
+                                key={supply.id}
+                                className="px-3 py-2 hover:bg-[#B8860B]/10 cursor-pointer text-sm"
+                                onMouseDown={() => handleSupplySelect(supply.id)}
+                              >
+                                <span className="font-medium text-[#B8860B]">{supply.code}</span>
+                                <span className="text-gray-600"> - {supply.name}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {showSupplyDropdown && (selectedCategoryFilter !== 'all' || supplySearch) && filteredSuppliesForSelect.length === 0 && (
+                          <div className="absolute z-[100] w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg p-3 text-sm text-gray-500">
+                            Aucune fourniture trouvée
+                          </div>
+                        )}
+                      </div>
+                      <div className="col-span-2">
+                        <Label className="text-xs text-gray-500 mb-1 block">Qte Reçue</Label>
+                        <Input
+                          type="text"
+                          inputMode="decimal"
+                          value={selectedQuantityReceived}
+                          onChange={(e) => setSelectedQuantityReceived(e.target.value)}
+                          placeholder="1"
+                        />
+                      </div>
+                      <div className="col-span-2">
+                        <Label className="text-xs text-gray-500 mb-1 block">Prix HT</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={selectedPrice}
+                          onChange={(e) => setSelectedPrice(e.target.value)}
+                          placeholder="0.00"
+                        />
+                      </div>
+                      <div className="col-span-2">
+                        <Button type="button" onClick={addItem} variant="outline" className="w-full">
+                          <Plus className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </div>
-                    <div className="col-span-2">
-                      <Label className="text-xs text-gray-500 mb-1 block">Qte Reçue</Label>
-                      <Input
-                        type="number"
-                        min="1"
-                        value={selectedQuantityReceived}
-                        onChange={(e) => setSelectedQuantityReceived(e.target.value)}
-                        placeholder="1"
-                      />
+
+                    {receptionItems.length > 0 && (
+                      <div className="max-h-[250px] overflow-y-auto border rounded-md">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Code</TableHead>
+                            <TableHead>Fourniture</TableHead>
+                            <TableHead className="text-right">Qté Reçue</TableHead>
+                            <TableHead className="text-right">Prix unit.</TableHead>
+                            <TableHead className="text-right">Total HT</TableHead>
+                            <TableHead></TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {receptionItems.map((item, index) => (
+                            <TableRow key={index}>
+                              <TableCell>{item.article_code}</TableCell>
+                              <TableCell>{item.article_name}</TableCell>
+                              <TableCell className="text-right">
+                                <Input
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={item.quantity_received}
+                                  onChange={(e) => updateItemQuantity(index, e.target.value)}
+                                  className="w-20 text-right"
+                                />
+                              </TableCell>
+                              <TableCell className="text-right">{formatPrice(item.unit_price)}</TableCell>
+                              <TableCell className="text-right">{formatPrice(item.total_ht)}</TableCell>
+                              <TableCell>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => removeItem(index)}
+                                >
+                                  <Trash2 className="h-4 w-4 text-red-600" />
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                          <TableRow>
+                            <TableCell colSpan={4} className="text-right font-medium">
+                              Total HT:
+                            </TableCell>
+                            <TableCell className="text-right font-bold">
+                              {formatPrice(receptionItems.reduce((sum, item) => sum + item.total_ht, 0))}
+                            </TableCell>
+                            <TableCell></TableCell>
+                          </TableRow>
+                        </TableBody>
+                      </Table>
+                      </div>
+                    )}
+                  </TabsContent>
+
+                  <TabsContent value="documents" className="mt-4 space-y-4">
+                    {/* Zone de glisser-déposer */}
+                    <div
+                      className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+                        isDragging
+                          ? 'border-[#B8860B] bg-[#B8860B]/5'
+                          : 'border-gray-300 hover:border-gray-400'
+                      }`}
+                      onDragOver={handleDragOver}
+                      onDragLeave={handleDragLeave}
+                      onDrop={handleDrop}
+                    >
+                      <Upload className="h-10 w-10 mx-auto text-gray-400 mb-3" />
+                      <p className="text-gray-600 mb-2">
+                        Glissez-déposez vos fichiers ici
+                      </p>
+                      <p className="text-sm text-gray-400">
+                        PDF, JPEG, PNG (max 25 MB)
+                      </p>
                     </div>
-                    <div className="col-span-2">
-                      <Label className="text-xs text-gray-500 mb-1 block">Prix HT</Label>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        value={selectedPrice}
-                        onChange={(e) => setSelectedPrice(e.target.value)}
-                        placeholder="0.00"
-                      />
-                    </div>
-                    <div className="col-span-1">
-                      <Button type="button" onClick={addItem} variant="outline" className="w-full">
-                        <Plus className="h-4 w-4" />
+
+                    {/* Boutons d'import */}
+                    <div className="flex gap-2 flex-wrap">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          const input = document.createElement('input')
+                          input.type = 'file'
+                          input.accept = 'application/pdf'
+                          input.multiple = true
+                          input.onchange = (e) => handleFileSelect((e.target as HTMLInputElement).files)
+                          input.click()
+                        }}
+                      >
+                        <FileText className="h-4 w-4 mr-2" />
+                        Importer PDF
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          const input = document.createElement('input')
+                          input.type = 'file'
+                          input.accept = 'image/*'
+                          input.multiple = true
+                          input.onchange = (e) => handleFileSelect((e.target as HTMLInputElement).files)
+                          input.click()
+                        }}
+                      >
+                        <Image className="h-4 w-4 mr-2" />
+                        Importer Image
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          const input = document.createElement('input')
+                          input.type = 'file'
+                          input.accept = 'image/*'
+                          input.capture = 'environment'
+                          input.onchange = (e) => handleFileSelect((e.target as HTMLInputElement).files, 'scan')
+                          input.click()
+                        }}
+                      >
+                        <Camera className="h-4 w-4 mr-2" />
+                        Scanner
                       </Button>
                     </div>
-                  </div>
 
-                  {receptionItems.length > 0 && (
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Code</TableHead>
-                          <TableHead>Fourniture</TableHead>
-                          <TableHead className="text-right">Qté Cmd</TableHead>
-                          <TableHead className="text-right">Qté Reçue</TableHead>
-                          <TableHead className="text-right">Prix unit.</TableHead>
-                          <TableHead className="text-right">Total HT</TableHead>
-                          <TableHead></TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {receptionItems.map((item, index) => (
-                          <TableRow key={index}>
-                            <TableCell>{item.article_code}</TableCell>
-                            <TableCell>{item.article_name}</TableCell>
-                            <TableCell className="text-right">{item.quantity_ordered}</TableCell>
-                            <TableCell className="text-right">
-                              <Input
-                                type="number"
-                                min="0"
-                                value={item.quantity_received}
-                                onChange={(e) => updateItemQuantity(index, parseInt(e.target.value) || 0)}
-                                className="w-20 text-right"
-                              />
-                            </TableCell>
-                            <TableCell className="text-right">{formatPrice(item.unit_price)}</TableCell>
-                            <TableCell className="text-right">{formatPrice(item.total_ht)}</TableCell>
-                            <TableCell>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => removeItem(index)}
-                              >
-                                <Trash2 className="h-4 w-4 text-red-600" />
-                              </Button>
-                            </TableCell>
+                    {/* Tableau des documents */}
+                    {documents.length > 0 && (
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Nom</TableHead>
+                            <TableHead>Type</TableHead>
+                            <TableHead>Aperçu</TableHead>
+                            <TableHead className="text-right">Actions</TableHead>
                           </TableRow>
-                        ))}
-                        <TableRow>
-                          <TableCell colSpan={5} className="text-right font-medium">
-                            Total HT:
-                          </TableCell>
-                          <TableCell className="text-right font-bold">
-                            {formatPrice(receptionItems.reduce((sum, item) => sum + item.total_ht, 0))}
-                          </TableCell>
-                          <TableCell></TableCell>
-                        </TableRow>
-                      </TableBody>
-                    </Table>
-                  )}
-                </div>
+                        </TableHeader>
+                        <TableBody>
+                          {documents.map((doc, index) => (
+                            <TableRow key={index}>
+                              <TableCell className="font-medium">{doc.nom}</TableCell>
+                              <TableCell>
+                                <Badge variant={doc.type === 'pdf' ? 'default' : doc.type === 'scan' ? 'secondary' : 'outline'}>
+                                  {doc.type === 'pdf' ? 'PDF' : doc.type === 'scan' ? 'Scan' : 'Image'}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                {doc.type !== 'pdf' && (
+                                  <img
+                                    src={doc.chemin}
+                                    alt={doc.nom}
+                                    className="h-10 w-10 object-cover rounded"
+                                  />
+                                )}
+                                {doc.type === 'pdf' && (
+                                  <FileText className="h-10 w-10 text-red-500" />
+                                )}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => removeDocument(index)}
+                                >
+                                  <X className="h-4 w-4 text-red-600" />
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    )}
+
+                    {documents.length === 0 && (
+                      <p className="text-center text-gray-500 py-4">
+                        Aucun document ajouté
+                      </p>
+                    )}
+                  </TabsContent>
+                </Tabs>
 
                 <div className="flex justify-end gap-2 pt-4">
                   <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
@@ -826,9 +1254,20 @@ export default function ReceptionsPage() {
                             variant="ghost"
                             size="icon"
                             onClick={() => handleView(reception)}
+                            title="Voir détails"
                           >
                             <Eye className="h-4 w-4" />
                           </Button>
+                          <ProtectedModule module="receptions" action="edit">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleEdit(reception)}
+                              title="Modifier"
+                            >
+                              <Pencil className="h-4 w-4 text-amber-600" />
+                            </Button>
+                          </ProtectedModule>
                           <Button
                             variant="ghost"
                             size="icon"
@@ -842,6 +1281,7 @@ export default function ReceptionsPage() {
                               variant="ghost"
                               size="icon"
                               onClick={() => handleDelete(reception.id, reception.reception_number)}
+                              title="Supprimer"
                             >
                               <Trash2 className="h-4 w-4 text-red-600" />
                             </Button>
@@ -903,7 +1343,6 @@ export default function ReceptionsPage() {
                         <TableRow>
                           <TableHead>Code</TableHead>
                           <TableHead>Fourniture</TableHead>
-                          <TableHead className="text-right">Qté Cmd</TableHead>
                           <TableHead className="text-right">Qté Reçue</TableHead>
                           <TableHead className="text-right">Prix unit.</TableHead>
                           <TableHead className="text-right">Total HT</TableHead>
@@ -916,7 +1355,6 @@ export default function ReceptionsPage() {
                             <TableRow key={item.id}>
                               <TableCell>{supply?.code || '-'}</TableCell>
                               <TableCell>{supply?.name || '-'}</TableCell>
-                              <TableCell className="text-right">{item.quantity_expected}</TableCell>
                               <TableCell className="text-right">{item.quantity_received}</TableCell>
                               <TableCell className="text-right">{formatPrice(item.unit_price)}</TableCell>
                               <TableCell className="text-right">{formatPrice(item.quantity_received * item.unit_price)}</TableCell>
@@ -924,7 +1362,7 @@ export default function ReceptionsPage() {
                           )
                         })}
                         <TableRow>
-                          <TableCell colSpan={5} className="text-right font-medium">
+                          <TableCell colSpan={4} className="text-right font-medium">
                             Total HT:
                           </TableCell>
                           <TableCell className="text-right font-bold text-[#B8860B]">
@@ -933,6 +1371,59 @@ export default function ReceptionsPage() {
                         </TableRow>
                       </TableBody>
                     </Table>
+                  )}
+                </div>
+
+                {/* Section Documents */}
+                <div className="border-t pt-4">
+                  <h3 className="font-medium mb-3">Documents associés</h3>
+                  {viewingReception.reception_documents && viewingReception.reception_documents.length > 0 ? (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Nom</TableHead>
+                          <TableHead>Type</TableHead>
+                          <TableHead>Aperçu</TableHead>
+                          <TableHead className="text-right">Télécharger</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {viewingReception.reception_documents.map((doc) => (
+                          <TableRow key={doc.id}>
+                            <TableCell className="font-medium">{doc.nom}</TableCell>
+                            <TableCell>
+                              <Badge variant={doc.type === 'pdf' ? 'default' : doc.type === 'scan' ? 'secondary' : 'outline'}>
+                                {doc.type === 'pdf' ? 'PDF' : doc.type === 'scan' ? 'Scan' : 'Image'}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              {doc.type !== 'pdf' ? (
+                                <a href={doc.chemin} target="_blank" rel="noopener noreferrer">
+                                  <img
+                                    src={doc.chemin}
+                                    alt={doc.nom}
+                                    className="h-12 w-12 object-cover rounded cursor-pointer hover:opacity-80"
+                                  />
+                                </a>
+                              ) : (
+                                <FileText className="h-10 w-10 text-red-500" />
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => window.open(doc.chemin, '_blank')}
+                              >
+                                <Download className="h-4 w-4 text-blue-600" />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  ) : (
+                    <p className="text-gray-500 text-center py-4">Aucun document associé</p>
                   )}
                 </div>
 
@@ -950,6 +1441,239 @@ export default function ReceptionsPage() {
                 </div>
               </div>
             )}
+          </DialogContent>
+        </Dialog>
+
+        {/* Edit Reception Dialog */}
+        <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+          <DialogContent resizable className="w-[900px] min-w-[600px] min-h-[500px] max-h-[90vh]">
+            <DialogHeader>
+              <DialogTitle>Modifier le BR {editingReception?.reception_number}</DialogTitle>
+            </DialogHeader>
+            <form onSubmit={handleUpdate} className="space-y-4 flex-1 flex flex-col">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Bon de commande (optionnel)</Label>
+                  <select
+                    value={formData.purchase_order_id}
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        handlePurchaseOrderSelect(e.target.value)
+                      } else {
+                        setFormData({ ...formData, purchase_order_id: '' })
+                      }
+                    }}
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:border-ring"
+                  >
+                    <option value="">Sélectionner un BC</option>
+                    {purchaseOrders.map((po) => (
+                      <option key={po.id} value={po.id}>
+                        {po.po_number}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Fournisseur *</Label>
+                  <Select
+                    value={formData.supplier_id}
+                    onValueChange={(value) => setFormData({ ...formData, supplier_id: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Sélectionner un fournisseur" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {suppliers.map((supplier) => (
+                        <SelectItem key={supplier.id} value={supplier.id}>
+                          {supplier.code} - {supplier.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_reception_date">Date de réception</Label>
+                  <Input
+                    id="edit_reception_date"
+                    type="date"
+                    value={formData.reception_date}
+                    onChange={(e) => setFormData({ ...formData, reception_date: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_notes">Notes</Label>
+                  <Input
+                    id="edit_notes"
+                    value={formData.notes}
+                    onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                    placeholder="Notes optionnelles"
+                  />
+                </div>
+              </div>
+
+              <div className="border-t pt-4 flex-1 min-h-[300px]">
+                <h3 className="font-medium mb-4">Fournitures</h3>
+
+                {/* Filtre par catégorie */}
+                <div className="mb-4">
+                  <Label className="text-xs text-gray-500 mb-1 block">Filtrer par catégorie</Label>
+                  <Select
+                    value={selectedCategoryFilter}
+                    onValueChange={(value) => {
+                      setSelectedCategoryFilter(value)
+                      setSupplySearch('')
+                      setSelectedArticle('')
+                      setShowSupplyDropdown(value !== 'all')
+                    }}
+                  >
+                    <SelectTrigger className="w-full md:w-64">
+                      <SelectValue placeholder="Toutes les catégories" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Toutes les catégories</SelectItem>
+                      {supplyCategories.map((cat) => (
+                        <SelectItem key={cat.id} value={cat.id}>
+                          {cat.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="grid grid-cols-12 gap-2 mb-4 items-end">
+                  <div className="col-span-6 relative">
+                    <Label className="text-xs text-gray-500 mb-1 block">Fourniture (tapez pour rechercher)</Label>
+                    <Input
+                      type="text"
+                      placeholder="Rechercher: code ou nom"
+                      value={supplySearch}
+                      onChange={(e) => {
+                        setSupplySearch(e.target.value)
+                        setSelectedArticle('')
+                        setShowSupplyDropdown(true)
+                      }}
+                      onFocus={() => setShowSupplyDropdown(true)}
+                      onBlur={() => {
+                        if (!isDropdownHovered) {
+                          setTimeout(() => setShowSupplyDropdown(false), 150)
+                        }
+                      }}
+                    />
+                    {showSupplyDropdown && (selectedCategoryFilter !== 'all' || supplySearch) && filteredSuppliesForSelect.length > 0 && (
+                      <div
+                        className="absolute z-[100] w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-80 overflow-y-auto"
+                        onMouseEnter={() => setIsDropdownHovered(true)}
+                        onMouseLeave={() => setIsDropdownHovered(false)}
+                      >
+                        {filteredSuppliesForSelect.map((supply) => (
+                          <div
+                            key={supply.id}
+                            className="px-3 py-2 hover:bg-[#B8860B]/10 cursor-pointer text-sm"
+                            onMouseDown={() => handleSupplySelect(supply.id)}
+                          >
+                            <span className="font-medium text-[#B8860B]">{supply.code}</span>
+                            <span className="text-gray-600"> - {supply.name}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="col-span-2">
+                    <Label className="text-xs text-gray-500 mb-1 block">Qte Reçue</Label>
+                    <Input
+                      type="text"
+                      inputMode="decimal"
+                      value={selectedQuantityReceived}
+                      onChange={(e) => setSelectedQuantityReceived(e.target.value)}
+                      placeholder="1"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <Label className="text-xs text-gray-500 mb-1 block">Prix HT</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={selectedPrice}
+                      onChange={(e) => setSelectedPrice(e.target.value)}
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <Button type="button" onClick={addItem} variant="outline" className="w-full">
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+
+                {receptionItems.length > 0 && (
+                  <div className="max-h-[250px] overflow-y-auto border rounded-md">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Code</TableHead>
+                        <TableHead>Fourniture</TableHead>
+                        <TableHead className="text-right">Qté Reçue</TableHead>
+                        <TableHead className="text-right">Prix unit.</TableHead>
+                        <TableHead className="text-right">Total HT</TableHead>
+                        <TableHead></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {receptionItems.map((item, index) => (
+                        <TableRow key={index}>
+                          <TableCell>{item.article_code}</TableCell>
+                          <TableCell>{item.article_name}</TableCell>
+                          <TableCell className="text-right">
+                            <Input
+                              type="text"
+                              inputMode="decimal"
+                              value={item.quantity_received}
+                              onChange={(e) => updateItemQuantity(index, e.target.value)}
+                              className="w-20 text-right"
+                            />
+                          </TableCell>
+                          <TableCell className="text-right">{formatPrice(item.unit_price)}</TableCell>
+                          <TableCell className="text-right">{formatPrice(item.total_ht)}</TableCell>
+                          <TableCell>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => removeItem(index)}
+                            >
+                              <Trash2 className="h-4 w-4 text-red-600" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      <TableRow>
+                        <TableCell colSpan={4} className="text-right font-medium">
+                          Total HT:
+                        </TableCell>
+                        <TableCell className="text-right font-bold">
+                          {formatPrice(receptionItems.reduce((sum, item) => sum + item.total_ht, 0))}
+                        </TableCell>
+                        <TableCell></TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-end gap-2 pt-4">
+                <Button type="button" variant="outline" onClick={() => {
+                  setIsEditDialogOpen(false)
+                  setEditingReception(null)
+                  resetForm()
+                }}>
+                  Annuler
+                </Button>
+                <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
+                  Enregistrer les modifications
+                </Button>
+              </div>
+            </form>
           </DialogContent>
         </Dialog>
       </div>

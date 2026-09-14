@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, Fragment } from 'react'
 import dynamic from 'next/dynamic'
 import { createClient } from '@/lib/supabase/client'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
@@ -72,6 +72,7 @@ import {
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { useCompanySettings } from '@/hooks/useCompanySettings'
+import { calculateMBForRound } from '@/lib/sales'
 
 interface DeliveryRoundItem {
   id: string
@@ -251,7 +252,7 @@ export default function TourneesPage() {
             payment_status,
             status,
             client:clients(code, name, address, city, gps_lat, gps_lng),
-            delivery_items(id, article_id, quantity_ordered, quantity_delivered, quantity_returned, unit_price, article:articles(code, name, description))
+            delivery_items(id, article_id, quantity_ordered, quantity_delivered, quantity_returned, unit_price, article:articles(code, name, description, cr))
           )
         )
       `)
@@ -526,7 +527,183 @@ export default function TourneesPage() {
       .update({ status: 'completed', end_time: new Date().toISOString() })
       .eq('id', roundId)
 
-    if (!error) fetchRounds()
+    if (error) {
+      console.error('Error completing round:', error)
+      return
+    }
+
+    // Récupérer les données du BLT pour vérifier les retours
+    const round = rounds.find(r => r.id === roundId)
+    if (!round) {
+      fetchRounds()
+      return
+    }
+
+    const roundItems = round.delivery_round_items || []
+
+    // Calculer le total des articles retournés
+    let totalReturned = 0
+    for (const ri of roundItems) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const delivery = ri.delivery as any
+      if (delivery?.delivery_items) {
+        for (const di of delivery.delivery_items) {
+          totalReturned += di.quantity_returned || 0
+        }
+      }
+    }
+
+    // Si 0 retours, créer automatiquement le RBLT validé + vente + caisse
+    if (totalReturned === 0) {
+      await createAutoRBLT(round)
+    }
+
+    fetchRounds()
+  }
+
+  // Créer automatiquement un RBLT validé quand 0 retours
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const createAutoRBLT = async (round: any) => {
+    const roundItems = round.delivery_round_items || []
+
+    // Générer le numéro RBLT
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: lastReturn } = await (supabase.from('delivery_returns') as any)
+      .select('return_number')
+      .like('return_number', 'RBLT%')
+      .order('return_number', { ascending: false })
+      .limit(1)
+
+    let returnNumber = 'RBLT0001'
+    if (lastReturn && lastReturn.length > 0) {
+      const lastNum = parseInt(lastReturn[0].return_number.replace('RBLT', ''))
+      if (!isNaN(lastNum)) {
+        returnNumber = `RBLT${String(lastNum + 1).padStart(4, '0')}`
+      }
+    }
+
+    // Client (si un seul BL)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const clientId = roundItems.length === 1 ? (roundItems[0].delivery as any)?.client_id || null : null
+
+    // Créer le RBLT déjà validé (pas de retours)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: returnData, error: returnError } = await (supabase.from('delivery_returns') as any)
+      .insert([{
+        return_number: returnNumber,
+        delivery_id: null,
+        round_id: round.id,
+        client_id: clientId,
+        return_date: round.round_date,
+        status: 'validated', // Directement validé car 0 retours
+        return_reason: null,
+        total_ht: 0, // 0 car pas de retours
+        notes: 'RBLT créé automatiquement - 0 retours',
+      }])
+      .select()
+      .single()
+
+    if (returnError) {
+      console.error('Error creating auto RBLT:', returnError)
+      return
+    }
+
+    // Calculer Recette BLT et RNET-BLT
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const recetteBLT = roundItems.reduce((sum: number, ri: any) => {
+      const items = ri.delivery?.delivery_items || []
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return sum + items.reduce((s: number, di: any) => s + ((di.quantity_delivered - di.quantity_returned) * di.unit_price), 0)
+    }, 0)
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rnetBLT = roundItems.reduce((sum: number, ri: any) => sum + ((ri.delivery as any)?.amount_paid || 0), 0)
+
+    // Calculer MB (Marge Bénéficiaire) avec la fonction utilitaire
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mbResult = calculateMBForRound(roundItems as any)
+
+    // Générer numéro de vente
+    const year = new Date().getFullYear()
+    const prefix = `VTE-${year}-`
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: lastSale } = await (supabase.from('sales') as any)
+      .select('sale_number')
+      .like('sale_number', `${prefix}%`)
+      .order('sale_number', { ascending: false })
+      .limit(1)
+
+    let saleNumber = `${prefix}000001`
+    if (lastSale && lastSale.length > 0) {
+      const lastNum = parseInt(lastSale[0].sale_number.replace(prefix, '')) || 0
+      saleNumber = `${prefix}${(lastNum + 1).toString().padStart(6, '0')}`
+    }
+
+    // Déterminer le statut de paiement
+    let paymentStatus = 'pending'
+    if (rnetBLT > 0 && rnetBLT >= recetteBLT) {
+      paymentStatus = 'paid'
+    } else if (rnetBLT > 0) {
+      paymentStatus = 'partial'
+    }
+
+    // Créer la vente
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: saleData, error: saleError } = await (supabase.from('sales') as any).insert([{
+      sale_number: saleNumber,
+      delivery_id: null,
+      client_id: clientId,
+      return_id: returnData.id,
+      rblt_number: returnNumber,
+      sale_date: round.round_date,
+      total_ht: recetteBLT,
+      total_ttc: recetteBLT,
+      amount_paid: rnetBLT,
+      balance_due: Math.max(0, recetteBLT - rnetBLT),
+      mb: mbResult.mb,
+      mb_warning: mbResult.hasMissingCR,
+      payment_method: null,
+      payment_status: paymentStatus,
+    }]).select().single()
+
+    if (saleError) {
+      console.error('Error creating sale:', saleError)
+    }
+
+    // Insérer les articles vendus
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const articlesVendusData: any[] = []
+    for (const ri of roundItems) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const delivery = ri.delivery as any
+      if (!delivery?.delivery_items) continue
+      for (const di of delivery.delivery_items) {
+        const qtySold = (di.quantity_delivered || 0) - (di.quantity_returned || 0)
+        if (qtySold > 0) {
+          articlesVendusData.push({
+            sale_id: saleData?.id || null,
+            sale_date: round.round_date,
+            sale_number: saleNumber,
+            article_id: di.article_id,
+            article_code: di.article?.code || '',
+            client_id: delivery.client_id,
+            client_code: delivery.client?.code || '',
+            quantity_sold: qtySold,
+            delivery_id: delivery.id,
+          })
+        }
+      }
+    }
+
+    if (articlesVendusData.length > 0) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase.from('articles_vendus') as any).insert(articlesVendusData)
+    }
+
+    // Note: L'entrée cash_register est créée automatiquement par le trigger
+    // sync_payment_to_cash_register quand un paiement est enregistré
+
+    console.log(`RBLT ${returnNumber} créé automatiquement (0 retours)`)
   }
 
   const handleCancelRound = async (roundId: string) => {
@@ -648,7 +825,7 @@ export default function TourneesPage() {
             payment_status,
             status,
             client:clients(code, name, address, city, gps_lat, gps_lng),
-            delivery_items(id, article_id, quantity_ordered, quantity_delivered, quantity_returned, unit_price, article:articles(code, name, description))
+            delivery_items(id, article_id, quantity_ordered, quantity_delivered, quantity_returned, unit_price, article:articles(code, name, description, cr))
           )
         )
       `)
@@ -677,22 +854,37 @@ export default function TourneesPage() {
   }
 
   // Payment handlers
-  const getRecetteBL = (delivery: any) => {
-    return delivery?.delivery_items?.reduce((sum: number, item: any) =>
-      sum + ((item.quantity_delivered - (item.quantity_returned || 0)) * item.unit_price), 0) || 0
+  const getRecetteBL = (delivery: any, useEditingItems: boolean = true) => {
+    return delivery?.delivery_items?.reduce((sum: number, item: any) => {
+      const qtyReturned = useEditingItems
+        ? (editingItems[item.id]?.quantity_returned ?? (item.quantity_returned || 0))
+        : (item.quantity_returned || 0)
+      return sum + ((item.quantity_delivered - qtyReturned) * item.unit_price)
+    }, 0) || 0
   }
 
   const handleOpenPayment = (delivery: any) => {
     const recette = getRecetteBL(delivery)
-    const balanceDue = delivery.balance_due ?? (recette - (delivery.amount_paid || 0))
+    // Toujours utiliser recette - amount_paid pour prendre en compte les retours
+    const resteAPayer = Math.max(0, recette - (delivery.amount_paid || 0))
     setPaymentDelivery(delivery)
-    setPaymentAmount(Math.max(0, balanceDue))
+    setPaymentAmount(resteAPayer)
     setPaymentMethod('cash')
     setIsPaymentDialogOpen(true)
   }
 
   const handleSubmitPayment = async () => {
     if (!paymentDelivery || paymentAmount <= 0) return
+
+    // Calculer le reste à payer (recette BL - montant déjà payé)
+    const recette = getRecetteBL(paymentDelivery)
+    const resteAPayer = Math.max(0, recette - (paymentDelivery.amount_paid || 0))
+
+    // Validation : le montant saisi ne doit pas dépasser le reste à payer
+    if (paymentAmount > resteAPayer) {
+      alert(`Le montant saisi (${paymentAmount.toFixed(2)} MAD) dépasse le reste à payer (${resteAPayer.toFixed(2)} MAD)`)
+      return
+    }
 
     try {
       // Générer le numéro de paiement
@@ -1448,8 +1640,8 @@ export default function TourneesPage() {
                       {viewingRound.delivery_round_items?.sort((a, b) => a.sequence_order - b.sequence_order).map((item) => {
                         const delivery = item.delivery as any
                         return (
-                        <>
-                          <TableRow key={item.id} className={expandedDeliveryId === item.delivery_id ? 'bg-amber-50' : ''}>
+                          <Fragment key={item.id}>
+                          <TableRow className={expandedDeliveryId === item.delivery_id ? 'bg-amber-50' : ''}>
                             <TableCell className="font-bold text-gray-400">
                               {item.sequence_order}
                             </TableCell>
@@ -1616,7 +1808,7 @@ export default function TourneesPage() {
                               </TableCell>
                             </TableRow>
                           )}
-                        </>
+                          </Fragment>
                       )})}
                     </TableBody>
                   </Table>
@@ -1924,10 +2116,18 @@ export default function TourneesPage() {
                       type="number"
                       step="0.01"
                       min="0.01"
+                      max={Math.max(0, getRecetteBL(paymentDelivery) - (paymentDelivery?.amount_paid || 0))}
                       value={paymentAmount}
-                      onChange={(e) => setPaymentAmount(parseFloat(e.target.value) || 0)}
+                      onChange={(e) => {
+                        const value = parseFloat(e.target.value) || 0
+                        const maxAmount = Math.max(0, getRecetteBL(paymentDelivery) - (paymentDelivery?.amount_paid || 0))
+                        setPaymentAmount(Math.min(value, maxAmount))
+                      }}
                       className="text-lg font-bold"
                     />
+                    {paymentAmount > Math.max(0, getRecetteBL(paymentDelivery) - (paymentDelivery?.amount_paid || 0)) && (
+                      <p className="text-red-500 text-sm mt-1">Le montant dépasse le reste à payer</p>
+                    )}
                   </div>
                   <div>
                     <Label>Mode de paiement</Label>

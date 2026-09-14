@@ -40,11 +40,12 @@ interface Category {
   parent_id: string | null
 }
 
-interface Packaging {
+interface Emballage {
   id: string
+  code: string
   name: string
-  volume: number | null
-  weight: number | null
+  capacity: number | null
+  unit: string | null
 }
 
 interface Article {
@@ -65,13 +66,13 @@ interface Article {
   is_active: boolean
   created_at: string
   category?: Category
-  packaging?: Packaging
+  packaging?: Emballage
 }
 
 export default function ArticlesPage() {
   const [articles, setArticles] = useState<Article[]>([])
   const [categories, setCategories] = useState<Category[]>([])
-  const [packagings, setPackagings] = useState<Packaging[]>([])
+  const [emballages, setEmballages] = useState<Emballage[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
@@ -111,7 +112,7 @@ export default function ArticlesPage() {
           .select(`
             *,
             category:categories(*),
-            packaging:packagings(*)
+            packaging:emballages(*)
           `)
           .order('code', { ascending: true })
           .limit(200)
@@ -124,18 +125,20 @@ export default function ArticlesPage() {
 
       setArticles((articlesResult.data as Article[]) || [])
 
-      // Fetch categories and packagings in parallel
-      const [categoriesResult, packagingsResult] = await Promise.all([
+      // Fetch categories and emballages in parallel
+      const [categoriesResult, emballagesResult] = await Promise.all([
         queryWithRetry(() =>
           supabase.from('categories').select('*').order('name')
         ),
         queryWithRetry(() =>
-          supabase.from('packagings').select('*').order('name')
+          supabase.from('emballages').select('*').order('name')
         ),
       ])
 
+      console.log('Emballages fetched:', emballagesResult.data)
+      console.log('Categories fetched:', categoriesResult.data)
       setCategories((categoriesResult.data as Category[]) || [])
-      setPackagings((packagingsResult.data as Packaging[]) || [])
+      setEmballages((emballagesResult.data as Emballage[]) || [])
     } catch (error) {
       console.error('Error fetching data:', error)
       setLoadError(error instanceof Error ? error.message : 'Erreur de chargement')
@@ -274,31 +277,29 @@ export default function ArticlesPage() {
     }).format(price)
   }
 
-  // Get unique main categories for stats
-  const mainCategories = categories.filter(c => c.parent_id === null)
-
-  // Stats by main category
+  // Stats by main category (simplified - no subcategories)
   const getStatsByCategory = (categoryName: string) => {
     const category = categories.find(c => c.name === categoryName && c.parent_id === null)
     if (!category) return 0
-    const childCategories = categories.filter(c => c.parent_id === category.id).map(c => c.id)
-    const allCategoryIds = [category.id, ...childCategories]
-    return articles.filter(a => a.category_id && allCategoryIds.includes(a.category_id)).length
+    return articles.filter(a => a.category_id === category.id).length
   }
 
   const olivesCount = getStatsByCategory('Olives')
   const saucesCount = getStatsByCategory('Sauces')
   const legumesCount = getStatsByCategory('Légumes')
+  const etiquettesCount = getStatsByCategory('Etiquettes')
+  const emballagesCount = getStatsByCategory('Emballages')
 
-  // Get unique categories and packagings for filters
+  // Get unique categories for filters
   const uniqueCategories = [...new Set(articles.map(a => a.category?.name).filter(Boolean))]
-  const uniquePackagings = [...new Set(articles.map(a => a.packaging?.name).filter(Boolean))]
 
   const getCategoryBadgeColor = (categoryName: string | undefined) => {
     if (!categoryName) return 'bg-gray-100 text-gray-800'
-    if (categoryName.includes('Olive')) return 'bg-amber-100 text-[#9A7209]'
-    if (categoryName.includes('Sauce') || categoryName.includes('Harissa') || categoryName.includes('Vinaigre')) return 'bg-red-100 text-red-800'
-    if (categoryName.includes('Cornichon') || categoryName.includes('Citron') || categoryName.includes('Câpre') || categoryName.includes('Légumes')) return 'bg-orange-100 text-orange-800'
+    if (categoryName === 'Olives') return 'bg-amber-100 text-[#9A7209]'
+    if (categoryName === 'Sauces') return 'bg-red-100 text-red-800'
+    if (categoryName === 'Légumes') return 'bg-orange-100 text-orange-800'
+    if (categoryName === 'Etiquettes') return 'bg-blue-100 text-blue-800'
+    if (categoryName === 'Emballages') return 'bg-purple-100 text-purple-800'
     return 'bg-gray-100 text-gray-800'
   }
 
@@ -398,9 +399,9 @@ export default function ArticlesPage() {
                         <SelectValue placeholder="Sélectionner..." />
                       </SelectTrigger>
                       <SelectContent>
-                        {categories.map((category) => (
+                        {categories.filter(c => c.parent_id === null).map((category) => (
                           <SelectItem key={category.id} value={category.id}>
-                            {category.parent_id ? '— ' : ''}{category.name}
+                            {category.name}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -418,9 +419,9 @@ export default function ArticlesPage() {
                         <SelectValue placeholder="Sélectionner..." />
                       </SelectTrigger>
                       <SelectContent>
-                        {packagings.map((packaging) => (
-                          <SelectItem key={packaging.id} value={packaging.id}>
-                            {packaging.name}
+                        {emballages.map((emballage) => (
+                          <SelectItem key={emballage.id} value={emballage.id}>
+                            {emballage.name}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -538,17 +539,17 @@ export default function ArticlesPage() {
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-gray-600">
-                Total Articles
+                Total
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-2">
-                <Package className="h-8 w-8 text-[#B8860B]" />
-                <span className="text-2xl font-bold">{articles.length}</span>
+                <Package className="h-6 w-6 text-[#B8860B]" />
+                <span className="text-xl font-bold">{articles.length}</span>
               </div>
             </CardContent>
           </Card>
@@ -560,8 +561,8 @@ export default function ArticlesPage() {
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-2">
-                <Leaf className="h-8 w-8 text-[#DAA520]" />
-                <span className="text-2xl font-bold">{olivesCount}</span>
+                <Leaf className="h-6 w-6 text-[#DAA520]" />
+                <span className="text-xl font-bold">{olivesCount}</span>
               </div>
             </CardContent>
           </Card>
@@ -573,8 +574,8 @@ export default function ArticlesPage() {
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-2">
-                <Droplets className="h-8 w-8 text-red-500" />
-                <span className="text-2xl font-bold">{saucesCount}</span>
+                <Droplets className="h-6 w-6 text-red-500" />
+                <span className="text-xl font-bold">{saucesCount}</span>
               </div>
             </CardContent>
           </Card>
@@ -586,8 +587,34 @@ export default function ArticlesPage() {
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-2">
-                <Carrot className="h-8 w-8 text-orange-500" />
-                <span className="text-2xl font-bold">{legumesCount}</span>
+                <Carrot className="h-6 w-6 text-orange-500" />
+                <span className="text-xl font-bold">{legumesCount}</span>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-gray-600">
+                Etiquettes
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-2">
+                <Box className="h-6 w-6 text-blue-500" />
+                <span className="text-xl font-bold">{etiquettesCount}</span>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-gray-600">
+                Emballages
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-2">
+                <Box className="h-6 w-6 text-purple-500" />
+                <span className="text-xl font-bold">{emballagesCount}</span>
               </div>
             </CardContent>
           </Card>
@@ -625,9 +652,9 @@ export default function ArticlesPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Tous emballages</SelectItem>
-                  {uniquePackagings.map((pkg) => (
-                    <SelectItem key={pkg} value={pkg!}>
-                      {pkg}
+                  {emballages.map((emb) => (
+                    <SelectItem key={emb.id} value={emb.name}>
+                      {emb.name}
                     </SelectItem>
                   ))}
                 </SelectContent>

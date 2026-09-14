@@ -46,12 +46,12 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-amber-50 to-amber-100 p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
-          <div className="mx-auto mb-4 w-24 h-24 bg-[#B8860B] rounded-full flex items-center justify-center">
-            <span className="text-white text-2xl font-bold">AKKA</span>
+          <div className="mx-auto mb-4 w-24 h-24 rounded-full flex items-center justify-center overflow-hidden">
+            <img src="/Logo.png" alt="KARAM" className="w-full h-full object-cover" />
           </div>
           <CardTitle className="text-2xl">Connexion</CardTitle>
           <CardDescription>
-            Gestion Commerciale AKKA - Olives & Sauces
+            Gestion Commerciale KARAM@Distri
           </CardDescription>
         </CardHeader>
         <CardContent>

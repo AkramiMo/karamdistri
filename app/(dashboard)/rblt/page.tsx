@@ -47,6 +47,7 @@ import {
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
+import { calculateMBForRound } from '@/lib/sales'
 
 // Interfaces
 
@@ -213,6 +214,7 @@ export default function RBLTPage() {
   const [viewingReturn, setViewingReturn] = useState<DeliveryReturn | null>(null)
   const [returnSearchTerm, setReturnSearchTerm] = useState('')
   const [returnStatusFilter, setReturnStatusFilter] = useState<string>('all')
+  const [selectedRBLTMonth, setSelectedRBLTMonth] = useState(() => new Date().toISOString().slice(0, 7)) // YYYY-MM format, default to current month
   const [returnFormData, setReturnFormData] = useState({
     return_date: new Date().toISOString().split('T')[0],
     notes: '',
@@ -222,6 +224,7 @@ export default function RBLTPage() {
   // BLT detail states (same logic as livraisons BLT)
   const [expandedDeliveryId, setExpandedDeliveryId] = useState<string | null>(null)
   const [editingItems, setEditingItems] = useState<Record<string, { quantity_returned: number }>>({})
+  const [isValidating, setIsValidating] = useState<string | null>(null) // Track which return is being validated
 
   // Fetch rounds
   const fetchRounds = useCallback(async () => {
@@ -443,29 +446,24 @@ export default function RBLTPage() {
   }
 
   const handleValidateReturn = async (returnId: string) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { error } = await (supabase.from('delivery_returns') as any)
-      .update({ status: 'validated' })
-      .eq('id', returnId)
+    // Prevent double validation
+    if (isValidating) return
+    setIsValidating(returnId)
 
-    if (error) {
-      console.error('Error validating return:', error)
-      alert(`Erreur validation: ${error.message}`)
-      return
-    }
-
-    // Créer automatiquement une vente à partir du RBLT validé
+    // Vérifier d'abord que le retour et la tournée existent AVANT de valider
     const ret = returns.find(r => r.id === returnId)
     if (!ret) {
       console.error('Return not found in state:', returnId)
-      alert('Erreur: retour introuvable')
+      alert('Erreur: retour introuvable. Veuillez actualiser la page.')
+      setIsValidating(null)
       return
     }
 
     const fullRound = rounds.find(r => r.id === ret.round_id)
     if (!fullRound) {
       console.error('Round not found for return:', ret.round_id)
-      alert('Erreur: tournée introuvable')
+      alert('Erreur: tournée introuvable. Veuillez actualiser la page.')
+      setIsValidating(null)
       return
     }
 
@@ -483,22 +481,9 @@ export default function RBLTPage() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rnetBLT = roundItems.reduce((sum: number, ri: any) => sum + ((ri.delivery as any)?.amount_paid || 0), 0)
 
-    // Calculer MB (Marge Bénéficiaire) = somme((Prix HT - CR) × quantité vendue)
-    let calculatedMB = 0
-    for (const ri of roundItems) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const delivery = ri.delivery as any
-      if (!delivery?.delivery_items) continue
-      for (const di of delivery.delivery_items) {
-        const qtySold = (di.quantity_delivered || 0) - (di.quantity_returned || 0)
-        if (qtySold > 0) {
-          // Récupérer le CR de l'article
-          const articleCR = di.article?.cr || 0
-          // MB = (Prix unitaire - CR) × quantité vendue
-          calculatedMB += (di.unit_price - articleCR) * qtySold
-        }
-      }
-    }
+    // Calculer MB (Marge Bénéficiaire) avec la fonction utilitaire
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mbResult = calculateMBForRound(roundItems as any)
 
     // Générer numéro de vente
     const year = new Date().getFullYear()
@@ -531,6 +516,19 @@ export default function RBLTPage() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const saleClientId = roundItems.length === 1 ? (roundItems[0].delivery as any)?.client_id || null : null
 
+    // Maintenant valider le RBLT (après toutes les vérifications)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: validateError } = await (supabase.from('delivery_returns') as any)
+      .update({ status: 'validated' })
+      .eq('id', returnId)
+
+    if (validateError) {
+      console.error('Error validating return:', validateError)
+      alert(`Erreur validation RBLT: ${validateError.message}`)
+      setIsValidating(null)
+      return
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: saleData, error: saleError } = await (supabase.from('sales') as any).insert([{
       sale_number: saleNumber,
@@ -543,14 +541,23 @@ export default function RBLTPage() {
       total_ttc: recetteBLT,  // Recette BLT (déjà TTC car prix de vente)
       amount_paid: rnetBLT,   // RNET-BLT = montant encaissé
       balance_due: Math.max(0, recetteBLT - rnetBLT),  // Solde restant
-      mb: calculatedMB,
+      mb: mbResult.mb,
+      mb_warning: mbResult.hasMissingCR,
       payment_method: null,
       payment_status: paymentStatus,
     }]).select().single()
 
     if (saleError) {
       console.error('Error creating sale:', saleError)
-      alert(`Erreur création vente: ${saleError.message}`)
+      // Annuler la validation du RBLT si la vente n'a pas pu être créée
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase.from('delivery_returns') as any)
+        .update({ status: 'pending' })
+        .eq('id', returnId)
+      alert(`ATTENTION: La vente n'a pas pu être créée!\n\nErreur: ${saleError.message}\n\nLe RBLT a été remis en attente. Veuillez corriger le problème et réessayer.`)
+      setIsValidating(null)
+      await fetchReturns()
+      return
     }
 
     // Insérer les articles vendus dans articles_vendus
@@ -590,24 +597,13 @@ export default function RBLTPage() {
       console.warn('No articles vendus to insert - all qtySold <= 0')
     }
 
-    // Ajouter automatiquement à la caisse
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { error: cashError } = await (supabase.from('cash_register') as any).insert([{
-      operation_type: 'in',
-      category: 'vente',
-      amount: rnetBLT,
-      reference: saleNumber,
-      reference_id: saleData?.id || null,
-      notes: `Vente ${saleNumber} - RBLT ${ret.return_number}`,
-      transaction_date: ret.return_date,
-    }])
-
-    if (cashError) {
-      console.error('Error inserting cash register:', cashError)
-    }
+    // Note: Pour les ventes RBLT, les paiements sont déjà enregistrés via les BL (table payments)
+    // Le trigger link_payments_to_sale lie automatiquement ces paiements à la vente
+    // On n'ajoute pas d'entrée dans cash_register pour éviter les doublons
 
     await fetchReturns()
     await fetchRounds()
+    setIsValidating(null)
   }
 
   const handleCancelReturn = async (returnId: string) => {
@@ -740,13 +736,22 @@ export default function RBLTPage() {
     setSelectedRoundForReturn('')
   }
 
+  // Generate list of available months from RBLT returns data
+  const currentMonth = new Date().toISOString().slice(0, 7)
+  const rbltMonthsFromReturns = returns.map(r => r.return_date.slice(0, 7))
+  if (!rbltMonthsFromReturns.includes(currentMonth)) {
+    rbltMonthsFromReturns.push(currentMonth)
+  }
+  const availableRBLTMonths = Array.from(new Set(rbltMonthsFromReturns)).sort((a, b) => b.localeCompare(a))
+
   const filteredReturns = returns.filter((ret) => {
     const matchesSearch =
       ret.return_number.toLowerCase().includes(returnSearchTerm.toLowerCase()) ||
       ret.client?.name?.toLowerCase().includes(returnSearchTerm.toLowerCase()) ||
       ret.delivery?.delivery_number?.toLowerCase().includes(returnSearchTerm.toLowerCase())
     const matchesStatus = returnStatusFilter === 'all' || ret.status === returnStatusFilter
-    return matchesSearch && matchesStatus
+    const matchesMonth = selectedRBLTMonth === 'all' || ret.return_date.startsWith(selectedRBLTMonth)
+    return matchesSearch && matchesStatus && matchesMonth
   })
 
   const returnStats = {
@@ -975,6 +980,19 @@ export default function RBLTPage() {
                   className="pl-10 border-2 border-[#B8860B]"
                 />
               </div>
+              <Select value={selectedRBLTMonth} onValueChange={setSelectedRBLTMonth}>
+                <SelectTrigger className="w-full md:w-44 border-2 border-[#B8860B]">
+                  <SelectValue placeholder="Mois" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Tous les mois</SelectItem>
+                  {availableRBLTMonths.map((month) => (
+                    <SelectItem key={month} value={month}>
+                      {format(new Date(month + '-01'), 'MMMM yyyy', { locale: fr })}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Select value={returnStatusFilter} onValueChange={setReturnStatusFilter}>
                 <SelectTrigger className="w-full md:w-48 border-2 border-[#B8860B]">
                   <SelectValue placeholder="Statut" />
@@ -1108,8 +1126,13 @@ export default function RBLTPage() {
                                 size="icon"
                                 title="Valider"
                                 onClick={() => handleValidateReturn(ret.id)}
+                                disabled={isValidating === ret.id}
                               >
-                                <CheckCircle2 className="h-4 w-4 text-[#B8860B]" />
+                                {isValidating === ret.id ? (
+                                  <RefreshCw className="h-4 w-4 animate-spin text-[#B8860B]" />
+                                ) : (
+                                  <CheckCircle2 className="h-4 w-4 text-[#B8860B]" />
+                                )}
                               </Button>
                             )}
                             {ret.status === 'pending' && (
@@ -1348,13 +1371,18 @@ export default function RBLTPage() {
                   {viewingReturn.status === 'pending' && (
                     <Button
                       className="bg-[#B8860B] hover:bg-[#9A7209]"
+                      disabled={isValidating === viewingReturn.id}
                       onClick={() => {
                         handleValidateReturn(viewingReturn.id)
                         setIsViewReturnDialogOpen(false)
                       }}
                     >
-                      <CheckCircle2 className="h-4 w-4 mr-2" />
-                      Valider le retour
+                      {isValidating === viewingReturn.id ? (
+                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <CheckCircle2 className="h-4 w-4 mr-2" />
+                      )}
+                      {isValidating === viewingReturn.id ? 'Validation...' : 'Valider le retour'}
                     </Button>
                   )}
                 </div>

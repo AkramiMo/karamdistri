@@ -53,6 +53,11 @@ interface Client {
   ice: string | null
   is_active: boolean
   created_at: string
+  ddc_id: string | null
+  ddc?: {
+    ddc_number: string
+    status: string
+  } | null
 }
 
 interface DeliveryRoundWithClients {
@@ -263,10 +268,14 @@ export default function ClientsPage() {
         setClients(Array.from(clientsMap.values()))
       }
     } else {
-      // Pour les autres rôles: requête normale
-      const { data, error } = await supabase
+      // Pour les autres rôles: requête normale avec DDC
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as any)
         .from('clients')
-        .select('*')
+        .select(`
+          *,
+          ddc:client_quote_requests!clients_ddc_id_fkey(ddc_number, status)
+        `)
         .order('created_at', { ascending: false })
 
       if (error) {
@@ -982,6 +991,7 @@ export default function ClientsPage() {
                       <TableHead>Téléphone</TableHead>
                       <TableHead>Ville</TableHead>
                       <TableHead>Catégorie</TableHead>
+                      <TableHead>DDC Validé</TableHead>
                       <TableHead>GPS</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
@@ -1015,6 +1025,15 @@ export default function ClientsPage() {
                               {categoryLabels[client.category] || client.category}
                             </Badge>
                           ) : '-'}
+                        </TableCell>
+                        <TableCell>
+                          {client.ddc ? (
+                            <Badge className="bg-green-100 text-green-800">
+                              {client.ddc.ddc_number}
+                            </Badge>
+                          ) : (
+                            <span className="text-gray-400">-</span>
+                          )}
                         </TableCell>
                         <TableCell>
                           {client.gps_lat && client.gps_lng ? (

@@ -31,6 +31,7 @@ import {
   Box,
   BarChart3,
   Layers,
+  History,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
@@ -56,6 +57,7 @@ const iconMap: Record<string, LucideIcon> = {
   Box,
   BarChart3,
   Layers,
+  History,
 }
 
 interface Module {
@@ -87,10 +89,11 @@ const livraisonsChildLabels: Record<string, string> = {
 }
 
 // ===== GROUPE VENTES =====
-const ventesChildCodes = ['ventes', 'articles-vendus']
+const ventesChildCodes = ['ventes', 'articles-vendus', 'ventes-kg']
 const ventesChildLabels: Record<string, string> = {
   ventes: 'Ventes',
   'articles-vendus': 'Articles Vendus',
+  'ventes-kg': 'Ventes en Kg',
 }
 
 // ===== GROUPE CAISSE =====
@@ -172,6 +175,7 @@ export function Sidebar() {
     // Ventes group
     { id: '6', code: 'ventes', name: 'Ventes', icon: 'DollarSign', path: '/ventes', sort_order: 10 },
     { id: '16', code: 'articles-vendus', name: 'Articles Vendus', icon: 'FileText', path: '/articles-vendus', sort_order: 11 },
+    { id: '30', code: 'ventes-kg', name: 'Ventes en Kg', icon: 'Package', path: '/ventes-kg', sort_order: 12 },
     // Caisse group
     { id: '8', code: 'caisse', name: 'Caisse', icon: 'Wallet', path: '/caisse', sort_order: 12 },
     { id: '17', code: 'factures', name: 'Factures', icon: 'FileText', path: '/factures', sort_order: 13 },
@@ -188,6 +192,8 @@ export function Sidebar() {
     { id: '26', code: 'devis', name: 'Devis', icon: 'FileText', path: '/devis', sort_order: 21 },
     // Graphiques
     { id: '28', code: 'graphiques', name: 'Graphiques', icon: 'BarChart3', path: '/graphiques', sort_order: 22 },
+    // Historique VAL
+    { id: '31', code: 'historique-val', name: 'Historique VAL', icon: 'History', path: '/historique-val', sort_order: 23 },
     // Admin
     { id: '9', code: 'admin', name: 'Administration', icon: 'Settings', path: '/admin', sort_order: 99 },
   ]
@@ -225,7 +231,7 @@ export function Sidebar() {
   // Modules de premier niveau (non groupés)
   const topLevelModules = visibleModules.filter(m =>
     !allGroupedCodes.includes(m.code) &&
-    ['dashboard', 'productions', 'clients', 'admin', 'commandes', 'devis', 'stocks', 'graphiques'].includes(m.code)
+    ['dashboard', 'productions', 'clients', 'admin', 'commandes', 'devis', 'stocks', 'graphiques', 'historique-val'].includes(m.code)
   )
 
   // Vérifier si un enfant est actif pour chaque groupe
@@ -348,6 +354,7 @@ export function Sidebar() {
   const clientsModule = topLevelModules.find(m => m.code === 'clients')
   const devisModule = topLevelModules.find(m => m.code === 'devis')
   const graphiquesModule = topLevelModules.find(m => m.code === 'graphiques')
+  const historiqueValModule = topLevelModules.find(m => m.code === 'historique-val')
   const adminModule = topLevelModules.find(m => m.code === 'admin')
 
   return (
@@ -361,7 +368,7 @@ export function Sidebar() {
       <div className="h-16 px-4 flex items-center justify-between border-b border-[#B8860B]">
         {!collapsed && (
           <div className="flex items-center gap-2">
-            <img src="/logo.jpg" alt="KARAM" className="w-10 h-10 rounded-full object-cover" />
+            <img src="/Logo.png" alt="KARAM" className="w-10 h-10 rounded-full object-cover" />
             <span className="font-semibold">Gestion ERP</span>
           </div>
         )}
@@ -413,6 +420,9 @@ export function Sidebar() {
 
           {/* Graphiques */}
           {graphiquesModule && renderModule(graphiquesModule)}
+
+          {/* Historique VAL */}
+          {historiqueValModule && renderModule(historiqueValModule)}
 
           {/* Admin */}
           {adminModule && renderModule(adminModule)}

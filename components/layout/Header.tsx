@@ -28,9 +28,9 @@ export function Header() {
   }, [])
 
   const handleSignOut = async () => {
+    // Déconnexion puis redirection forcée
     await supabase.auth.signOut()
-    router.push('/login')
-    router.refresh()
+    window.location.href = '/login'
   }
 
   const initials = profile?.full_name

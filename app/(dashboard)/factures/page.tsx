@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCompanySettings } from '@/hooks/useCompanySettings'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -46,6 +47,7 @@ interface Facture {
   total_ht: number
   total_tva: number
   total_ttc: number
+  tva_rate: number
   due_date: string | null
   status: string
   notes: string | null
@@ -100,6 +102,7 @@ export default function FacturesPage() {
   const [formClientDeliveries, setFormClientDeliveries] = useState<ClientDelivery[]>([])
   const [selectedDeliveryIds, setSelectedDeliveryIds] = useState<string[]>([])
   const supabase = createClient()
+  const { companySettings } = useCompanySettings()
 
   const getDefaultDueDate = (factureDate: string) => {
     try {
@@ -120,6 +123,7 @@ export default function FacturesPage() {
       total_ht: '',
       total_tva: '',
       total_ttc: '',
+      tva_rate: '20',
       due_date: getDefaultDueDate(today),
       status: 'draft',
       notes: '',
@@ -198,22 +202,35 @@ export default function FacturesPage() {
     setSelectedDeliveryIds([])
     setFormClientDeliveries([])
     setFormData(prev => ({ ...prev, client_id: clientId, total_ht: '0', total_tva: '0', total_ttc: '0' }))
-    // Fetch deliveries for this client
+
+    // Get IDs of deliveries already linked to a facture (via facture_deliveries)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: facturedDeliveries } = await (supabase
+      .from('facture_deliveries')
+      .select('delivery_id') as any)
+
+    const facturedDeliveryIds = new Set((facturedDeliveries || []).map((fd: { delivery_id: string }) => fd.delivery_id))
+
+    // Fetch deliveries for this client (excluding already factured ones)
     const { data } = await supabase
       .from('deliveries')
       .select('id, delivery_number, delivery_date, total_ht')
       .eq('client_id', clientId)
       .eq('status', 'delivered')
       .order('delivery_date', { ascending: false })
-    setFormClientDeliveries(data || [])
+
+    // Filter out already factured deliveries
+    const availableDeliveries = (data || []).filter(d => !facturedDeliveryIds.has(d.id))
+    setFormClientDeliveries(availableDeliveries)
   }
 
-  const recalcTotals = (deliveryIds: string[], deliveriesList: ClientDelivery[]) => {
+  const recalcTotals = (deliveryIds: string[], deliveriesList: ClientDelivery[], tvaRate: number = 20) => {
     const totalHt = deliveriesList
       .filter(d => deliveryIds.includes(d.id))
       .reduce((sum, d) => sum + (d.total_ht || 0), 0)
     const totalHtRounded = Math.round(totalHt * 100) / 100
-    const totalTva = Math.round(totalHtRounded * 0.2 * 100) / 100
+    const tvaRateDecimal = tvaRate / 100
+    const totalTva = Math.round(totalHtRounded * tvaRateDecimal * 100) / 100
     const totalTtc = Math.round((totalHtRounded + totalTva) * 100) / 100
     return { totalHtRounded, totalTva, totalTtc }
   }
@@ -226,10 +243,22 @@ export default function FacturesPage() {
       ? [...selectedDeliveryIds, deliveryId]
       : selectedDeliveryIds.filter(id => id !== deliveryId)
     setSelectedDeliveryIds(newIds)
-    const { totalHtRounded, totalTva, totalTtc } = recalcTotals(newIds, formClientDeliveries)
+    const tvaRate = formData.tva_rate !== '' ? parseFloat(formData.tva_rate) : 20
+    const { totalHtRounded, totalTva, totalTtc } = recalcTotals(newIds, formClientDeliveries, isNaN(tvaRate) ? 20 : tvaRate)
     setFormData(prev => ({
       ...prev,
       total_ht: totalHtRounded.toString(),
+      total_tva: totalTva.toString(),
+      total_ttc: totalTtc.toString(),
+    }))
+  }
+
+  const handleTvaRateChange = (newTvaRate: string) => {
+    const tvaRate = parseFloat(newTvaRate) || 0
+    const { totalHtRounded, totalTva, totalTtc } = recalcTotals(selectedDeliveryIds, formClientDeliveries, tvaRate)
+    setFormData(prev => ({
+      ...prev,
+      tva_rate: newTvaRate,
       total_tva: totalTva.toString(),
       total_ttc: totalTtc.toString(),
     }))
@@ -248,7 +277,9 @@ export default function FacturesPage() {
     }
 
     const total_ht = parseFloat(formData.total_ht) || 0
-    const total_tva = parseFloat(formData.total_tva) || Math.round(total_ht * 0.2 * 100) / 100
+    const tva_rate = formData.tva_rate !== '' ? parseFloat(formData.tva_rate) : 20
+    const finalTvaRate = isNaN(tva_rate) ? 20 : tva_rate
+    const total_tva = parseFloat(formData.total_tva) || Math.round(total_ht * (finalTvaRate / 100) * 100) / 100
     const total_ttc = parseFloat(formData.total_ttc) || Math.round((total_ht + total_tva) * 100) / 100
 
     if (editingFacture) {
@@ -257,11 +288,12 @@ export default function FacturesPage() {
       const { error } = await (supabase.from('factures') as any)
         .update({
           client_id: formData.client_id,
-          delivery_id: selectedDeliveryIds[0] || null,
+          delivery_id: selectedDeliveryIds[0] || null, // Keep for backwards compatibility
           facture_date: formData.facture_date,
           total_ht,
           total_tva,
           total_ttc,
+          tva_rate: finalTvaRate,
           due_date: formData.due_date || null,
           status: formData.status,
           notes: formData.notes || null,
@@ -273,28 +305,74 @@ export default function FacturesPage() {
         alert(`Erreur mise à jour facture: ${error.message}`)
         return
       }
+
+      // Update facture_deliveries: delete old links and insert new ones
+      console.log('Updating facture_deliveries for facture:', editingFacture.id)
+      console.log('Selected delivery IDs:', selectedDeliveryIds)
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: deleteError } = await (supabase.from('facture_deliveries') as any)
+        .delete()
+        .eq('facture_id', editingFacture.id)
+
+      if (deleteError) {
+        console.error('Error deleting old facture_deliveries:', deleteError)
+      }
+
+      if (selectedDeliveryIds.length > 0) {
+        const deliveryLinks = selectedDeliveryIds.map(deliveryId => ({
+          facture_id: editingFacture.id,
+          delivery_id: deliveryId,
+        }))
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { error: insertError } = await (supabase.from('facture_deliveries') as any).insert(deliveryLinks)
+        if (insertError) {
+          console.error('Error inserting facture_deliveries:', insertError)
+          alert(`Avertissement: Erreur liaison BL: ${insertError.message}`)
+        } else {
+          console.log('Successfully inserted', deliveryLinks.length, 'delivery links')
+        }
+      }
     } else {
       // Create new facture
       const factureNumber = await generateFactureNumber()
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { error } = await (supabase.from('factures') as any).insert([{
+      const { data: newFacture, error } = await (supabase.from('factures') as any).insert([{
         facture_number: factureNumber,
         client_id: formData.client_id,
-        delivery_id: selectedDeliveryIds[0] || null,
+        delivery_id: selectedDeliveryIds[0] || null, // Keep for backwards compatibility
         facture_date: formData.facture_date,
         total_ht,
         total_tva,
         total_ttc,
+        tva_rate: finalTvaRate,
         due_date: formData.due_date || null,
         status: formData.status,
         notes: formData.notes || null,
-      }])
+      }]).select().single()
 
       if (error) {
         console.error('Error creating facture:', error)
         alert(`Erreur création facture: ${error.message}`)
         return
+      }
+
+      // Insert facture_deliveries links
+      if (newFacture && selectedDeliveryIds.length > 0) {
+        console.log('Inserting facture_deliveries:', selectedDeliveryIds)
+        const deliveryLinks = selectedDeliveryIds.map(deliveryId => ({
+          facture_id: newFacture.id,
+          delivery_id: deliveryId,
+        }))
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { error: linkError } = await (supabase.from('facture_deliveries') as any).insert(deliveryLinks)
+        if (linkError) {
+          console.error('Error inserting facture_deliveries:', linkError)
+          alert(`Avertissement: Erreur liaison BL: ${linkError.message}`)
+        } else {
+          console.log('Successfully inserted', deliveryLinks.length, 'delivery links')
+        }
       }
     }
 
@@ -312,6 +390,7 @@ export default function FacturesPage() {
       total_ht: '',
       total_tva: '',
       total_ttc: '',
+      tva_rate: '20',
       due_date: getDefaultDueDate(today),
       status: 'draft',
       notes: '',
@@ -328,10 +407,30 @@ export default function FacturesPage() {
       total_ht: facture.total_ht.toString(),
       total_tva: facture.total_tva.toString(),
       total_ttc: facture.total_ttc.toString(),
+      tva_rate: (facture.tva_rate !== null && facture.tva_rate !== undefined ? facture.tva_rate : 20).toString(),
       due_date: facture.due_date || '',
       status: facture.status,
       notes: facture.notes || '',
     })
+
+    // Get delivery IDs linked to THIS facture from facture_deliveries
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: currentFactureDeliveries } = await (supabase
+      .from('facture_deliveries')
+      .select('delivery_id')
+      .eq('facture_id', facture.id) as any)
+
+    const currentDeliveryIds = (currentFactureDeliveries || []).map((fd: { delivery_id: string }) => fd.delivery_id)
+
+    // Get IDs of deliveries already linked to OTHER factures (via facture_deliveries)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: otherFacturedDeliveries } = await (supabase
+      .from('facture_deliveries')
+      .select('delivery_id')
+      .neq('facture_id', facture.id) as any)
+
+    const otherFacturedDeliveryIds = new Set((otherFacturedDeliveries || []).map((fd: { delivery_id: string }) => fd.delivery_id))
+
     // Fetch deliveries for this client
     const { data } = await supabase
       .from('deliveries')
@@ -339,8 +438,14 @@ export default function FacturesPage() {
       .eq('client_id', facture.client_id)
       .eq('status', 'delivered')
       .order('delivery_date', { ascending: false })
-    setFormClientDeliveries(data || [])
-    setSelectedDeliveryIds(facture.delivery_id ? [facture.delivery_id] : [])
+
+    // Filter out deliveries already linked to other factures (keep current facture's deliveries)
+    const availableDeliveries = (data || []).filter(d =>
+      !otherFacturedDeliveryIds.has(d.id) || currentDeliveryIds.includes(d.id)
+    )
+    setFormClientDeliveries(availableDeliveries)
+    // Set selected IDs from facture_deliveries, fallback to delivery_id for old data
+    setSelectedDeliveryIds(currentDeliveryIds.length > 0 ? currentDeliveryIds : (facture.delivery_id ? [facture.delivery_id] : []))
     setIsDialogOpen(true)
   }
 
@@ -363,28 +468,104 @@ export default function FacturesPage() {
   const handleViewFacture = async (facture: Facture) => {
     setViewingFacture(facture)
     setIsViewDialogOpen(true)
-    // Fetch all deliveries for this client
-    const { data } = await supabase
-      .from('deliveries')
-      .select('id, delivery_number, delivery_date, total_ht')
-      .eq('client_id', facture.client_id)
-      .order('delivery_date', { ascending: false })
-    setClientDeliveries(data || [])
+
+    console.log('Viewing facture:', facture.id)
+
+    // Fetch deliveries linked to this facture via facture_deliveries
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: factureDeliveryLinks, error: linkError } = await (supabase
+      .from('facture_deliveries')
+      .select('delivery_id')
+      .eq('facture_id', facture.id) as any)
+
+    console.log('Facture delivery links:', factureDeliveryLinks, 'Error:', linkError)
+
+    const deliveryIds = (factureDeliveryLinks || []).map((fd: { delivery_id: string }) => fd.delivery_id)
+    console.log('Delivery IDs to fetch:', deliveryIds)
+
+    if (deliveryIds.length > 0) {
+      const { data } = await supabase
+        .from('deliveries')
+        .select('id, delivery_number, delivery_date, total_ht')
+        .in('id', deliveryIds)
+        .order('delivery_date', { ascending: false })
+      console.log('Fetched deliveries:', data)
+      setClientDeliveries(data || [])
+    } else if (facture.delivery_id) {
+      // Fallback for old data with only delivery_id
+      console.log('Using fallback delivery_id:', facture.delivery_id)
+      const { data } = await supabase
+        .from('deliveries')
+        .select('id, delivery_number, delivery_date, total_ht')
+        .eq('id', facture.delivery_id)
+      setClientDeliveries(data || [])
+    } else {
+      setClientDeliveries([])
+    }
   }
 
   const handleDownloadPDF = async (facture: Facture) => {
-    // Fetch delivered deliveries for this client
-    const { data: deliveries } = await supabase
+    // Fetch delivery IDs linked to this facture via facture_deliveries
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: factureDeliveryLinks } = await (supabase
+      .from('facture_deliveries')
+      .select('delivery_id')
+      .eq('facture_id', facture.id) as any)
+
+    let deliveryIds = (factureDeliveryLinks || []).map((fd: { delivery_id: string }) => fd.delivery_id)
+
+    // Fallback for old data with only delivery_id
+    if (deliveryIds.length === 0 && facture.delivery_id) {
+      deliveryIds = [facture.delivery_id]
+    }
+
+    // Fetch deliveries with their items
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: deliveries } = await (supabase as any)
       .from('deliveries')
-      .select('id, delivery_number, delivery_date, total_ht')
-      .eq('client_id', facture.client_id)
-      .eq('status', 'delivered')
+      .select(`
+        id, delivery_number, delivery_date, total_ht,
+        delivery_items(
+          id,
+          quantity_delivered,
+          quantity_returned,
+          unit_price,
+          article:articles(code, name)
+        )
+      `)
+      .in('id', deliveryIds.length > 0 ? deliveryIds : ['00000000-0000-0000-0000-000000000000'])
       .order('delivery_date', { ascending: false })
 
     if (!facture.client) {
       alert('Informations client manquantes')
       return
     }
+
+    // Transform deliveries to include items in the expected format
+    const deliveriesWithItems = (deliveries || []).map((del: {
+      id: string
+      delivery_number: string
+      delivery_date: string | null
+      total_ht: number | null
+      delivery_items?: Array<{
+        quantity_delivered: number
+        quantity_returned: number
+        unit_price: number
+        article?: { code: string; name: string }
+      }>
+    }) => ({
+      id: del.id,
+      delivery_number: del.delivery_number,
+      delivery_date: del.delivery_date,
+      total_ht: del.total_ht,
+      items: (del.delivery_items || []).map(item => ({
+        article_code: item.article?.code || '',
+        article_name: item.article?.name || '',
+        quantity: (item.quantity_delivered || 0) - (item.quantity_returned || 0),
+        unit_price: item.unit_price || 0,
+        total: ((item.quantity_delivered || 0) - (item.quantity_returned || 0)) * (item.unit_price || 0)
+      })).filter(item => item.quantity > 0)
+    }))
 
     const factureData = {
       id: facture.id,
@@ -393,6 +574,7 @@ export default function FacturesPage() {
       total_ht: facture.total_ht,
       total_tva: facture.total_tva,
       total_ttc: facture.total_ttc,
+      tva_rate: facture.tva_rate !== null && facture.tva_rate !== undefined ? facture.tva_rate : 20,
       client: {
         code: facture.client.code,
         name: facture.client.name,
@@ -402,7 +584,11 @@ export default function FacturesPage() {
       },
     }
 
-    await generateFacturePDF(factureData, deliveries || [], '/logo.jpg')
+    await generateFacturePDF(factureData, deliveriesWithItems, '/Logo.png', {
+      ice: companySettings?.ice,
+      if_number: companySettings?.if_number,
+      tp: companySettings?.patente,
+    })
   }
 
   // Determine display status (overdue detection)
@@ -522,22 +708,23 @@ export default function FacturesPage() {
                                 return (
                                 <TableRow
                                   key={del.id}
-                                  className="cursor-pointer"
+                                  className={`cursor-pointer transition-colors ${isSelected ? 'bg-amber-100 hover:bg-amber-200' : 'hover:bg-gray-50'}`}
                                   onClick={() => handleDeliveryToggle(del.id, !isSelected)}
                                 >
                                   <TableCell onClick={(e) => e.stopPropagation()}>
                                     <Checkbox
                                       checked={isSelected}
                                       onCheckedChange={(checked) => handleDeliveryToggle(del.id, !!checked)}
+                                      className={`border-2 ${isSelected ? 'border-[#B8860B] bg-[#B8860B] data-[state=checked]:bg-[#B8860B]' : 'border-gray-400'}`}
                                     />
                                   </TableCell>
-                                  <TableCell className="text-sm">
+                                  <TableCell className={`text-sm ${isSelected ? 'font-medium' : ''}`}>
                                     {del.delivery_date
                                       ? format(new Date(del.delivery_date), 'dd/MM/yyyy', { locale: fr })
                                       : '-'}
                                   </TableCell>
-                                  <TableCell className="font-mono text-sm">{del.delivery_number}</TableCell>
-                                  <TableCell className="text-right text-sm font-medium">
+                                  <TableCell className={`font-mono text-sm ${isSelected ? 'font-bold text-[#B8860B]' : ''}`}>{del.delivery_number}</TableCell>
+                                  <TableCell className={`text-right text-sm font-medium ${isSelected ? 'text-[#B8860B]' : ''}`}>
                                     {formatPrice(del.total_ht)}
                                   </TableCell>
                                 </TableRow>
@@ -578,7 +765,7 @@ export default function FacturesPage() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-4 gap-4">
                     <div className="space-y-2">
                       <Label>Total HT (MAD)</Label>
                       <Input
@@ -590,7 +777,19 @@ export default function FacturesPage() {
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label>TVA 20% (MAD)</Label>
+                      <Label>Taux TVA (%)</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        value={formData.tva_rate}
+                        onChange={(e) => handleTvaRateChange(e.target.value)}
+                        className="bg-white"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>TVA (MAD)</Label>
                       <Input
                         type="number"
                         step="0.01"
@@ -762,7 +961,12 @@ export default function FacturesPage() {
                         <TableCell className="font-mono text-sm">{facture.client?.code || '--'}</TableCell>
                         <TableCell>{facture.client?.name || '--'}</TableCell>
                         <TableCell className="text-right">{formatPrice(facture.total_ht)}</TableCell>
-                        <TableCell className="text-right">{formatPrice(facture.total_tva)}</TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex flex-col items-end">
+                            <span className="text-xs text-gray-500">({facture.tva_rate ?? 20}%)</span>
+                            <span>{formatPrice(facture.total_tva)}</span>
+                          </div>
+                        </TableCell>
                         <TableCell className="text-right font-medium">{formatPrice(facture.total_ttc)}</TableCell>
                         <TableCell>
                           {facture.due_date

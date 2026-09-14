@@ -122,4 +122,40 @@
   body {
     @apply bg-background text-foreground;
   }
+  /* Masquer les flèches des inputs number */
+  input[type="number"]::-webkit-outer-spin-button,
+  input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+}
+
+/* Dialog redimensionnable */
+.dialog-resizable {
+  resize: both !important;
+  overflow: auto !important;
+  min-width: 500px;
+  min-height: 400px;
+  max-width: 95vw !important;
+  width: auto !important;
+  transform: translate(-50%, -50%) !important;
+}
+
+.dialog-resizable::after {
+  content: '';
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  width: 16px;
+  height: 16px;
+  cursor: se-resize;
+  background:
+    linear-gradient(135deg, transparent 30%, #B8860B 30%, #B8860B 40%, transparent 40%),
+    linear-gradient(135deg, transparent 50%, #B8860B 50%, #B8860B 60%, transparent 60%),
+    linear-gradient(135deg, transparent 70%, #B8860B 70%, #B8860B 80%, transparent 80%);
+  pointer-events: none;
 }

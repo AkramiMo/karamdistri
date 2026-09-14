@@ -12,6 +12,9 @@ export function usePermissions() {
   const [permissionsConfigured, setPermissionsConfigured] = useState(false)
   const supabase = createClient()
 
+  // Check if user is admin early
+  const isAdmin = profile?.role?.name === 'admin'
+
   const fetchPermissions = useCallback(async () => {
     if (!isAuthenticated) {
       setPermissions([])
@@ -20,30 +23,23 @@ export function usePermissions() {
       return
     }
 
-    try {
-      // First, check if the role_permissions table exists and has data
-      const { data: rolePermsData, error: rolePermsError } = await supabase
-        .from('role_permissions')
-        .select('id')
-        .limit(1)
-
-      // If table doesn't exist or is empty, permissions are not configured
-      if (rolePermsError || !rolePermsData || rolePermsData.length === 0) {
-        setPermissionsConfigured(false)
-        setPermissions([])
-        setIsLoading(false)
-        return
-      }
-
+    // Admin a tous les droits - pas besoin de fetch les permissions
+    if (isAdmin) {
       setPermissionsConfigured(true)
+      setPermissions([])
+      setIsLoading(false)
+      return
+    }
 
-      // If user has no role, allow all (first user setup)
-      if (!profile?.role_id) {
-        setPermissions([])
-        setIsLoading(false)
-        return
-      }
+    // Si pas de role_id, autoriser tout (premier utilisateur)
+    if (!profile?.role_id) {
+      setPermissionsConfigured(false)
+      setPermissions([])
+      setIsLoading(false)
+      return
+    }
 
+    try {
       const { data, error } = await supabase
         .from('role_permissions')
         .select(`
@@ -54,11 +50,23 @@ export function usePermissions() {
 
       if (error) {
         console.error('Error fetching permissions:', error)
+        setPermissionsConfigured(false)
         setPermissions([])
+        setIsLoading(false)
         return
       }
 
-      const formattedPermissions: Permission[] = (data || []).map((rp: any) => ({
+      // Si aucune permission configurée pour ce rôle
+      if (!data || data.length === 0) {
+        setPermissionsConfigured(false)
+        setPermissions([])
+        setIsLoading(false)
+        return
+      }
+
+      setPermissionsConfigured(true)
+
+      const formattedPermissions: Permission[] = data.map((rp: any) => ({
         moduleId: rp.module.id,
         moduleCode: rp.module.code,
         moduleName: rp.module.name,
@@ -70,9 +78,6 @@ export function usePermissions() {
         canDelete: rp.can_delete,
       }))
 
-      // Debug: afficher les permissions chargées
-      console.log('Permissions chargées:', formattedPermissions.map(p => ({ code: p.moduleCode, canView: p.canView })))
-
       setPermissions(formattedPermissions)
     } catch (error) {
       console.error('Error in fetchPermissions:', error)
@@ -81,14 +86,11 @@ export function usePermissions() {
     } finally {
       setIsLoading(false)
     }
-  }, [profile?.role_id, isAuthenticated, supabase])
+  }, [profile?.role_id, isAuthenticated, isAdmin, supabase])
 
   useEffect(() => {
     fetchPermissions()
   }, [fetchPermissions])
-
-  // Check if user is admin
-  const isAdmin = profile?.role?.name === 'admin'
 
   // Check a specific permission
   // If permissions are not configured, allow everything (permissive mode)

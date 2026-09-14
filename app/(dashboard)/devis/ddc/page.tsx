@@ -112,8 +112,8 @@ const statusColors: Record<string, string> = {
 const statusLabels: Record<string, string> = {
   draft: 'Brouillon',
   sent: 'Envoyé',
-  accepted: 'Accepté',
-  rejected: 'Refusé',
+  accepted: 'Validé',
+  rejected: 'Non validé',
   expired: 'Expiré',
 }
 
@@ -152,12 +152,15 @@ export default function DDCPage() {
       .from('client_quote_requests')
       .select(`
         *,
-        client:clients(id, code, name, phone, email, city),
-        ddc_items:client_quote_request_items(*)
+        client:clients!client_quote_requests_client_id_fkey(id, code, name, phone, email, city),
+        ddc_items:client_quote_request_items!client_quote_request_items_ddc_id_fkey(*)
       `)
       .order('created_at', { ascending: false })
 
-    if (!error && data) {
+    if (error) {
+      console.error('Error fetching DDCs:', error)
+    }
+    if (data) {
       setDdcs(data as DDC[])
     }
     setIsLoading(false)
@@ -295,15 +298,20 @@ export default function DDCPage() {
 
       const itemsToInsert = formItems.map((item) => ({
         ddc_id: editingDDC.id,
-        article_id: item.article_id,
+        article_id: item.article_id || null,
         article_code: item.article_code,
         article_name: item.article_name,
-        quantity: item.quantity,
+        quantity: item.quantity || 1,
         unit_price: item.unit_price,
       }))
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabase as any).from('client_quote_request_items').insert(itemsToInsert)
+      const { error: itemsError } = await (supabase as any).from('client_quote_request_items').insert(itemsToInsert)
+
+      if (itemsError) {
+        console.error('Error inserting items:', itemsError)
+        alert(`Erreur lors de l'ajout des articles: ${itemsError.message}`)
+      }
     } else {
       // Create new DDC
       const ddcNumber = await generateDDCNumber()
@@ -334,15 +342,22 @@ export default function DDCPage() {
       // Insert items
       const itemsToInsert = formItems.map((item) => ({
         ddc_id: newDDC.id,
-        article_id: item.article_id,
+        article_id: item.article_id || null,
         article_code: item.article_code,
         article_name: item.article_name,
-        quantity: item.quantity,
+        quantity: item.quantity || 1,
         unit_price: item.unit_price,
       }))
 
+      console.log('Items to insert:', itemsToInsert)
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabase as any).from('client_quote_request_items').insert(itemsToInsert)
+      const { error: itemsError } = await (supabase as any).from('client_quote_request_items').insert(itemsToInsert)
+
+      if (itemsError) {
+        console.error('Error inserting items:', itemsError)
+        alert(`Erreur lors de l'ajout des articles: ${itemsError.message}`)
+      }
     }
 
     resetForm()
@@ -371,9 +386,30 @@ export default function DDCPage() {
     setIsDialogOpen(true)
   }
 
-  const handleView = (ddc: DDC) => {
-    setViewingDDC(ddc)
-    setIsViewDialogOpen(true)
+  const handleView = async (ddc: DDC) => {
+    try {
+      console.log('Opening view for DDC:', ddc.id)
+      // Charger les items séparément
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: items, error } = await (supabase as any)
+        .from('client_quote_request_items')
+        .select('*')
+        .eq('ddc_id', ddc.id)
+
+      if (error) {
+        console.error('Error fetching items:', error)
+      }
+
+      console.log('Items loaded:', items)
+
+      setViewingDDC({
+        ...ddc,
+        ddc_items: items || []
+      })
+      setIsViewDialogOpen(true)
+    } catch (err) {
+      console.error('Error in handleView:', err)
+    }
   }
 
   const handleDelete = async (id: string) => {
@@ -387,11 +423,24 @@ export default function DDCPage() {
   }
 
   const handleUpdateStatus = async (id: string, newStatus: string) => {
+    // Trouver le DDC pour obtenir le client_id
+    const ddc = ddcs.find(d => d.id === id)
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (supabase as any)
       .from('client_quote_requests')
       .update({ status: newStatus })
       .eq('id', id)
+
+    // Si le statut passe à "accepted" (validé), mettre à jour la référence dans le client
+    if (newStatus === 'accepted' && ddc?.client_id) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any)
+        .from('clients')
+        .update({ ddc_id: id })
+        .eq('id', ddc.client_id)
+    }
+
     fetchDDCs()
   }
 
@@ -479,7 +528,7 @@ export default function DDCPage() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-gray-600">Acceptés</CardTitle>
+            <CardTitle className="text-sm font-medium text-gray-600">Validés</CardTitle>
           </CardHeader>
           <CardContent>
             <span className="text-2xl font-bold text-green-600">{stats.accepted}</span>
@@ -509,8 +558,8 @@ export default function DDCPage() {
                   <SelectItem value="all">Tous les statuts</SelectItem>
                   <SelectItem value="draft">Brouillon</SelectItem>
                   <SelectItem value="sent">Envoyé</SelectItem>
-                  <SelectItem value="accepted">Accepté</SelectItem>
-                  <SelectItem value="rejected">Refusé</SelectItem>
+                  <SelectItem value="accepted">Validé</SelectItem>
+                  <SelectItem value="rejected">Non validé</SelectItem>
                   <SelectItem value="expired">Expiré</SelectItem>
                 </SelectContent>
               </Select>
@@ -599,9 +648,7 @@ export default function DDCPage() {
                           <TableHeader>
                             <TableRow>
                               <TableHead>Article</TableHead>
-                              <TableHead className="w-24">Quantité</TableHead>
                               <TableHead className="w-32">Prix Unit.</TableHead>
-                              <TableHead className="w-32 text-right">Total</TableHead>
                               <TableHead className="w-16"></TableHead>
                             </TableRow>
                           </TableHeader>
@@ -625,21 +672,10 @@ export default function DDCPage() {
                                 <TableCell>
                                   <Input
                                     type="number"
-                                    min="1"
-                                    value={item.quantity}
-                                    onChange={(e) => handleItemChange(index, 'quantity', parseInt(e.target.value) || 1)}
-                                  />
-                                </TableCell>
-                                <TableCell>
-                                  <Input
-                                    type="number"
                                     step="0.01"
                                     value={item.unit_price}
                                     onChange={(e) => handleItemChange(index, 'unit_price', parseFloat(e.target.value) || 0)}
                                   />
-                                </TableCell>
-                                <TableCell className="text-right font-medium">
-                                  {formatPrice(item.quantity * item.unit_price)}
                                 </TableCell>
                                 <TableCell>
                                   <Button
@@ -655,15 +691,6 @@ export default function DDCPage() {
                             ))}
                           </TableBody>
                         </Table>
-                      )}
-
-                      {formItems.length > 0 && (
-                        <div className="flex justify-end mt-4">
-                          <div className="bg-[#B8860B]/10 border border-[#B8860B] rounded-lg px-4 py-2">
-                            <span className="text-gray-600">Total HT: </span>
-                            <span className="font-bold text-[#B8860B]">{formatPrice(calculateTotal())}</span>
-                          </div>
-                        </div>
                       )}
                     </div>
 
@@ -697,6 +724,7 @@ export default function DDCPage() {
                   <TableHead>Nom Client</TableHead>
                   <TableHead>Téléphone</TableHead>
                   <TableHead>Ville</TableHead>
+                  <TableHead>Statut</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -710,6 +738,11 @@ export default function DDCPage() {
                     <TableCell className="font-medium">{ddc.client?.name || '-'}</TableCell>
                     <TableCell>{ddc.client?.phone || '-'}</TableCell>
                     <TableCell>{ddc.client?.city || '-'}</TableCell>
+                    <TableCell>
+                      <Badge className={statusColors[ddc.status]}>
+                        {statusLabels[ddc.status]}
+                      </Badge>
+                    </TableCell>
                     <TableCell className="text-right">
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
@@ -722,6 +755,10 @@ export default function DDCPage() {
                             <Eye className="h-4 w-4 mr-2" />
                             Voir détail
                           </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleEdit(ddc)}>
+                            <Pencil className="h-4 w-4 mr-2" />
+                            Modifier
+                          </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => handleDownloadPDF(ddc)}>
                             <Download className="h-4 w-4 mr-2" />
                             Télécharger Devis
@@ -733,34 +770,36 @@ export default function DDCPage() {
                               Changer statut
                             </DropdownMenuSubTrigger>
                             <DropdownMenuSubContent>
-                              {ddc.status === 'draft' && (
-                                <DropdownMenuItem onClick={() => handleUpdateStatus(ddc.id, 'sent')}>
-                                  <Send className="h-4 w-4 mr-2 text-blue-500" />
-                                  Marquer Envoyé
-                                </DropdownMenuItem>
-                              )}
-                              {ddc.status === 'sent' && (
-                                <>
-                                  <DropdownMenuItem onClick={() => handleUpdateStatus(ddc.id, 'accepted')}>
-                                    <CheckCircle2 className="h-4 w-4 mr-2 text-green-500" />
-                                    Accepté
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem onClick={() => handleUpdateStatus(ddc.id, 'rejected')}>
-                                    <XCircle className="h-4 w-4 mr-2 text-red-500" />
-                                    Refusé
-                                  </DropdownMenuItem>
-                                </>
-                              )}
-                              {(ddc.status === 'accepted' || ddc.status === 'rejected') && (
+                              {ddc.status !== 'draft' && (
                                 <DropdownMenuItem onClick={() => handleUpdateStatus(ddc.id, 'draft')}>
                                   <Pencil className="h-4 w-4 mr-2 text-gray-500" />
-                                  Remettre en brouillon
+                                  Brouillon
                                 </DropdownMenuItem>
                               )}
-                              <DropdownMenuItem onClick={() => handleUpdateStatus(ddc.id, 'expired')}>
-                                <Ban className="h-4 w-4 mr-2 text-orange-500" />
-                                Expiré
-                              </DropdownMenuItem>
+                              {ddc.status !== 'sent' && (
+                                <DropdownMenuItem onClick={() => handleUpdateStatus(ddc.id, 'sent')}>
+                                  <Send className="h-4 w-4 mr-2 text-blue-500" />
+                                  Envoyé
+                                </DropdownMenuItem>
+                              )}
+                              {ddc.status !== 'accepted' && (
+                                <DropdownMenuItem onClick={() => handleUpdateStatus(ddc.id, 'accepted')}>
+                                  <CheckCircle2 className="h-4 w-4 mr-2 text-green-500" />
+                                  Validé
+                                </DropdownMenuItem>
+                              )}
+                              {ddc.status !== 'rejected' && (
+                                <DropdownMenuItem onClick={() => handleUpdateStatus(ddc.id, 'rejected')}>
+                                  <XCircle className="h-4 w-4 mr-2 text-red-500" />
+                                  Non validé
+                                </DropdownMenuItem>
+                              )}
+                              {ddc.status !== 'expired' && (
+                                <DropdownMenuItem onClick={() => handleUpdateStatus(ddc.id, 'expired')}>
+                                  <Ban className="h-4 w-4 mr-2 text-orange-500" />
+                                  Expiré
+                                </DropdownMenuItem>
+                              )}
                             </DropdownMenuSubContent>
                           </DropdownMenuSub>
                           <DropdownMenuSeparator />
@@ -818,9 +857,7 @@ export default function DDCPage() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Article</TableHead>
-                      <TableHead className="text-center">Quantité</TableHead>
                       <TableHead className="text-right">Prix Unit.</TableHead>
-                      <TableHead className="text-right">Total</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -830,24 +867,11 @@ export default function DDCPage() {
                           <span className="font-medium">{item.article_code}</span>
                           <span className="text-gray-500 ml-2">{item.article_name}</span>
                         </TableCell>
-                        <TableCell className="text-center">{item.quantity}</TableCell>
                         <TableCell className="text-right">{formatPrice(item.unit_price)}</TableCell>
-                        <TableCell className="text-right font-medium">
-                          {formatPrice(item.quantity * item.unit_price)}
-                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
                 </Table>
-              </div>
-
-              <div className="flex justify-end">
-                <div className="bg-[#B8860B]/10 border border-[#B8860B] rounded-lg px-6 py-3">
-                  <span className="text-gray-600">Total HT: </span>
-                  <span className="text-xl font-bold text-[#B8860B]">
-                    {formatPrice(viewingDDC.total_ht)}
-                  </span>
-                </div>
               </div>
 
               {viewingDDC.notes && (
@@ -868,7 +892,7 @@ export default function DDCPage() {
                       className="bg-green-600 hover:bg-green-700"
                     >
                       <CheckCircle2 className="h-4 w-4 mr-2" />
-                      Accepter
+                      Valider
                     </Button>
                     <Button
                       onClick={() => {
@@ -878,7 +902,7 @@ export default function DDCPage() {
                       variant="destructive"
                     >
                       <XCircle className="h-4 w-4 mr-2" />
-                      Refuser
+                      Non valider
                     </Button>
                   </>
                 )}

@@ -29,7 +29,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import { Package, Plus, Edit, Trash2, Search, Tag, Box, Leaf } from 'lucide-react'
+import { Package, Plus, Edit, Trash2, Search, Tag, Box, Leaf, Droplets, Carrot } from 'lucide-react'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
 
 interface SupplyCategory {
@@ -50,20 +50,23 @@ interface Supply {
   is_custom: boolean
   is_active: boolean
   created_at: string
-  supply_categories?: SupplyCategory
 }
 
 const categoryIcons: Record<string, React.ReactNode> = {
-  'Olives': <Leaf className="h-4 w-4" />,
-  'Etiquettes': <Tag className="h-4 w-4" />,
-  'Emballage': <Box className="h-4 w-4" />,
-  'Autre': <Package className="h-4 w-4" />,
+  'Olives': <Leaf className="h-5 w-5" />,
+  'Etiquettes': <Tag className="h-5 w-5" />,
+  'Emballages': <Box className="h-5 w-5" />,
+  'Sauces': <Droplets className="h-5 w-5" />,
+  'Légumes': <Carrot className="h-5 w-5" />,
+  'Autre': <Package className="h-5 w-5" />,
 }
 
 const categoryColors: Record<string, string> = {
   'Olives': 'bg-amber-100 text-[#9A7209]',
   'Etiquettes': 'bg-blue-100 text-blue-800',
-  'Emballage': 'bg-orange-100 text-orange-800',
+  'Emballages': 'bg-purple-100 text-purple-800',
+  'Sauces': 'bg-red-100 text-red-800',
+  'Légumes': 'bg-orange-100 text-orange-800',
   'Autre': 'bg-gray-100 text-gray-800',
 }
 
@@ -87,10 +90,9 @@ export default function FournituresPage() {
   })
 
   const fetchCategories = async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data, error } = await (supabase.from('supply_categories') as any)
+    const { data, error } = await supabase.from('supply_categories')
       .select('*')
-      .order('sort_order')
+      .order('name')
 
     if (error) {
       console.error('Error fetching categories:', error)
@@ -103,7 +105,7 @@ export default function FournituresPage() {
     setIsLoading(true)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data, error } = await (supabase.from('supplies') as any)
-      .select('*, supply_categories(*)')
+      .select('*')
       .order('code')
 
     if (error) {
@@ -149,8 +151,8 @@ export default function FournituresPage() {
         .insert([supplyData])
 
       if (error) {
-        console.error('Error creating supply:', error)
-        alert('Erreur lors de la création')
+        console.error('Error creating supply:', JSON.stringify(error, null, 2))
+        alert(`Erreur lors de la création: ${error.message || error.code || JSON.stringify(error)}`)
         return
       }
     }
@@ -344,15 +346,15 @@ export default function FournituresPage() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-gray-600">Total Fournitures</CardTitle>
+            <CardTitle className="text-sm font-medium text-gray-600">Total</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="flex items-center gap-2">
               <Package className="h-6 w-6 text-[#B8860B]" />
-              <span className="text-2xl font-bold">{supplies.length}</span>
+              <span className="text-xl font-bold">{supplies.length}</span>
             </div>
           </CardContent>
         </Card>
@@ -363,8 +365,10 @@ export default function FournituresPage() {
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-2">
-                {categoryIcons[cat.name] || <Package className="h-6 w-6" />}
-                <span className="text-2xl font-bold">{cat.count}</span>
+                <span className={`p-1 rounded ${categoryColors[cat.name] || 'bg-gray-100'}`}>
+                  {categoryIcons[cat.name] || <Package className="h-5 w-5" />}
+                </span>
+                <span className="text-xl font-bold">{cat.count}</span>
               </div>
             </CardContent>
           </Card>
@@ -429,11 +433,14 @@ export default function FournituresPage() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        {supply.supply_categories ? (
-                          <Badge className={categoryColors[supply.supply_categories.name] || 'bg-gray-100'}>
-                            {supply.supply_categories.name}
-                          </Badge>
-                        ) : '-'}
+                        {(() => {
+                          const category = categories.find(c => c.id === supply.category_id)
+                          return category ? (
+                            <Badge className={categoryColors[category.name] || 'bg-gray-100'}>
+                              {category.name}
+                            </Badge>
+                          ) : '-'
+                        })()}
                       </TableCell>
                       <TableCell>{supply.unit}</TableCell>
                       <TableCell className="text-right">

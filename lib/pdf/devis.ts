@@ -33,7 +33,7 @@ export function generateDevisPDF(ddc: DDC, company?: CompanySettings): void {
   const settings = company || defaultCompanySettings
 
   // Load logo
-  const logoUrl = '/logo.jpg'
+  const logoUrl = '/Logo.png'
   const img = new Image()
   img.crossOrigin = 'Anonymous'
 
@@ -55,7 +55,7 @@ export function generateDevisPDF(ddc: DDC, company?: CompanySettings): void {
       }
 
       // Align logo to the left
-      doc.addImage(img, 'JPEG', 5, 10, width, height)
+      doc.addImage(img, 'PNG', 5, 10, width, height)
       generateContent(doc, ddc, settings, true, width)
     } catch (error) {
       // If logo fails to load, continue without it
@@ -78,9 +78,10 @@ function generateContent(doc: jsPDF, ddc: DDC, settings: CompanySettings, hasLog
   doc.setTextColor(184, 134, 11)
   doc.text('DEVIS', 105, 20, { align: 'center' })
 
-  // Devis info box on the right
-  doc.setFillColor(255, 250, 240)
-  doc.roundedRect(140, 28, 55, 25, 2, 2, 'F')
+  // Devis info box on the right (sans fond)
+  doc.setDrawColor(184, 134, 11)
+  doc.setLineWidth(0.5)
+  doc.roundedRect(140, 28, 55, 25, 2, 2, 'S')
   doc.setFontSize(9)
   doc.setTextColor(0, 0, 0)
   doc.setFont('helvetica', 'bold')
@@ -88,9 +89,10 @@ function generateContent(doc: jsPDF, ddc: DDC, settings: CompanySettings, hasLog
   doc.setFont('helvetica', 'normal')
   doc.text(`Date: ${new Date(ddc.request_date).toLocaleDateString('fr-FR')}`, 145, 44)
 
-  // Client info box
-  doc.setFillColor(248, 248, 248)
-  doc.roundedRect(10, 78, 90, 30, 2, 2, 'F')
+  // Client info box (sans fond)
+  doc.setDrawColor(184, 134, 11)
+  doc.setLineWidth(0.5)
+  doc.roundedRect(10, 78, 90, 30, 2, 2, 'S')
   doc.setFontSize(10)
   doc.setFont('helvetica', 'bold')
   doc.setTextColor(184, 134, 11)
@@ -116,61 +118,62 @@ function generateContent(doc: jsPDF, ddc: DDC, settings: CompanySettings, hasLog
     tableStartY = 128
   }
 
-  // Items table
+  // Items table (sans Quantité et Total)
   const tableData = ddc.ddc_items?.map((item) => [
     item.article_code,
     item.article_name,
-    item.quantity.toString(),
     `${item.unit_price.toFixed(2)} MAD`,
-    `${(item.quantity * item.unit_price).toFixed(2)} MAD`,
   ]) || []
 
   autoTable(doc, {
     startY: tableStartY,
-    head: [['Code', 'Désignation', 'Qté', 'Prix Unit.', 'Total']],
+    head: [['Code', 'Désignation', 'Prix Unit.']],
     body: tableData,
-    theme: 'striped',
+    theme: 'grid',
     headStyles: {
       fillColor: [184, 134, 11],
       textColor: [255, 255, 255],
       fontStyle: 'bold',
     },
+    bodyStyles: {
+      fillColor: [255, 255, 255],
+    },
     columnStyles: {
-      0: { cellWidth: 25 },
-      1: { cellWidth: 70 },
-      2: { cellWidth: 20, halign: 'center' },
-      3: { cellWidth: 35, halign: 'right' },
-      4: { cellWidth: 35, halign: 'right' },
+      0: { cellWidth: 35 },
+      1: { cellWidth: 110 },
+      2: { cellWidth: 40, halign: 'right' },
     },
     styles: {
       fontSize: 9,
     },
   })
 
-  // Total (no dark background)
   const finalY = (doc as any).lastAutoTable.finalY + 10
+
+  // Section Conditions (avec encadrement)
+  const conditionsHeight = ddc.notes ? 25 : 20
   doc.setDrawColor(184, 134, 11)
   doc.setLineWidth(0.5)
-  doc.roundedRect(130, finalY, 60, 12, 2, 2, 'S')
-  doc.setTextColor(184, 134, 11)
-  doc.setFontSize(12)
-  doc.setFont('helvetica', 'bold')
-  doc.text(`Total HT: ${ddc.total_ht.toFixed(2)} MAD`, 135, finalY + 8)
+  doc.roundedRect(10, finalY, 190, conditionsHeight, 2, 2, 'S')
 
-  // Notes
-  let notesEndY = finalY + 10
+  // Titre Conditions
+  doc.setFontSize(11)
+  doc.setFont('helvetica', 'bold')
+  doc.setTextColor(184, 134, 11)
+  doc.text('Conditions :', 15, finalY + 8)
+
+  // Contenu des conditions (notes)
   if (ddc.notes) {
     doc.setTextColor(0, 0, 0)
-    doc.setFontSize(10)
-    doc.setFont('helvetica', 'normal')
-    doc.text('Notes:', 10, finalY + 25)
     doc.setFontSize(9)
-    doc.text(ddc.notes, 10, finalY + 32)
-    notesEndY = finalY + 40
+    doc.setFont('helvetica', 'normal')
+    doc.text(ddc.notes, 15, finalY + 16)
   }
 
+  const conditionsEndY = finalY + conditionsHeight
+
   // Validation section
-  const validationY = notesEndY + 15
+  const validationY = conditionsEndY + 10
 
   // Box for validation
   doc.setDrawColor(184, 134, 11)

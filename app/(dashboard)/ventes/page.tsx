@@ -30,7 +30,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Search, DollarSign, Eye, Trash2, Wallet } from 'lucide-react'
+import { Plus, Search, DollarSign, Eye, Trash2, Wallet, AlertTriangle, Calendar } from 'lucide-react'
+import { calculateMB, type DeliveryItemForMB } from '@/lib/sales'
 import { Checkbox } from '@/components/ui/checkbox'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
@@ -48,6 +49,7 @@ interface Sale {
   amount_paid: number | null
   balance_due: number | null
   mb: number | null
+  mb_warning: boolean | null
   payment_method: string | null
   payment_status: string
   client?: { name: string; code: string }
@@ -127,6 +129,8 @@ export default function VentesPage() {
   const [saleDeliveries, setSaleDeliveries] = useState<SaleDelivery[]>([])
   const [isLoadingDeliveries, setIsLoadingDeliveries] = useState(false)
   const [selectedSales, setSelectedSales] = useState<Set<string>>(new Set())
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [selectedMonth, setSelectedMonth] = useState(() => new Date().toISOString().slice(0, 7)) // YYYY-MM format, default to current month
   const supabase = createClient()
 
   const [formData, setFormData] = useState({
@@ -159,12 +163,52 @@ export default function VentesPage() {
   }
 
   const fetchDeliveries = async () => {
-    const { data } = await supabase
-      .from('deliveries')
-      .select('id, delivery_number, client_id, total_ht, client:clients(name)')
-      .eq('status', 'delivered')
-      .order('created_at', { ascending: false })
-    setDeliveries(data || [])
+    // Récupérer les IDs des BL déjà comptabilisés :
+    // 1. BL liés directement à une vente (sales.delivery_id)
+    // 2. BL dans une tournée (delivery_round_items)
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const [salesResult, roundItemsResult, allDeliveriesResult] = await Promise.all([
+      // Toutes les ventes
+      (supabase as any)
+        .from('sales')
+        .select('delivery_id'),
+      // Tous les BL dans des tournées
+      (supabase as any)
+        .from('delivery_round_items')
+        .select('delivery_id'),
+      // Tous les BL livrés
+      (supabase as any)
+        .from('deliveries')
+        .select('id, delivery_number, client_id, total_ht, client:clients(name)')
+        .eq('status', 'delivered')
+        .order('created_at', { ascending: false })
+    ])
+
+    const usedDeliveryIds = new Set<string>()
+
+    // Ajouter les BL des ventes directes (filtrer les null côté client)
+    if (salesResult.data) {
+      salesResult.data.forEach((s: { delivery_id: string | null }) => {
+        if (s.delivery_id !== null && s.delivery_id !== undefined) {
+          usedDeliveryIds.add(s.delivery_id)
+        }
+      })
+    }
+
+    // Ajouter les BL des tournées
+    if (roundItemsResult.data) {
+      roundItemsResult.data.forEach((item: { delivery_id: string }) => {
+        if (item.delivery_id) usedDeliveryIds.add(item.delivery_id)
+      })
+    }
+
+    // Filtrer les BL disponibles (non comptabilisés)
+    const availableDeliveries = (allDeliveriesResult.data || []).filter(
+      (d: { id: string }) => !usedDeliveryIds.has(d.id)
+    )
+
+    setDeliveries(availableDeliveries)
   }
 
   const fetchClients = async () => {
@@ -212,14 +256,30 @@ export default function VentesPage() {
     }
   }
 
-  const handleDeliverySelect = (deliveryId: string) => {
+  const handleDeliverySelect = async (deliveryId: string) => {
     const delivery = deliveries.find(d => d.id === deliveryId)
     if (delivery) {
+      // Récupérer les articles du BL pour calculer la recette (somme HT sans TVA)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: deliveryItems } = await (supabase
+        .from('delivery_items')
+        .select('quantity_delivered, quantity_returned, unit_price')
+        .eq('delivery_id', deliveryId) as any)
+
+      // Calculer la recette = somme des (qté livrée - qté retournée) * prix unitaire HT
+      let recetteHT = 0
+      if (deliveryItems && deliveryItems.length > 0) {
+        recetteHT = deliveryItems.reduce((sum: number, item: { quantity_delivered: number; quantity_returned: number; unit_price: number }) => {
+          const qtySold = (item.quantity_delivered || 0) - (item.quantity_returned || 0)
+          return sum + (qtySold * (item.unit_price || 0))
+        }, 0)
+      }
+
       setFormData({
         ...formData,
         delivery_id: deliveryId,
         client_id: delivery.client_id,
-        total_ht: delivery.total_ht?.toString() || '',
+        total_ht: recetteHT.toFixed(2),
       })
     }
   }
@@ -227,13 +287,17 @@ export default function VentesPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
+    if (isSubmitting) return // Prevent double submission
+
     if (!formData.client_id || !formData.total_ht) {
       alert('Veuillez remplir tous les champs obligatoires')
       return
     }
 
+    setIsSubmitting(true)
+
     const total_ht = parseFloat(formData.total_ht)
-    const total_ttc = total_ht * 1.2 // 20% TVA
+    const total_ttc = total_ht // Pas de TVA - travail en HT
 
     // Generate sequential sale number
     const saleNumber = await generateSaleNumber()
@@ -276,11 +340,12 @@ export default function VentesPage() {
     if (error) {
       console.error('Error creating sale:', error)
       alert(`Erreur création vente: ${error.message}`)
+      setIsSubmitting(false)
       return
     }
 
     // Insérer les articles vendus dans articles_vendus si un BL est lié
-    let calculatedMB = 0
+    let mbResult = { mb: 0, hasMissingCR: false, itemsWithoutCR: 0, totalItems: 0 }
     if (saleData && formData.delivery_id) {
       // Récupérer les articles du BL avec le CR
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -292,16 +357,14 @@ export default function VentesPage() {
       if (diError) {
         console.error('Error fetching delivery items:', diError)
       } else if (deliveryItems && deliveryItems.length > 0) {
+        // Calculer la MB avec la fonction utilitaire
+        mbResult = calculateMB(deliveryItems as DeliveryItemForMB[])
+
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const articlesVendusData: any[] = []
         for (const di of deliveryItems) {
           const qtySold = (di.quantity_delivered || 0) - (di.quantity_returned || 0)
           if (qtySold > 0) {
-            // Calculer la marge pour cet article: (Prix HT - CR) * quantité
-            const articleCR = di.article?.cr || 0
-            const articleMarge = (di.unit_price - articleCR) * qtySold
-            calculatedMB += articleMarge
-
             articlesVendusData.push({
               sale_id: saleData.id,
               sale_date: formData.sale_date,
@@ -359,32 +422,22 @@ export default function VentesPage() {
           }
         }
 
-        // Mettre à jour la vente avec le MB calculé
-        if (calculatedMB !== 0) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          await (supabase.from('sales') as any)
-            .update({ mb: calculatedMB })
-            .eq('id', saleData.id)
-        }
+        // Mettre à jour la vente avec le MB calculé et l'indicateur d'avertissement
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabase.from('sales') as any)
+          .update({ mb: mbResult.mb, mb_warning: mbResult.hasMissingCR })
+          .eq('id', saleData.id)
       }
     }
 
-    // Ajouter automatiquement à la caisse
-    const clientName = selectedClient?.name || ''
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (supabase.from('cash_register') as any).insert([{
-      operation_type: 'in',
-      category: 'vente',
-      amount: total_ttc,
-      reference: saleNumber,
-      reference_id: saleData?.id || null,
-      notes: `Vente ${saleNumber} - ${clientName}`,
-      transaction_date: formData.sale_date,
-    }])
+    // Note: L'entrée cash_register est créée automatiquement par le trigger
+    // sync_payment_to_cash_register quand un paiement est enregistré dans payments
+    // Les paiements sont faits via le module Paiements ou lors des encaissements BL
 
     fetchSales()
     setIsDialogOpen(false)
     resetForm()
+    setIsSubmitting(false)
   }
 
   const resetForm = () => {
@@ -549,11 +602,26 @@ export default function VentesPage() {
   }
 
   const filteredSales = sales.filter(
-    (sale) =>
-      sale.sale_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      sale.client?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      sale.rblt_number?.toLowerCase().includes(searchTerm.toLowerCase())
+    (sale) => {
+      // Filter by selected month
+      const matchesMonth = selectedMonth === 'all' || sale.sale_date.startsWith(selectedMonth)
+      // Filter by search term
+      const matchesSearch =
+        sale.sale_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        sale.client?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        sale.rblt_number?.toLowerCase().includes(searchTerm.toLowerCase())
+      return matchesMonth && matchesSearch
+    }
   )
+
+  // Generate list of available months from sales data
+  const currentMonth = new Date().toISOString().slice(0, 7)
+  const monthsFromSales = sales.map(s => s.sale_date.slice(0, 7))
+  // Always include current month even if no sales
+  if (!monthsFromSales.includes(currentMonth)) {
+    monthsFromSales.push(currentMonth)
+  }
+  const availableMonths = Array.from(new Set(monthsFromSales)).sort((a, b) => b.localeCompare(a)) // Sort descending (most recent first)
 
   const formatPrice = (price: number | null) => {
     if (price === null) return '-'
@@ -649,7 +717,7 @@ export default function VentesPage() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="total_ht">Montant HT (DH) *</Label>
+                    <Label htmlFor="total_ht">Recette HT (Somme BL sans TVA) *</Label>
                     <Input
                       id="total_ht"
                       type="number"
@@ -689,6 +757,7 @@ export default function VentesPage() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
+                        <SelectItem value="pending">Non réglée</SelectItem>
                         <SelectItem value="paid">Réglée</SelectItem>
                         <SelectItem value="partial">Partiellement réglée</SelectItem>
                         <SelectItem value="returned">Retour</SelectItem>
@@ -699,11 +768,11 @@ export default function VentesPage() {
                 </div>
 
                 <div className="flex justify-end gap-2 pt-4">
-                  <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                  <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)} disabled={isSubmitting}>
                     Annuler
                   </Button>
-                  <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
-                    Créer la vente
+                  <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]" disabled={isSubmitting}>
+                    {isSubmitting ? 'Création en cours...' : 'Créer la vente'}
                   </Button>
                 </div>
               </form>
@@ -774,6 +843,22 @@ export default function VentesPage() {
                   className="pl-10"
                 />
               </div>
+              <div className="flex items-center gap-2">
+                <Calendar className="h-4 w-4 text-gray-400" />
+                <Select value={selectedMonth} onValueChange={setSelectedMonth}>
+                  <SelectTrigger className="w-[180px]">
+                    <SelectValue placeholder="Sélectionner un mois" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Tous les mois</SelectItem>
+                    {availableMonths.map((month) => (
+                      <SelectItem key={month} value={month}>
+                        {format(new Date(month + '-01'), 'MMMM yyyy', { locale: fr })}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </CardHeader>
           <CardContent>
@@ -821,7 +906,12 @@ export default function VentesPage() {
                       </TableCell>
                       <TableCell className="text-right">{formatPrice(sale.total_ht)}</TableCell>
                       <TableCell className="text-right font-medium">
-                        {sale.mb !== null ? formatPrice(sale.mb) : '-'}
+                        <div className="flex items-center justify-end gap-1">
+                          {sale.mb !== null ? formatPrice(sale.mb) : '-'}
+                          {sale.mb_warning && (
+                            <AlertTriangle className="h-4 w-4 text-amber-500" title="CR manquant sur certains articles" />
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
@@ -939,11 +1029,21 @@ export default function VentesPage() {
                         <span className="text-[#B8860B]">{formatPrice(viewingSale.total_ht)}</span>
                       </div>
                       <div className="flex justify-between text-lg font-bold">
-                        <span>Marge (MB):</span>
+                        <span className="flex items-center gap-1">
+                          Marge (MB):
+                          {viewingSale.mb_warning && (
+                            <AlertTriangle className="h-4 w-4 text-amber-500" title="CR manquant sur certains articles" />
+                          )}
+                        </span>
                         <span className={viewingSale.mb !== null && viewingSale.mb >= 0 ? 'text-green-600' : 'text-red-600'}>
                           {viewingSale.mb !== null ? formatPrice(viewingSale.mb) : '-'}
                         </span>
                       </div>
+                      {viewingSale.mb_warning && (
+                        <p className="text-xs text-amber-600 mt-1">
+                          ⚠️ Marge approximative : CR manquant sur certains articles
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>

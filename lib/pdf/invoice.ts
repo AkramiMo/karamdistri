@@ -245,7 +245,7 @@ export async function generateDeliveryNotePDF(order: Order, company?: CompanySet
       await new Promise<void>((resolve, reject) => {
         img.onload = () => {
           try {
-            doc.addImage(img, 'JPEG', 15, 10, 40, 25)
+            doc.addImage(img, 'PNG', 15, 10, 40, 25)
           } catch {
             // Logo loading failed, continue without it
           }
