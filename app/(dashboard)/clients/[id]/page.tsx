@@ -493,7 +493,7 @@ export default function ClientDetailPage() {
                 date: d.delivery_date || '',
                 type: 'Livraison',
                 reference: d.delivery_number,
-                debit: (d.total_ht || 0) * 1.2,
+                debit: d.total_ht || 0,
                 credit: 0,
                 created_at: d.delivery_date,
               })),
@@ -1074,7 +1074,7 @@ export default function ClientDetailPage() {
                             date: d.delivery_date || '',
                             type: 'Livraison',
                             reference: d.delivery_number,
-                            debit: (d.total_ht || 0) * 1.2,
+                            debit: d.total_ht || 0,
                             credit: 0,
                           })),
                           ...payments.map(p => ({

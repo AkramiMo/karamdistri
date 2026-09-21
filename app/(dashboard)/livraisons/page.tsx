@@ -313,8 +313,7 @@ export default function LivraisonsPage() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
-  const [dateFilter, setDateFilter] = useState<string>('')
-  const [selectedBLMonth, setSelectedBLMonth] = useState(() => new Date().toISOString().slice(0, 7)) // YYYY-MM format, default to current month
+  const [selectedBLMonth, setSelectedBLMonth] = useState<string>('all') // 'all' = tous les mois, ou 'YYYY-MM' pour un mois spécifique
   const [showOnlyWithBalance, setShowOnlyWithBalance] = useState(false)
   const [showOnlyNotInSale, setShowOnlyNotInSale] = useState(false)
   const [deliveryIdsInSales, setDeliveryIdsInSales] = useState<Set<string>>(new Set())
@@ -365,7 +364,7 @@ export default function LivraisonsPage() {
   const [editingItems, setEditingItems] = useState<Record<string, { quantity_returned: number }>>({})
   const [roundSearchTerm, setRoundSearchTerm] = useState('')
   const [roundStatusFilter, setRoundStatusFilter] = useState<string>('all')
-  const [selectedBLTMonth, setSelectedBLTMonth] = useState(() => new Date().toISOString().slice(0, 7)) // YYYY-MM format, default to current month
+  const [selectedBLTMonth, setSelectedBLTMonth] = useState<string>('all') // 'all' = tous les mois, ou 'YYYY-MM' pour un mois spécifique
   const [roundFormData, setRoundFormData] = useState({
     driver_id: '',
     round_date: new Date().toISOString().split('T')[0],
@@ -1064,8 +1063,8 @@ export default function LivraisonsPage() {
         order_date: delivery.delivery_date || new Date().toISOString(),
         status: delivery.status,
         total_ht: delivery.total_ht || 0,
-        total_tva: (delivery.total_ht || 0) * 0.2,
-        total_ttc: (delivery.total_ht || 0) * 1.2,
+        total_tva: 0,
+        total_ttc: delivery.total_ht || 0,
         notes: delivery.notes,
         client: {
           code: delivery.client.code,
@@ -1575,7 +1574,7 @@ export default function LivraisonsPage() {
   const printReceipt = () => {
     if (!lastPayment || !paymentDelivery) return
 
-    const totalTTC = (paymentDelivery.total_ht || 0) * 1.2
+    const totalTTC = paymentDelivery.total_ht || 0
     const newBalance = Math.max(0, totalTTC - (paymentDelivery.amount_paid || 0) - lastPayment.amount)
 
     const printContent = `
@@ -1869,7 +1868,6 @@ export default function LivraisonsPage() {
         delivery.client?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
         delivery.client?.code?.toLowerCase().includes(searchTerm.toLowerCase())
       const matchesStatus = statusFilter === 'all' || delivery.status === statusFilter
-      const matchesDate = !dateFilter || delivery.delivery_date === dateFilter
       const matchesMonth = selectedBLMonth === 'all' || (delivery.delivery_date && delivery.delivery_date.startsWith(selectedBLMonth))
       // Calculate reste (balance) for filtering
       const recetteBL = delivery.delivery_items?.reduce((sum, item) => sum + ((item.quantity_delivered - item.quantity_returned) * item.unit_price), 0) || 0
@@ -1877,7 +1875,7 @@ export default function LivraisonsPage() {
       const matchesBalance = !showOnlyWithBalance || reste > 0
       // Filter for BL not yet linked to a sale (any status, not in sales)
       const matchesNotInSale = !showOnlyNotInSale || !deliveryIdsInSales.has(delivery.id)
-      return matchesSearch && matchesStatus && matchesDate && matchesMonth && matchesBalance && matchesNotInSale
+      return matchesSearch && matchesStatus && matchesMonth && matchesBalance && matchesNotInSale
     }
   )
 
@@ -2164,13 +2162,6 @@ export default function LivraisonsPage() {
                       ))}
                     </SelectContent>
                   </Select>
-                  <Input
-                    type="date"
-                    value={dateFilter}
-                    onChange={(e) => setDateFilter(e.target.value)}
-                    className="w-44 border-2 border-[#B8860B]"
-                    placeholder="Filtrer par date"
-                  />
                   <Select value={statusFilter} onValueChange={setStatusFilter}>
                     <SelectTrigger className="w-48 border-2 border-[#B8860B]">
                       <SelectValue placeholder="Filtrer par statut" />
@@ -3804,17 +3795,17 @@ export default function LivraisonsPage() {
                 </div>
 
                 <div className={`p-4 rounded-lg text-center ${
-                  Math.max(0, (paymentDelivery.total_ht || 0) * 1.2 - (paymentDelivery.amount_paid || 0) - lastPayment.amount) > 0
+                  Math.max(0, (paymentDelivery.total_ht || 0) - (paymentDelivery.amount_paid || 0) - lastPayment.amount) > 0
                     ? 'bg-orange-50 border border-orange-200'
                     : 'bg-amber-50 border border-amber-200'
                 }`}>
                   <p className="text-sm text-gray-600">Reste a payer</p>
                   <p className={`text-2xl font-bold ${
-                    Math.max(0, (paymentDelivery.total_ht || 0) * 1.2 - (paymentDelivery.amount_paid || 0) - lastPayment.amount) > 0
+                    Math.max(0, (paymentDelivery.total_ht || 0) - (paymentDelivery.amount_paid || 0) - lastPayment.amount) > 0
                       ? 'text-orange-600'
                       : 'text-[#B8860B]'
                   }`}>
-                    {formatPrice(Math.max(0, (paymentDelivery.total_ht || 0) * 1.2 - (paymentDelivery.amount_paid || 0) - lastPayment.amount))}
+                    {formatPrice(Math.max(0, (paymentDelivery.total_ht || 0) - (paymentDelivery.amount_paid || 0) - lastPayment.amount))}
                   </p>
                 </div>
 

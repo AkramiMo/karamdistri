@@ -165,8 +165,6 @@ export function Sidebar() {
     { id: '27', code: 'stocks', name: 'Stock', icon: 'Warehouse', path: '/stocks', sort_order: 5 },
     // Commandes (indépendant)
     { id: '25', code: 'commandes', name: 'Commandes', icon: 'ShoppingCart', path: '/commandes', sort_order: 6 },
-    // Productions
-    { id: '22', code: 'productions', name: 'Productions', icon: 'Factory', path: '/productions', sort_order: 5 },
     // Livraisons group
     { id: '5', code: 'livraisons', name: 'Livraisons', icon: 'Truck', path: '/livraisons', sort_order: 6 },
     { id: '14', code: 'tournees', name: 'Tournées', icon: 'Route', path: '/tournees', sort_order: 7 },
@@ -231,7 +229,7 @@ export function Sidebar() {
   // Modules de premier niveau (non groupés)
   const topLevelModules = visibleModules.filter(m =>
     !allGroupedCodes.includes(m.code) &&
-    ['dashboard', 'productions', 'clients', 'admin', 'commandes', 'devis', 'stocks', 'graphiques', 'historique-val'].includes(m.code)
+    ['dashboard', 'clients', 'admin', 'commandes', 'devis', 'stocks', 'graphiques', 'historique-val'].includes(m.code)
   )
 
   // Vérifier si un enfant est actif pour chaque groupe
@@ -350,7 +348,6 @@ export function Sidebar() {
   const dashboardModule = topLevelModules.find(m => m.code === 'dashboard')
   const stocksModule = topLevelModules.find(m => m.code === 'stocks')
   const commandesModule = topLevelModules.find(m => m.code === 'commandes')
-  const productionsModule = topLevelModules.find(m => m.code === 'productions')
   const clientsModule = topLevelModules.find(m => m.code === 'clients')
   const devisModule = topLevelModules.find(m => m.code === 'devis')
   const graphiquesModule = topLevelModules.find(m => m.code === 'graphiques')
@@ -396,9 +393,6 @@ export function Sidebar() {
 
           {/* Commandes */}
           {commandesModule && renderModule(commandesModule)}
-
-          {/* Productions */}
-          {productionsModule && renderModule(productionsModule)}
 
           {/* Livraisons */}
           {renderGroup('Livraisons', Truck, livraisonsOpen, setLivraisonsOpen, livraisonsChildren, livraisonsChildLabels, isLivraisonsChildActive)}

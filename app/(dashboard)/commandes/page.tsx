@@ -551,8 +551,8 @@ export default function CommandesPage() {
 
     try {
       const total_ht = orderItems.reduce((sum, item) => sum + item.total_ht, 0)
-      const total_tva = total_ht * 0.2 // 20% TVA
-      const total_ttc = total_ht + total_tva
+      const total_tva = 0 // Pas de TVA
+      const total_ttc = total_ht
 
       // Generate unique order number from database
       try {
@@ -921,6 +921,7 @@ export default function CommandesPage() {
     setManualPrice('')
     setClientDDCs([])
     setErrorMessage(null)
+    setIsSubmitting(false)
   }
 
   // Edit order functions
@@ -1021,8 +1022,8 @@ export default function CommandesPage() {
     }
 
     const total_ht = editOrderItems.reduce((sum, item) => sum + item.total_ht, 0)
-    const total_tva = total_ht * 0.2
-    const total_ttc = total_ht + total_tva
+    const total_tva = 0 // Pas de TVA
+    const total_ttc = total_ht
 
     // Update order
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

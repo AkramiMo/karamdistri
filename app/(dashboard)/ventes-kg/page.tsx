@@ -88,7 +88,12 @@ const extractFournitureCode = (articleCode: string): string => {
   // D'abord, retirer le suffixe "-Vrac" si présent
   if (code.toLowerCase().endsWith('-vrac')) {
     code = code.slice(0, -5) // Retirer les 5 derniers caractères "-Vrac"
-    return code.toUpperCase() // Retourner le code fourniture en majuscules
+    const vracCode = code.toUpperCase()
+    // Vérifier si c'est une variante de Harissa
+    if (/^HR[\d.]*$/i.test(vracCode) || vracCode === 'HAR') {
+      return 'HAR'
+    }
+    return vracCode
   }
 
   // Patterns d'emballages : Se9L, Se11L, Se5L, Se18L, Bo370, Bo720, Bi5L, Bt1L, Sc200, Bq500, Ca6x...
@@ -118,8 +123,8 @@ const extractFournitureCode = (articleCode: string): string => {
   fournitureCode = (fournitureCode || code).toUpperCase()
 
   // Regrouper toutes les variantes de harissa sous "HAR"
-  // Hr, Hr5, Hr7, HAR -> HAR (harissa 5kg, 7kg, 5.5kg etc.)
-  if (/^HR\d*$/i.test(fournitureCode) || fournitureCode === 'HAR') {
+  // Hr, Hr5, Hr7, Hr5.5, HAR -> HAR (harissa 5kg, 7kg, 5.5kg etc.)
+  if (/^HR[\d.]*$/i.test(fournitureCode) || fournitureCode === 'HAR') {
     return 'HAR'
   }
 

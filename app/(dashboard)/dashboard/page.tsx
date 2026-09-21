@@ -545,7 +545,7 @@ export default function DashboardPage() {
       {/* Stats Grid - Ligne 1: Commandes, Livraisons, Ventes */}
       {!isCommercial && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Card className="overflow-hidden">
+          <Card className="overflow-hidden border-2 border-[#B8860B]">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-gray-600">Commandes</CardTitle>
               <div className="p-2 rounded-lg bg-orange-500 flex-shrink-0">
@@ -558,7 +558,7 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
 
-          <Card className="overflow-hidden">
+          <Card className="overflow-hidden border-2 border-[#B8860B]">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-gray-600">Livraisons</CardTitle>
               <div className="p-2 rounded-lg bg-purple-500 flex-shrink-0">
@@ -572,7 +572,7 @@ export default function DashboardPage() {
           </Card>
 
           {!isLivreur && (
-            <Card className="overflow-hidden">
+            <Card className="overflow-hidden border-2 border-[#B8860B]">
               <CardHeader className="flex flex-row items-center justify-between pb-2">
                 <CardTitle className="text-sm font-medium text-gray-600 truncate">Ventes (mois)</CardTitle>
                 <div className="p-2 rounded-lg bg-teal-500 flex-shrink-0">
@@ -601,7 +601,7 @@ export default function DashboardPage() {
       {/* Stats Grid - Ligne 2: Caisse, MB */}
       {!isLivreur && !isCommercial && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Card className="overflow-hidden">
+          <Card className="overflow-hidden border-2 border-[#B8860B]">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-gray-600">Caisse</CardTitle>
               <div className="p-2 rounded-lg bg-yellow-500 flex-shrink-0">
@@ -616,7 +616,7 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
 
-          <Card className="overflow-hidden">
+          <Card className="overflow-hidden border-2 border-[#B8860B]">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-gray-600">MB (mois)</CardTitle>
               <div className="p-2 rounded-lg bg-green-500 flex-shrink-0">
@@ -655,7 +655,7 @@ export default function DashboardPage() {
       {/* Stats Grid - Ligne 3: Fournisseurs, Articles, Clients, Stock */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Link href="/fournisseurs">
-          <Card className="cursor-pointer hover:shadow-md transition-shadow overflow-hidden">
+          <Card className="cursor-pointer hover:shadow-md transition-shadow overflow-hidden border-2 border-[#B8860B]">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-gray-600 truncate">Fournisseurs</CardTitle>
               <div className="p-2 rounded-lg bg-indigo-500 flex-shrink-0">
@@ -670,7 +670,7 @@ export default function DashboardPage() {
         </Link>
 
         <Link href="/articles">
-          <Card className="cursor-pointer hover:shadow-md transition-shadow overflow-hidden">
+          <Card className="cursor-pointer hover:shadow-md transition-shadow overflow-hidden border-2 border-[#B8860B]">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-gray-600">Articles</CardTitle>
               <div className="p-2 rounded-lg bg-amber-500 flex-shrink-0">
@@ -685,7 +685,7 @@ export default function DashboardPage() {
         </Link>
 
         <Link href="/clients">
-          <Card className="cursor-pointer hover:shadow-md transition-shadow overflow-hidden">
+          <Card className="cursor-pointer hover:shadow-md transition-shadow overflow-hidden border-2 border-[#B8860B]">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-gray-600">Clients</CardTitle>
               <div className="p-2 rounded-lg bg-blue-500 flex-shrink-0">
@@ -700,7 +700,7 @@ export default function DashboardPage() {
         </Link>
 
         <Link href="/stocks/articles">
-          <Card className="cursor-pointer hover:shadow-md transition-shadow overflow-hidden">
+          <Card className="cursor-pointer hover:shadow-md transition-shadow overflow-hidden border-2 border-[#B8860B]">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-gray-600">Stock</CardTitle>
               <div className="p-2 rounded-lg bg-green-500 flex-shrink-0">
@@ -738,7 +738,7 @@ export default function DashboardPage() {
         <>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Monthly Sales Chart */}
-            <Card>
+            <Card className="border-2 border-[#B8860B]">
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle>Évolution des ventes ({salesViewMode === 'month' ? '6 derniers mois' : '6 dernières semaines'})</CardTitle>
                 <div className="flex gap-2">
@@ -800,7 +800,7 @@ export default function DashboardPage() {
             </Card>
 
             {/* Orders by Status Pie Chart */}
-            <Card>
+            <Card className="border-2 border-[#B8860B]">
               <CardHeader>
                 <CardTitle>Répartition des commandes</CardTitle>
               </CardHeader>
@@ -851,7 +851,7 @@ export default function DashboardPage() {
           </div>
 
           {/* Article Sales Chart */}
-          <Card>
+          <Card className="border-2 border-[#B8860B]">
             <CardHeader>
               <CardTitle>Ventes par article (Top 10)</CardTitle>
             </CardHeader>
@@ -894,7 +894,7 @@ export default function DashboardPage() {
           </Card>
 
           {/* Graphique Benefices par mois */}
-          <Card>
+          <Card className="border-2 border-[#B8860B]">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <TrendingUp className="h-5 w-5 text-green-600" />
@@ -1052,7 +1052,7 @@ export default function DashboardPage() {
       {!isLivreur && !isCommercial && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Recent Orders */}
-          <Card>
+          <Card className="border-2 border-[#B8860B]">
             <CardHeader>
               <CardTitle>Dernières commandes</CardTitle>
             </CardHeader>
@@ -1087,7 +1087,7 @@ export default function DashboardPage() {
           </Card>
 
           {/* Recent Deliveries */}
-          <Card>
+          <Card className="border-2 border-[#B8860B]">
             <CardHeader>
               <CardTitle>Livraisons récentes</CardTitle>
             </CardHeader>
