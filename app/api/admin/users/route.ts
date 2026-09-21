@@ -1,17 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 
-// Create admin client with service role key
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  {
+// Lazy initialization to avoid build-time errors
+function getSupabaseAdmin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+  if (!url || !key) {
+    throw new Error('Missing Supabase admin credentials')
+  }
+
+  return createClient(url, key, {
     auth: {
       autoRefreshToken: false,
       persistSession: false
     }
-  }
-)
+  })
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -25,7 +30,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Create user in Supabase Auth using admin API
-    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
+    const { data: authData, error: authError } = await getSupabaseAdmin().auth.admin.createUser({
       email,
       password,
       email_confirm: true, // Auto-confirm email
@@ -50,7 +55,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Create user record in public.users table
-    const { error: userError } = await supabaseAdmin
+    const { error: userError } = await getSupabaseAdmin()
       .from('users')
       .upsert({
         id: authData.user.id,
@@ -101,7 +106,7 @@ export async function PATCH(request: NextRequest) {
     }
 
     // Update password using admin API
-    const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+    const { error } = await getSupabaseAdmin().auth.admin.updateUserById(userId, {
       password: newPassword
     })
 
@@ -138,19 +143,19 @@ export async function DELETE(request: NextRequest) {
 
     // First, remove references to this user in other tables
     // Set user references to NULL to avoid foreign key constraint errors
-    await supabaseAdmin.from('clients').update({ commercial_id: null }).eq('commercial_id', userId)
-    await supabaseAdmin.from('orders').update({ commercial_id: null }).eq('commercial_id', userId)
-    await supabaseAdmin.from('deliveries').update({ driver_id: null }).eq('driver_id', userId)
-    await supabaseAdmin.from('sales').update({ user_id: null }).eq('user_id', userId)
-    await supabaseAdmin.from('cash_register').update({ user_id: null }).eq('user_id', userId)
-    await supabaseAdmin.from('stock_movements').update({ user_id: null }).eq('user_id', userId)
-    await supabaseAdmin.from('purchase_orders').update({ user_id: null }).eq('user_id', userId)
-    await supabaseAdmin.from('receptions').update({ user_id: null }).eq('user_id', userId)
-    await supabaseAdmin.from('fiches_trajet').update({ driver_id: null }).eq('driver_id', userId)
-    await supabaseAdmin.from('delivery_rounds').update({ driver_id: null }).eq('driver_id', userId)
+    await getSupabaseAdmin().from('clients').update({ commercial_id: null }).eq('commercial_id', userId)
+    await getSupabaseAdmin().from('orders').update({ commercial_id: null }).eq('commercial_id', userId)
+    await getSupabaseAdmin().from('deliveries').update({ driver_id: null }).eq('driver_id', userId)
+    await getSupabaseAdmin().from('sales').update({ user_id: null }).eq('user_id', userId)
+    await getSupabaseAdmin().from('cash_register').update({ user_id: null }).eq('user_id', userId)
+    await getSupabaseAdmin().from('stock_movements').update({ user_id: null }).eq('user_id', userId)
+    await getSupabaseAdmin().from('purchase_orders').update({ user_id: null }).eq('user_id', userId)
+    await getSupabaseAdmin().from('receptions').update({ user_id: null }).eq('user_id', userId)
+    await getSupabaseAdmin().from('fiches_trajet').update({ driver_id: null }).eq('driver_id', userId)
+    await getSupabaseAdmin().from('delivery_rounds').update({ driver_id: null }).eq('driver_id', userId)
 
     // Delete from public.users first
-    const { error: userError } = await supabaseAdmin.from('users').delete().eq('id', userId)
+    const { error: userError } = await getSupabaseAdmin().from('users').delete().eq('id', userId)
 
     if (userError) {
       console.error('User delete error:', userError)
@@ -161,7 +166,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     // Delete from auth
-    const { error } = await supabaseAdmin.auth.admin.deleteUser(userId)
+    const { error } = await getSupabaseAdmin().auth.admin.deleteUser(userId)
 
     if (error) {
       console.error('Delete error:', error)

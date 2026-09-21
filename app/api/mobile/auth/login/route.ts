@@ -2,23 +2,33 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import type { Database } from '@/types/database'
 
-// Create Supabase client for auth operations
-const supabase = createClient<Database>(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+// Lazy initialization to avoid build-time errors
+function getSupabase() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
-// Admin client for profile lookup
-const supabaseAdmin = createClient<Database>(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  {
+  if (!url || !key) {
+    throw new Error('Missing Supabase credentials')
+  }
+
+  return createClient<Database>(url, key)
+}
+
+function getSupabaseAdmin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+  if (!url || !key) {
+    throw new Error('Missing Supabase admin credentials')
+  }
+
+  return createClient<Database>(url, key, {
     auth: {
       autoRefreshToken: false,
       persistSession: false
     }
-  }
-)
+  })
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -34,7 +44,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Attempt to sign in
-    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+    const { data: authData, error: authError } = await getSupabase().auth.signInWithPassword({
       email,
       password
     })
@@ -55,7 +65,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Get user profile with role
-    const { data: profile, error: profileError } = await supabaseAdmin
+    const { data: profile, error: profileError } = await getSupabaseAdmin()
       .from('users')
       .select(`
         id,

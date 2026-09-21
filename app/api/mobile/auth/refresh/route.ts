@@ -2,11 +2,17 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import type { Database } from '@/types/database'
 
-// Create Supabase client for auth operations
-const supabase = createClient<Database>(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+// Lazy initialization to avoid build-time errors
+function getSupabase() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+  if (!url || !key) {
+    throw new Error('Missing Supabase credentials')
+  }
+
+  return createClient<Database>(url, key)
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -22,7 +28,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Attempt to refresh the session
-    const { data: sessionData, error: refreshError } = await supabase.auth.refreshSession({
+    const { data: sessionData, error: refreshError } = await getSupabase().auth.refreshSession({
       refresh_token
     })
 
