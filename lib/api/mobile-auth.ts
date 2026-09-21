@@ -2,17 +2,22 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import type { Database } from '@/types/database'
 
-// Create admin client for server-side operations
-const supabaseAdmin = createClient<Database>(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  {
+// Lazy initialization to avoid build-time errors
+function getSupabaseAdmin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+  if (!url || !key) {
+    throw new Error('Missing Supabase admin credentials')
+  }
+
+  return createClient<Database>(url, key, {
     auth: {
       autoRefreshToken: false,
       persistSession: false
     }
-  }
-)
+  })
+}
 
 export interface MobileUser {
   id: string
@@ -59,7 +64,7 @@ export async function verifyMobileAuth(request: NextRequest): Promise<AuthResult
 
   try {
     // Verify the token and get user
-    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token)
+    const { data: { user }, error: authError } = await getSupabaseAdmin().auth.getUser(token)
 
     if (authError || !user) {
       return {
@@ -70,7 +75,7 @@ export async function verifyMobileAuth(request: NextRequest): Promise<AuthResult
     }
 
     // Get user profile with role
-    const { data: profile, error: profileError } = await supabaseAdmin
+    const { data: profile, error: profileError } = await getSupabaseAdmin()
       .from('users')
       .select(`
         id,
@@ -148,7 +153,7 @@ export async function verifyRoundOwnership(
   userId: string
 ): Promise<{ success: boolean; round?: any; error?: string }> {
   try {
-    const { data: round, error } = await supabaseAdmin
+    const { data: round, error } = await getSupabaseAdmin()
       .from('delivery_rounds')
       .select('*')
       .eq('id', roundId)
@@ -162,7 +167,7 @@ export async function verifyRoundOwnership(
     }
 
     // Admin can access all rounds
-    const { data: userProfile } = await supabaseAdmin
+    const { data: userProfile } = await getSupabaseAdmin()
       .from('users')
       .select('role:roles(name)')
       .eq('id', userId)
@@ -201,7 +206,7 @@ export async function verifyDeliveryAccess(
 ): Promise<{ success: boolean; delivery?: any; roundItem?: any; error?: string }> {
   try {
     // Get the delivery and its round association
-    const { data: roundItem, error: roundItemError } = await supabaseAdmin
+    const { data: roundItem, error: roundItemError } = await getSupabaseAdmin()
       .from('delivery_round_items')
       .select(`
         *,
@@ -213,7 +218,7 @@ export async function verifyDeliveryAccess(
 
     if (roundItemError || !roundItem) {
       // Check if delivery exists without round assignment
-      const { data: delivery, error: deliveryError } = await supabaseAdmin
+      const { data: delivery, error: deliveryError } = await getSupabaseAdmin()
         .from('deliveries')
         .select('*')
         .eq('id', deliveryId)
@@ -238,7 +243,7 @@ export async function verifyDeliveryAccess(
     }
 
     // Admin can access all deliveries
-    const { data: userProfile } = await supabaseAdmin
+    const { data: userProfile } = await getSupabaseAdmin()
       .from('users')
       .select('role:roles(name)')
       .eq('id', userId)
@@ -297,4 +302,4 @@ export function successResponse<T>(data: T, status: number = 200): NextResponse 
   )
 }
 
-export { supabaseAdmin }
+export { getSupabaseAdmin }

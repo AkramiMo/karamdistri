@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { verifyDriverAuth, supabaseAdmin, errorResponse, successResponse } from '@/lib/api/mobile-auth'
+import { verifyDriverAuth, getSupabaseAdmin, errorResponse, successResponse } from '@/lib/api/mobile-auth'
 
 export async function GET(request: NextRequest) {
   try {

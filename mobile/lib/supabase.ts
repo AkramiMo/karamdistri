@@ -65,14 +65,31 @@ const storageAdapter = createStorageAdapter()
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || ''
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || ''
 
-console.log('Supabase URL:', supabaseUrl ? 'Configured' : 'MISSING!')
-console.log('Supabase Key:', supabaseAnonKey ? 'Configured' : 'MISSING!')
+// Lazy initialization to avoid build-time errors
+let supabaseInstance: ReturnType<typeof createClient> | null = null
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    storage: storageAdapter,
-    autoRefreshToken: true,
-    persistSession: true,
-    detectSessionInUrl: false,
-  },
-})
+export function getSupabase() {
+  if (!supabaseInstance) {
+    if (!supabaseUrl || !supabaseAnonKey) {
+      console.warn('Supabase credentials not configured')
+      // Return a dummy client for build time
+      return null as any
+    }
+    supabaseInstance = createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        storage: storageAdapter,
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: false,
+      },
+    })
+  }
+  return supabaseInstance
+}
+
+// For backward compatibility
+export const supabase = {
+  get auth() { return getSupabase()?.auth },
+  get from() { return getSupabase()?.from.bind(getSupabase()) },
+  get storage() { return getSupabase()?.storage },
+}

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import {
   verifyDriverAuth,
   verifyRoundOwnership,
-  supabaseAdmin,
+  getSupabaseAdmin,
   errorResponse,
   successResponse
 } from '@/lib/api/mobile-auth'
