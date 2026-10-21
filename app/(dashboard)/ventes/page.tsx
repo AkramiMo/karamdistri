@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -20,7 +21,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog'
 import {
   Select,
@@ -30,11 +30,13 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Search, DollarSign, Eye, Trash2, Wallet, AlertTriangle, Calendar } from 'lucide-react'
+import { Plus, Search, DollarSign, Eye, Trash2, Wallet, AlertTriangle, Calendar, RefreshCw } from 'lucide-react'
 import { calculateMB, type DeliveryItemForMB } from '@/lib/sales'
 import { Checkbox } from '@/components/ui/checkbox'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
+import { ExportDropdown } from '@/components/export/ExportDropdown'
+import { exportVentesToExcel, appendVenteToExcel, initExcelFolderHandles, isVentesFolderReady, type SaleForExport } from '@/lib/excel'
 
 interface Sale {
   id: string
@@ -96,6 +98,7 @@ const paymentStatusLabels: Record<string, string> = {
 
 const paymentMethodLabels: Record<string, string> = {
   cash: 'Espèces',
+  cash_deposit: "Versement d'espèces",
   check: 'Chèque',
   transfer: 'Virement',
   card: 'Carte',
@@ -118,12 +121,23 @@ const deliveryStatusLabels: Record<string, string> = {
 }
 
 export default function VentesPage() {
+  const searchParams = useSearchParams()
+  const router = useRouter()
   const [sales, setSales] = useState<Sale[]>([])
   const [deliveries, setDeliveries] = useState<Delivery[]>([])
   const [clients, setClients] = useState<Client[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isNewOnlyMode, setIsNewOnlyMode] = useState(false)
+
+  // Ouvrir le dialog si ?action=new
+  useEffect(() => {
+    if (searchParams.get('action') === 'new') {
+      setIsDialogOpen(true)
+      setIsNewOnlyMode(true)
+    }
+  }, [searchParams])
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [viewingSale, setViewingSale] = useState<Sale | null>(null)
   const [saleDeliveries, setSaleDeliveries] = useState<SaleDelivery[]>([])
@@ -224,6 +238,7 @@ export default function VentesPage() {
     fetchSales()
     fetchDeliveries()
     fetchClients()
+    initExcelFolderHandles()
   }, [])
 
   // Generate unique sequential sale/invoice number from database
@@ -309,14 +324,16 @@ export default function VentesPage() {
     let balanceDue = total_ttc
     let paymentStatus = formData.payment_status
 
+    let deliveryNumber: string | null = null
     if (formData.delivery_id) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data: deliveryData } = await (supabase.from('deliveries') as any)
-        .select('amount_paid, balance_due, payment_status')
+        .select('delivery_number, amount_paid, balance_due, payment_status')
         .eq('id', formData.delivery_id)
         .single()
 
       if (deliveryData) {
+        deliveryNumber = deliveryData.delivery_number
         amountPaid = deliveryData.amount_paid || 0
         balanceDue = deliveryData.balance_due ?? total_ttc
         paymentStatus = deliveryData.payment_status || formData.payment_status
@@ -435,8 +452,32 @@ export default function VentesPage() {
     // Les paiements sont faits via le module Paiements ou lors des encaissements BL
 
     fetchSales()
-    setIsDialogOpen(false)
-    resetForm()
+
+    // Sauvegarde automatique dans le fichier Excel ventes
+    if (isVentesFolderReady() && saleData) {
+      const selectedClient = clients.find(c => c.id === formData.client_id)
+      const saleForExcel: SaleForExport = {
+        id: saleData.id,
+        sale_number: saleNumber,
+        sale_date: formData.sale_date,
+        total_ht,
+        total_ttc,
+        amount_paid: amountPaid,
+        balance_due: balanceDue,
+        mb: mbResult.mb,
+        payment_status: paymentStatus,
+        client: selectedClient ? { name: selectedClient.name, code: selectedClient.code } : undefined,
+        delivery: deliveryNumber ? { delivery_number: deliveryNumber } : undefined,
+      }
+      await appendVenteToExcel(saleForExcel)
+    }
+
+    if (isNewOnlyMode) {
+      handleCloseNewOnly()
+    } else {
+      setIsDialogOpen(false)
+      resetForm()
+    }
     setIsSubmitting(false)
   }
 
@@ -449,6 +490,10 @@ export default function VentesPage() {
       payment_method: 'cash',
       payment_status: 'paid',
     })
+  }
+
+  const handleCloseNewOnly = () => {
+    router.replace('/')
   }
 
   const fetchSaleDeliveries = async (sale: Sale) => {
@@ -562,6 +607,10 @@ export default function VentesPage() {
       return
     }
 
+    // Supprimer d'abord les articles_vendus liés à cette vente
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase.from('articles_vendus') as any).delete().eq('sale_id', saleId)
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error } = await (supabase.from('sales') as any).delete().eq('id', saleId)
 
@@ -575,6 +624,298 @@ export default function VentesPage() {
     }
   }
 
+  // Synchroniser les articles vendus pour une vente existante
+  const handleSyncArticlesVendus = async (sale: Sale) => {
+    // Vérifier si la vente a déjà des articles dans articles_vendus
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: existingAV } = await (supabase.from('articles_vendus') as any)
+      .select('id')
+      .eq('sale_id', sale.id)
+      .limit(1)
+
+    if (existingAV && existingAV.length > 0) {
+      if (!confirm(`Cette vente a déjà ${existingAV.length} article(s) synchronisé(s). Voulez-vous les resynchroniser ? (Les anciens seront supprimés)`)) {
+        return
+      }
+      // Supprimer les anciens
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase.from('articles_vendus') as any).delete().eq('sale_id', sale.id)
+    }
+
+    let articlesCount = 0
+
+    // Cas 1: Vente liée à un BL direct
+    if (sale.delivery_id) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: deliveryData } = await (supabase.from('deliveries') as any)
+        .select(`
+          id, delivery_number, delivery_date, client_id,
+          client:clients(code),
+          delivery_items(
+            article_id,
+            quantity_delivered,
+            quantity_returned,
+            article:articles(code)
+          )
+        `)
+        .eq('id', sale.delivery_id)
+        .single()
+
+      if (deliveryData && deliveryData.delivery_items) {
+        const articlesVendusData: any[] = []
+        for (const di of deliveryData.delivery_items) {
+          const qtySold = (di.quantity_delivered || 0) - (di.quantity_returned || 0)
+          if (qtySold > 0) {
+            articlesVendusData.push({
+              sale_id: sale.id,
+              sale_date: sale.sale_date,
+              sale_number: sale.sale_number,
+              article_id: di.article_id,
+              article_code: di.article?.code || '',
+              client_id: deliveryData.client_id,
+              client_code: deliveryData.client?.code || '',
+              quantity_sold: qtySold,
+              delivery_id: deliveryData.id,
+            })
+          }
+        }
+
+        if (articlesVendusData.length > 0) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { error: avError } = await (supabase.from('articles_vendus') as any).insert(articlesVendusData)
+          if (avError) {
+            console.error('Error inserting articles vendus:', avError)
+            alert(`Erreur: ${avError.message}`)
+            return
+          }
+          articlesCount = articlesVendusData.length
+        }
+      }
+    }
+    // Cas 2: Vente liée à un RBLT (plusieurs BL)
+    else if (sale.return_id) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: returnData } = await (supabase.from('delivery_returns') as any)
+        .select('round_id')
+        .eq('id', sale.return_id)
+        .single()
+
+      if (returnData?.round_id) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: roundItems } = await (supabase.from('delivery_round_items') as any)
+          .select(`
+            delivery:deliveries(
+              id, client_id,
+              client:clients(code),
+              delivery_items(
+                article_id,
+                quantity_delivered,
+                quantity_returned,
+                article:articles(code)
+              )
+            )
+          `)
+          .eq('round_id', returnData.round_id)
+
+        if (roundItems) {
+          const articlesVendusData: any[] = []
+          for (const ri of roundItems) {
+            const delivery = ri.delivery
+            if (!delivery?.delivery_items) continue
+            for (const di of delivery.delivery_items) {
+              const qtySold = (di.quantity_delivered || 0) - (di.quantity_returned || 0)
+              if (qtySold > 0) {
+                articlesVendusData.push({
+                  sale_id: sale.id,
+                  sale_date: sale.sale_date,
+                  sale_number: sale.sale_number,
+                  article_id: di.article_id,
+                  article_code: di.article?.code || '',
+                  client_id: delivery.client_id,
+                  client_code: delivery.client?.code || '',
+                  quantity_sold: qtySold,
+                  delivery_id: delivery.id,
+                })
+              }
+            }
+          }
+
+          if (articlesVendusData.length > 0) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const { error: avError } = await (supabase.from('articles_vendus') as any).insert(articlesVendusData)
+            if (avError) {
+              console.error('Error inserting articles vendus:', avError)
+              alert(`Erreur: ${avError.message}`)
+              return
+            }
+            articlesCount = articlesVendusData.length
+          }
+        }
+      }
+    }
+
+    if (articlesCount > 0) {
+      alert(`${articlesCount} article(s) synchronisé(s) avec succès !`)
+    } else {
+      alert('Aucun article à synchroniser (pas de BL lié ou BL sans articles)')
+    }
+  }
+
+  // Synchroniser TOUTES les ventes avec articles_vendus
+  const [isSyncingAll, setIsSyncingAll] = useState(false)
+
+  const handleSyncAllArticlesVendus = async () => {
+    if (!confirm(`Synchroniser les articles de toutes les ${sales.length} ventes ? Cela peut prendre un moment.`)) {
+      return
+    }
+
+    setIsSyncingAll(true)
+    let totalSynced = 0
+    let totalArticles = 0
+    let errors = 0
+
+    for (const sale of sales) {
+      // Vérifier si la vente a un BL ou RBLT
+      if (!sale.delivery_id && !sale.return_id) continue
+
+      // Vérifier si déjà synchronisé
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: existingAV } = await (supabase.from('articles_vendus') as any)
+        .select('id')
+        .eq('sale_id', sale.id)
+        .limit(1)
+
+      // Si déjà synchronisé, passer à la suivante
+      if (existingAV && existingAV.length > 0) continue
+
+      // Synchroniser cette vente
+      let articlesCount = 0
+
+      try {
+        // Cas 1: Vente liée à un BL direct
+        if (sale.delivery_id) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: deliveryData } = await (supabase.from('deliveries') as any)
+            .select(`
+              id, delivery_number, delivery_date, client_id,
+              client:clients(code),
+              delivery_items(
+                article_id,
+                quantity_delivered,
+                quantity_returned,
+                article:articles(code)
+              )
+            `)
+            .eq('id', sale.delivery_id)
+            .single()
+
+          if (deliveryData && deliveryData.delivery_items) {
+            const articlesVendusData: any[] = []
+            for (const di of deliveryData.delivery_items) {
+              const qtySold = (di.quantity_delivered || 0) - (di.quantity_returned || 0)
+              if (qtySold > 0) {
+                articlesVendusData.push({
+                  sale_id: sale.id,
+                  sale_date: sale.sale_date,
+                  sale_number: sale.sale_number,
+                  article_id: di.article_id,
+                  article_code: di.article?.code || '',
+                  client_id: deliveryData.client_id,
+                  client_code: deliveryData.client?.code || '',
+                  quantity_sold: qtySold,
+                  delivery_id: deliveryData.id,
+                })
+              }
+            }
+
+            if (articlesVendusData.length > 0) {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const { error: avError } = await (supabase.from('articles_vendus') as any).insert(articlesVendusData)
+              if (!avError) {
+                articlesCount = articlesVendusData.length
+              } else {
+                console.error(`Error syncing ${sale.sale_number}:`, avError)
+                errors++
+              }
+            }
+          }
+        }
+        // Cas 2: Vente liée à un RBLT
+        else if (sale.return_id) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: returnData } = await (supabase.from('delivery_returns') as any)
+            .select('round_id')
+            .eq('id', sale.return_id)
+            .single()
+
+          if (returnData?.round_id) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const { data: roundItems } = await (supabase.from('delivery_round_items') as any)
+              .select(`
+                delivery:deliveries(
+                  id, client_id,
+                  client:clients(code),
+                  delivery_items(
+                    article_id,
+                    quantity_delivered,
+                    quantity_returned,
+                    article:articles(code)
+                  )
+                )
+              `)
+              .eq('round_id', returnData.round_id)
+
+            if (roundItems) {
+              const articlesVendusData: any[] = []
+              for (const ri of roundItems) {
+                const delivery = ri.delivery
+                if (!delivery?.delivery_items) continue
+                for (const di of delivery.delivery_items) {
+                  const qtySold = (di.quantity_delivered || 0) - (di.quantity_returned || 0)
+                  if (qtySold > 0) {
+                    articlesVendusData.push({
+                      sale_id: sale.id,
+                      sale_date: sale.sale_date,
+                      sale_number: sale.sale_number,
+                      article_id: di.article_id,
+                      article_code: di.article?.code || '',
+                      client_id: delivery.client_id,
+                      client_code: delivery.client?.code || '',
+                      quantity_sold: qtySold,
+                      delivery_id: delivery.id,
+                    })
+                  }
+                }
+              }
+
+              if (articlesVendusData.length > 0) {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const { error: avError } = await (supabase.from('articles_vendus') as any).insert(articlesVendusData)
+                if (!avError) {
+                  articlesCount = articlesVendusData.length
+                } else {
+                  console.error(`Error syncing ${sale.sale_number}:`, avError)
+                  errors++
+                }
+              }
+            }
+          }
+        }
+
+        if (articlesCount > 0) {
+          totalSynced++
+          totalArticles += articlesCount
+        }
+      } catch (err) {
+        console.error(`Error syncing ${sale.sale_number}:`, err)
+        errors++
+      }
+    }
+
+    setIsSyncingAll(false)
+    alert(`Synchronisation terminée !\n\n${totalSynced} vente(s) synchronisée(s)\n${totalArticles} article(s) ajouté(s)\n${errors} erreur(s)`)
+  }
+
   const handleDeleteSelected = async () => {
     if (selectedSales.size === 0) {
       alert('Veuillez sélectionner au moins une vente')
@@ -586,6 +927,12 @@ export default function VentesPage() {
     }
 
     const idsToDelete = Array.from(selectedSales)
+
+    // Supprimer d'abord les articles_vendus liés à ces ventes
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase.from('articles_vendus') as any)
+      .delete()
+      .in('sale_id', idsToDelete)
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error } = await (supabase.from('sales') as any)
@@ -623,12 +970,65 @@ export default function VentesPage() {
   }
   const availableMonths = Array.from(new Set(monthsFromSales)).sort((a, b) => b.localeCompare(a)) // Sort descending (most recent first)
 
+  // Select all toggle
+  const toggleSelectAll = () => {
+    if (selectedSales.size === filteredSales.length) {
+      setSelectedSales(new Set())
+    } else {
+      setSelectedSales(new Set(filteredSales.map(s => s.id)))
+    }
+  }
+
+  // Export handlers
+  const handleExportAll = async () => {
+    const salesToExport: SaleForExport[] = filteredSales.map(sale => ({
+      id: sale.id,
+      sale_number: sale.sale_number,
+      sale_date: sale.sale_date,
+      total_ht: sale.total_ht,
+      total_ttc: sale.total_ttc,
+      amount_paid: sale.amount_paid,
+      balance_due: sale.balance_due,
+      mb: sale.mb,
+      payment_status: sale.payment_status,
+      rblt_number: sale.rblt_number,
+      client: sale.client,
+      delivery: sale.delivery,
+      return: sale.return,
+    }))
+    const result = await exportVentesToExcel(salesToExport)
+    if (result.success) {
+      alert(`${result.count} vente(s) exportée(s) vers ${result.filename}`)
+    }
+  }
+
+  const handleExportSelected = async () => {
+    const selectedSalesList = filteredSales.filter(s => selectedSales.has(s.id))
+    const salesToExport: SaleForExport[] = selectedSalesList.map(sale => ({
+      id: sale.id,
+      sale_number: sale.sale_number,
+      sale_date: sale.sale_date,
+      total_ht: sale.total_ht,
+      total_ttc: sale.total_ttc,
+      amount_paid: sale.amount_paid,
+      balance_due: sale.balance_due,
+      mb: sale.mb,
+      payment_status: sale.payment_status,
+      rblt_number: sale.rblt_number,
+      client: sale.client,
+      delivery: sale.delivery,
+      return: sale.return,
+    }))
+    const result = await exportVentesToExcel(salesToExport)
+    if (result.success) {
+      alert(`${result.count} vente(s) exportée(s) vers ${result.filename}`)
+    }
+  }
+
   const formatPrice = (price: number | null) => {
     if (price === null) return '-'
-    return new Intl.NumberFormat('fr-MA', {
-      style: 'currency',
-      currency: 'MAD',
-    }).format(price)
+    const formatted = price.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+    return `${formatted} MAD`
   }
 
   // Calculate stats
@@ -640,6 +1040,135 @@ export default function VentesPage() {
   const monthSales = sales.filter(s => s.sale_date.startsWith(thisMonth))
   const monthTotal = monthSales.reduce((sum, s) => sum + (s.total_ttc || 0), 0)
 
+  // Mode plein écran pour nouvelle vente via Actions
+  if (isNewOnlyMode) {
+    return (
+      <ProtectedModule module="ventes">
+        <div className="min-h-screen bg-gray-50 p-6">
+          <Card className="max-w-2xl mx-auto">
+            <CardHeader className="border-b bg-[#B8860B] text-white rounded-t-lg">
+              <CardTitle className="text-xl flex items-center gap-2">
+                <DollarSign className="h-5 w-5" />
+                Nouvelle vente
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-6">
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Bon de livraison (optionnel)</Label>
+                  <Select
+                    value={formData.delivery_id}
+                    onValueChange={handleDeliverySelect}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Sélectionner un BL" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {deliveries.map((delivery) => (
+                        <SelectItem key={delivery.id} value={delivery.id}>
+                          {delivery.delivery_number} - {delivery.client?.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Client *</Label>
+                  <Select
+                    value={formData.client_id}
+                    onValueChange={(value) => setFormData({ ...formData, client_id: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Sélectionner un client" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {clients.map((client) => (
+                        <SelectItem key={client.id} value={client.id}>
+                          {client.code} - {client.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="sale_date">Date de vente</Label>
+                    <Input
+                      id="sale_date"
+                      type="date"
+                      value={formData.sale_date}
+                      onChange={(e) => setFormData({ ...formData, sale_date: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="total_ht">Recette HT (Somme BL sans TVA) *</Label>
+                    <Input
+                      id="total_ht"
+                      type="number"
+                      step="0.01"
+                      value={formData.total_ht}
+                      onChange={(e) => setFormData({ ...formData, total_ht: e.target.value })}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Mode de paiement</Label>
+                    <Select
+                      value={formData.payment_method}
+                      onValueChange={(value) => setFormData({ ...formData, payment_method: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="cash">Espèces</SelectItem>
+                        <SelectItem value="check">Chèque</SelectItem>
+                        <SelectItem value="transfer">Virement</SelectItem>
+                        <SelectItem value="card">Carte</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Statut paiement</Label>
+                    <Select
+                      value={formData.payment_status}
+                      onValueChange={(value) => setFormData({ ...formData, payment_status: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="pending">Non réglée</SelectItem>
+                        <SelectItem value="paid">Réglée</SelectItem>
+                        <SelectItem value="partial">Partiellement réglée</SelectItem>
+                        <SelectItem value="returned">Retour</SelectItem>
+                        <SelectItem value="cancelled">Annulée</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-4">
+                  <Button type="button" variant="outline" onClick={handleCloseNewOnly} disabled={isSubmitting}>
+                    Annuler
+                  </Button>
+                  <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]" disabled={isSubmitting}>
+                    {isSubmitting ? 'Création en cours...' : 'Créer la vente'}
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+      </ProtectedModule>
+    )
+  }
+
   return (
     <ProtectedModule module="ventes">
       <div className="space-y-6">
@@ -649,20 +1178,26 @@ export default function VentesPage() {
             <p className="text-gray-500">Gérez vos ventes et encaissements</p>
           </div>
 
-          <ProtectedModule module="ventes" action="create">
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-              <DialogTrigger asChild>
-                <Button
-                  className="bg-[#B8860B] hover:bg-[#9A7209]"
-                  onClick={() => {
-                    resetForm()
-                    setIsDialogOpen(true)
-                  }}
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Nouvelle vente
-                </Button>
-              </DialogTrigger>
+          <div className="flex items-center gap-2">
+            <ExportDropdown
+              totalCount={filteredSales.length}
+              selectedCount={selectedSales.size}
+              onExportAll={handleExportAll}
+              onExportSelected={handleExportSelected}
+            />
+            <Button
+              variant="outline"
+              className="border-blue-500 text-blue-600 hover:bg-blue-50"
+              onClick={handleSyncAllArticlesVendus}
+              disabled={isSyncingAll}
+            >
+              <RefreshCw className={`mr-2 h-4 w-4 ${isSyncingAll ? 'animate-spin' : ''}`} />
+              {isSyncingAll ? 'Synchronisation...' : 'Sync. articles vendus'}
+            </Button>
+            <Dialog open={isDialogOpen} onOpenChange={(open) => {
+              if (open) resetForm()
+              setIsDialogOpen(open)
+            }}>
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Nouvelle vente</DialogTitle>
@@ -777,8 +1312,8 @@ export default function VentesPage() {
                 </div>
               </form>
             </DialogContent>
-            </Dialog>
-          </ProtectedModule>
+              </Dialog>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -872,6 +1407,12 @@ export default function VentesPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-[40px]">
+                      <Checkbox
+                        checked={filteredSales.length > 0 && selectedSales.size === filteredSales.length}
+                        onCheckedChange={toggleSelectAll}
+                      />
+                    </TableHead>
                     <TableHead>Date</TableHead>
                     <TableHead>N° Vente</TableHead>
                     <TableHead>Code Client</TableHead>
@@ -889,6 +1430,12 @@ export default function VentesPage() {
                 <TableBody>
                   {filteredSales.map((sale) => (
                     <TableRow key={sale.id}>
+                      <TableCell>
+                        <Checkbox
+                          checked={selectedSales.has(sale.id)}
+                          onCheckedChange={() => toggleSaleSelection(sale.id)}
+                        />
+                      </TableCell>
                       <TableCell>
                         {format(new Date(sale.sale_date), 'dd/MM/yyyy', { locale: fr })}
                       </TableCell>
@@ -922,6 +1469,14 @@ export default function VentesPage() {
                             title="Voir détails"
                           >
                             <Eye className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleSyncArticlesVendus(sale)}
+                            title="Synchroniser articles vendus"
+                          >
+                            <RefreshCw className="h-4 w-4 text-blue-600" />
                           </Button>
                           <Button
                             variant="ghost"

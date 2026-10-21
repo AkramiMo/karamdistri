@@ -202,10 +202,8 @@ export default function RoundDetailScreen() {
   }
 
   const formatPrice = (amount: number) => {
-    return new Intl.NumberFormat('fr-MA', {
-      style: 'currency',
-      currency: 'MAD',
-    }).format(amount)
+    const formatted = amount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+    return `${formatted} MAD`
   }
 
   const renderDeliveryItem = ({ item, index }: { item: DeliveryInRound; index: number }) => {

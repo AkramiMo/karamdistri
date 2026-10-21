@@ -44,6 +44,12 @@ interface FactureRow {
   client?: { name: string; code: string }
 }
 
+interface ClientOption {
+  id: string
+  name: string
+  code: string
+}
+
 interface Payment {
   id: string
   payment_number: string
@@ -57,6 +63,7 @@ interface Payment {
 
 const paymentMethodLabels: Record<string, string> = {
   cash: 'Espèces',
+  cash_deposit: "Versement d'espèces",
   check: 'Chèque',
   transfer: 'Virement',
   card: 'Carte',
@@ -65,8 +72,11 @@ const paymentMethodLabels: Record<string, string> = {
 export default function SuiviPaiementsPage() {
   const [factures, setFactures] = useState<FactureRow[]>([])
   const [paymentsMap, setPaymentsMap] = useState<Record<string, number>>({})
+  const [clients, setClients] = useState<ClientOption[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
+  const [clientFilter, setClientFilter] = useState<string>('all')
+  const [statusFilter, setStatusFilter] = useState<string>('all')
   const [isPayDialogOpen, setIsPayDialogOpen] = useState(false)
   const [isHistoryDialogOpen, setIsHistoryDialogOpen] = useState(false)
   const [selectedFacture, setSelectedFacture] = useState<FactureRow | null>(null)
@@ -91,6 +101,15 @@ export default function SuiviPaiementsPage() {
       .order('facture_date', { ascending: false }) as any)
 
     setFactures(facturesData || [])
+
+    // Fetch clients for filter
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: clientsData } = await (supabase
+      .from('clients')
+      .select('id, name, code')
+      .order('name') as any)
+
+    setClients(clientsData || [])
 
     // Fetch sum of payments per facture
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -148,10 +167,8 @@ export default function SuiviPaiementsPage() {
 
   const formatPrice = (price: number | null) => {
     if (price === null || price === undefined) return '-'
-    return new Intl.NumberFormat('fr-MA', {
-      style: 'currency',
-      currency: 'MAD',
-    }).format(price)
+    const formatted = price.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+    return `${formatted} MAD`
   }
 
   const handleOpenPay = (facture: FactureRow) => {
@@ -213,15 +230,7 @@ export default function SuiviPaiementsPage() {
       await (supabase.from('factures') as any).update({ status: newStatus }).eq('id', selectedFacture.id)
     }
 
-    // Ajouter à la caisse
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (supabase.from('cash_register') as any).insert([{
-      operation_type: 'in',
-      category: 'vente',
-      amount,
-      reference: selectedFacture.facture_number,
-      transaction_date: payForm.payment_date,
-    }])
+    // Note: L'ajout en caisse est géré automatiquement par le trigger 'trigger_sync_payment_to_cash'
 
     setIsPayDialogOpen(false)
     fetchData()
@@ -239,18 +248,47 @@ export default function SuiviPaiementsPage() {
     setIsHistoryDialogOpen(true)
   }
 
-  const filteredFactures = factures.filter(
-    (f) =>
+  const filteredFactures = factures.filter((f) => {
+    // Filtre par recherche texte
+    const matchesSearch =
       f.facture_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
       f.client?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       f.client?.code?.toLowerCase().includes(searchTerm.toLowerCase())
-  )
 
-  // Stats
-  const totalTTC = factures.reduce((sum, f) => sum + (f.total_ttc || 0), 0)
-  const totalPaye = factures.reduce((sum, f) => sum + getPaye(f.id), 0)
+    // Filtre par client
+    const matchesClient = clientFilter === 'all' || f.client_id === clientFilter
+
+    // Filtre par statut
+    let matchesStatus = true
+    if (statusFilter !== 'all') {
+      const status = getPaymentStatus(f)
+      switch (statusFilter) {
+        case 'unpaid':
+          matchesStatus = status.label === 'Non payée'
+          break
+        case 'partial':
+          matchesStatus = status.label === 'Partielle' || status.label === 'Partielle / Retard'
+          break
+        case 'paid':
+          matchesStatus = status.label === 'Payée'
+          break
+        case 'overdue':
+          matchesStatus = status.label.includes('Retard')
+          break
+        case 'cancelled':
+          matchesStatus = status.label === 'Annulée'
+          break
+      }
+    }
+
+    return matchesSearch && matchesClient && matchesStatus
+  })
+
+  // Stats (basées sur les factures filtrées)
+  const totalTTC = filteredFactures.reduce((sum, f) => sum + (f.total_ttc || 0), 0)
+  const totalPaye = filteredFactures.reduce((sum, f) => sum + getPaye(f.id), 0)
   const totalReste = Math.round((totalTTC - totalPaye) * 100) / 100
-  const overdueCount = factures.filter(f => {
+  const overdueCount = filteredFactures.filter(f => {
     const status = getPaymentStatus(f)
     return status.label.includes('Retard')
   }).length
@@ -309,8 +347,8 @@ export default function SuiviPaiementsPage() {
         {/* Table */}
         <Card>
           <CardHeader>
-            <div className="flex items-center gap-4">
-              <div className="relative flex-1">
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="relative flex-1 min-w-[200px]">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <Input
                   placeholder="Rechercher par n° facture, client..."
@@ -319,6 +357,32 @@ export default function SuiviPaiementsPage() {
                   className="pl-10"
                 />
               </div>
+              <Select value={clientFilter} onValueChange={setClientFilter}>
+                <SelectTrigger className="w-[200px]">
+                  <SelectValue placeholder="Tous les clients" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Tous les clients</SelectItem>
+                  {clients.map((client) => (
+                    <SelectItem key={client.id} value={client.id}>
+                      {client.code} - {client.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-[180px]">
+                  <SelectValue placeholder="Tous les statuts" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Tous les statuts</SelectItem>
+                  <SelectItem value="unpaid">Non payée</SelectItem>
+                  <SelectItem value="partial">Partielle</SelectItem>
+                  <SelectItem value="paid">Payée</SelectItem>
+                  <SelectItem value="overdue">En retard</SelectItem>
+                  <SelectItem value="cancelled">Annulée</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </CardHeader>
           <CardContent>

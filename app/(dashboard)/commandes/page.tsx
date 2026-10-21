@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
 import { Button } from '@/components/ui/button'
@@ -44,13 +44,14 @@ import {
 } from '@/components/ui/popover'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Search, Eye, ShoppingCart, Trash2, FileText, Truck, Download, Users, Package, Check, ChevronsUpDown, Pencil, AlertCircle, X } from 'lucide-react'
-import { format } from 'date-fns'
+import { Plus, Search, Eye, ShoppingCart, Trash2, FileText, Truck, Download, Users, Package, Check, ChevronsUpDown, Pencil, AlertCircle, X, Maximize2, Minimize2 } from 'lucide-react'
+import { format, startOfMonth, endOfMonth, subMonths } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { generateInvoicePDF, generateDeliveryNotePDF } from '@/lib/pdf/invoice'
 import { useCompanySettings } from '@/hooks/useCompanySettings'
 import { useAuth } from '@/hooks/useAuth'
 import { cn } from '@/lib/utils'
+import { appendCommandeToExcel, initExcelFolderHandles, isCommandesFolderReady, type OrderForExport } from '@/lib/excel'
 
 // Helper pour accepter "." et "," comme séparateurs décimaux
 const parseDecimalInput = (value: string): number => {
@@ -202,6 +203,7 @@ interface StockByLot {
 }
 
 export default function CommandesPage() {
+  const searchParams = useSearchParams()
   const [orders, setOrders] = useState<Order[]>([])
   const [clients, setClients] = useState<Client[]>([])
   const [articles, setArticles] = useState<Article[]>([])
@@ -213,7 +215,15 @@ export default function CommandesPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
+  const [monthFilter, setMonthFilter] = useState<string>('all')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+
+  // Ouvrir le dialog si ?action=new
+  useEffect(() => {
+    if (searchParams.get('action') === 'new') {
+      setIsDialogOpen(true)
+    }
+  }, [searchParams])
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [viewingOrder, setViewingOrder] = useState<Order | null>(null)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
@@ -241,6 +251,8 @@ export default function CommandesPage() {
   const [selectedArticle, setSelectedArticle] = useState('')
   const [selectedQuantity, setSelectedQuantity] = useState('1')
   const [selectedLot, setSelectedLot] = useState('')
+  const [articleFilter, setArticleFilter] = useState('')
+  const [isFullscreen, setIsFullscreen] = useState(false)
 
   // Source de prix
   const [priceSource, setPriceSource] = useState<PriceSource>('catalogue')
@@ -252,6 +264,57 @@ export default function CommandesPage() {
   // Combobox open states
   const [clientOpen, setClientOpen] = useState(false)
   const [articleOpen, setArticleOpen] = useState(false)
+
+  // Brouillon de commande - Sauvegarde automatique
+  const DRAFT_KEY = 'karam_order_draft'
+
+  // Sauvegarder le brouillon automatiquement
+  useEffect(() => {
+    if (isDialogOpen && (formData.client_id || orderItems.length > 0 || formData.notes)) {
+      const draft = {
+        formData,
+        orderItems,
+        priceSource,
+        selectedDDC,
+        timestamp: Date.now()
+      }
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(draft))
+    }
+  }, [formData, orderItems, priceSource, selectedDDC, isDialogOpen])
+
+  // Charger le brouillon au démarrage
+  useEffect(() => {
+    const savedDraft = localStorage.getItem(DRAFT_KEY)
+    if (savedDraft) {
+      try {
+        const draft = JSON.parse(savedDraft)
+        // Vérifier si le brouillon a moins de 24h
+        if (Date.now() - draft.timestamp < 24 * 60 * 60 * 1000) {
+          if (draft.formData?.client_id || draft.orderItems?.length > 0) {
+            const restore = confirm('Un brouillon de commande a été trouvé. Voulez-vous le restaurer ?')
+            if (restore) {
+              setFormData(draft.formData || { client_id: '', order_date: new Date().toISOString().split('T')[0], notes: '' })
+              setOrderItems(draft.orderItems || [])
+              setPriceSource(draft.priceSource || 'catalogue')
+              setSelectedDDC(draft.selectedDDC || '')
+              setIsDialogOpen(true)
+            } else {
+              localStorage.removeItem(DRAFT_KEY)
+            }
+          }
+        } else {
+          localStorage.removeItem(DRAFT_KEY)
+        }
+      } catch (e) {
+        localStorage.removeItem(DRAFT_KEY)
+      }
+    }
+  }, [])
+
+  // Supprimer le brouillon après création réussie
+  const clearDraft = () => {
+    localStorage.removeItem(DRAFT_KEY)
+  }
 
   // Edit dialog combobox states
   const [editClientOpen, setEditClientOpen] = useState(false)
@@ -364,7 +427,7 @@ export default function CommandesPage() {
     const { data } = await (supabase.from('client_quote_requests') as any)
       .select('id, ddc_number, request_date, status, total_ht')
       .eq('client_id', clientId)
-      .eq('status', 'accepted') // Only validated DDCs
+      .in('status', ['accepted', 'current', 'validated']) // DDCs validés ou courants
       .order('request_date', { ascending: false })
     setClientDDCs(data || [])
   }
@@ -416,6 +479,7 @@ export default function CommandesPage() {
     fetchArticles()
     fetchLots()
     fetchStockByLot()
+    initExcelFolderHandles()
   }, [])
 
   // Fetch client prices and DDCs when client changes
@@ -636,9 +700,24 @@ export default function CommandesPage() {
         return
       }
 
+      // Sauvegarder dans Excel si le dossier est configuré
+      if (isCommandesFolderReady()) {
+        const client = clients.find(c => c.id === formData.client_id)
+        const orderForExport: OrderForExport = {
+          id: orderData.id,
+          order_number: orderNumber,
+          order_date: formData.order_date,
+          status: 'confirmed',
+          total_ht: orderItems.reduce((sum, item) => sum + item.total_ht, 0),
+          client: client ? { code: client.code, name: client.name } : undefined
+        }
+        await appendCommandeToExcel(orderForExport)
+      }
+
       await fetchOrders()
       setIsDialogOpen(false)
       resetForm()
+      clearDraft() // Supprimer le brouillon après création réussie
       setIsSubmitting(false)
     } catch (error: any) {
       console.error('Unexpected error:', error)
@@ -1081,8 +1160,33 @@ export default function CommandesPage() {
 
     const matchesStatus = statusFilter === 'all' || order.status === statusFilter
 
-    return matchesSearch && matchesStatus
+    // Filtre par mois
+    let matchesMonth = true
+    if (monthFilter !== 'all') {
+      const orderDate = new Date(order.order_date)
+      const [year, month] = monthFilter.split('-').map(Number)
+      const filterStart = new Date(year, month - 1, 1)
+      const filterEnd = endOfMonth(filterStart)
+      matchesMonth = orderDate >= filterStart && orderDate <= filterEnd
+    }
+
+    return matchesSearch && matchesStatus && matchesMonth
   })
+
+  // Générer les options de mois (12 derniers mois)
+  const getMonthOptions = () => {
+    const options = []
+    const today = new Date()
+    for (let i = 0; i < 12; i++) {
+      const date = subMonths(today, i)
+      const value = format(date, 'yyyy-MM')
+      const label = format(date, 'MMMM yyyy', { locale: fr })
+      options.push({ value, label: label.charAt(0).toUpperCase() + label.slice(1) })
+    }
+    return options
+  }
+
+  const monthOptions = getMonthOptions()
 
   const formatPrice = (price: number) => {
     return new Intl.NumberFormat('fr-MA', {
@@ -1091,31 +1195,38 @@ export default function CommandesPage() {
     }).format(price || 0)
   }
 
-  return (
-    <ProtectedModule module="commandes">
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Commandes</h1>
-            <p className="text-gray-500">Gerez vos commandes clients</p>
-          </div>
+  // Si on vient de ?action=new, afficher seulement le dialogue
+  const isFromAction = searchParams.get('action') === 'new'
 
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button
-                className="bg-[#B8860B] hover:bg-[#9A7209]"
-                onClick={() => {
-                  resetForm()
-                  setIsDialogOpen(true)
-                }}
-              >
-                <Plus className="mr-2 h-4 w-4" />
-                Nouvelle commande
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-              <DialogHeader>
+  if (isFromAction && isDialogOpen) {
+    return (
+      <ProtectedModule module="commandes">
+        <Dialog open={isDialogOpen} onOpenChange={(open) => {
+          setIsDialogOpen(open)
+          if (!open) {
+            // Retirer ?action=new de l'URL quand on ferme
+            window.history.replaceState({}, '', '/commandes')
+          }
+        }}>
+            <DialogContent
+              className={cn(
+                "overflow-y-auto transition-all duration-200",
+                isFullscreen
+                  ? "!max-w-[98vw] !max-h-[98vh] !w-[98vw] !h-[98vh]"
+                  : "max-w-4xl max-h-[90vh]"
+              )}
+              resizable={!isFullscreen}
+            >
+              <DialogHeader className="flex flex-row items-center justify-between">
                 <DialogTitle>Nouvelle commande</DialogTitle>
+                <button
+                  type="button"
+                  onClick={() => setIsFullscreen(!isFullscreen)}
+                  className="p-1 hover:bg-gray-100 rounded mr-8"
+                  title={isFullscreen ? "Réduire" : "Plein écran"}
+                >
+                  {isFullscreen ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
+                </button>
               </DialogHeader>
 
               {/* Message d'erreur */}
@@ -1140,50 +1251,23 @@ export default function CommandesPage() {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Client *</Label>
-                    <Popover open={clientOpen} onOpenChange={setClientOpen}>
-                      <PopoverTrigger asChild>
-                        <Button
-                          variant="outline"
-                          role="combobox"
-                          aria-expanded={clientOpen}
-                          className="w-full justify-between bg-[#F5E6C8]"
-                        >
-                          {formData.client_id
-                            ? clients.find((c) => c.id === formData.client_id)?.name || "Client selectionne"
-                            : "Rechercher un client..."}
-                          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-[400px] p-0" align="start">
-                        <Command>
-                          <CommandInput placeholder="Rechercher par nom ou code..." />
-                          <CommandList>
-                            <CommandEmpty>Aucun client trouve.</CommandEmpty>
-                            <CommandGroup>
-                              {clients.map((client) => (
-                                <CommandItem
-                                  key={client.id}
-                                  value={`${client.code} ${client.name}`}
-                                  onSelect={() => {
-                                    setFormData({ ...formData, client_id: client.id })
-                                    setClientOpen(false)
-                                  }}
-                                >
-                                  <Check
-                                    className={cn(
-                                      "mr-2 h-4 w-4",
-                                      formData.client_id === client.id ? "opacity-100" : "opacity-0"
-                                    )}
-                                  />
-                                  <span className="font-medium">{client.code}</span>
-                                  <span className="ml-2 text-gray-600">{client.name}</span>
-                                </CommandItem>
-                              ))}
-                            </CommandGroup>
-                          </CommandList>
-                        </Command>
-                      </PopoverContent>
-                    </Popover>
+                    <Select
+                      value={formData.client_id}
+                      onValueChange={(value) => {
+                        setFormData({ ...formData, client_id: value })
+                      }}
+                    >
+                      <SelectTrigger className="w-full bg-[#F5E6C8]">
+                        <SelectValue placeholder="Sélectionner un client..." />
+                      </SelectTrigger>
+                      <SelectContent className="max-h-[300px]">
+                        {clients.map((client) => (
+                          <SelectItem key={client.id} value={client.id}>
+                            {client.code} - {client.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="order_date">Date de commande</Label>
@@ -1232,7 +1316,7 @@ export default function CommandesPage() {
                           variant={priceSource === 'ddc' ? 'default' : 'outline'}
                           size="sm"
                           onClick={() => setPriceSource('ddc')}
-                          className={priceSource === 'ddc' ? 'bg-blue-600 hover:bg-blue-700' : ''}
+                          className={priceSource === 'ddc' ? 'bg-[#B8860B] hover:bg-[#9A7209]' : ''}
                           disabled={clientDDCs.length === 0}
                         >
                           DDC {clientDDCs.length > 0 && `(${clientDDCs.length})`}
@@ -1319,66 +1403,59 @@ export default function CommandesPage() {
                       </Badge>
                     )}
                   </h3>
-                  <div className="flex gap-2 mb-4 flex-wrap">
-                    <Popover open={articleOpen} onOpenChange={setArticleOpen}>
-                      <PopoverTrigger asChild>
-                        <Button
-                          variant="outline"
-                          role="combobox"
-                          aria-expanded={articleOpen}
-                          className="flex-1 min-w-[200px] justify-between bg-[#F5E6C8]"
-                        >
-                          {selectedArticle
-                            ? (() => {
-                                const article = articles.find((a) => a.id === selectedArticle)
-                                if (!article) return "Article selectionne"
-                                return `${article.code} - ${article.name}`
-                              })()
-                            : "Rechercher un article..."}
-                          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-[500px] p-0" align="start">
-                        <Command>
-                          <CommandInput placeholder="Rechercher par code ou nom..." />
-                          <CommandList>
-                            <CommandEmpty>Aucun article trouve.</CommandEmpty>
-                            <CommandGroup>
-                              {articles.map((article) => {
-                                const articleStock = getLotsWithStockForArticle(article.id)
-                                const totalStock = articleStock.reduce((sum, s) => sum + s.quantity, 0)
-                                return (
-                                  <CommandItem
-                                    key={article.id}
-                                    value={`${article.code} ${article.name}`}
-                                    onSelect={() => {
-                                      setSelectedArticle(article.id)
-                                      setSelectedLot('') // Reset lot selection when article changes
-                                      setArticleOpen(false)
-                                    }}
-                                  >
-                                    <Check
-                                      className={cn(
-                                        "mr-2 h-4 w-4",
-                                        selectedArticle === article.id ? "opacity-100" : "opacity-0"
-                                      )}
-                                    />
-                                    <span className="font-medium">{article.code}</span>
-                                    <span className="ml-2 text-gray-600 flex-1">{article.name}</span>
-                                    <span className={cn(
-                                      "ml-2 text-xs px-2 py-0.5 rounded-full",
-                                      totalStock > 0 ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
-                                    )}>
-                                      {totalStock > 0 ? `${totalStock} dispo` : 'Rupture'}
-                                    </span>
-                                  </CommandItem>
-                                )
-                              })}
-                            </CommandGroup>
-                          </CommandList>
-                        </Command>
-                      </PopoverContent>
-                    </Popover>
+                  <div className="flex gap-2 mb-4 flex-wrap items-end">
+                    <div className="flex-1 min-w-[300px]">
+                      <Input
+                        placeholder="Rechercher un article (code ou nom)..."
+                        value={articleFilter}
+                        onChange={(e) => setArticleFilter(e.target.value)}
+                        className="bg-[#F5E6C8]"
+                      />
+                      {/* Liste des articles toujours visible */}
+                      <div className="mt-2 bg-white border rounded-md shadow-sm max-h-[200px] overflow-y-auto">
+                        {articles
+                          .filter((article) =>
+                            !articleFilter ||
+                            article.code.toLowerCase().includes(articleFilter.toLowerCase()) ||
+                            article.name.toLowerCase().includes(articleFilter.toLowerCase())
+                          )
+                          .map((article) => {
+                            const totalStock = getLotsWithStockForArticle(article.id).reduce((sum, s) => sum + s.quantity, 0)
+                            const isSelected = selectedArticle === article.id
+                            return (
+                              <div
+                                key={article.id}
+                                className={cn(
+                                  "px-3 py-2 cursor-pointer border-b last:border-b-0 flex justify-between items-center",
+                                  isSelected ? "bg-amber-100 border-l-4 border-l-[#B8860B]" : "hover:bg-amber-50"
+                                )}
+                                onClick={() => {
+                                  setSelectedArticle(article.id)
+                                  setSelectedLot('')
+                                }}
+                              >
+                                <span>
+                                  <span className="font-mono font-medium text-[#B8860B]">{article.code}</span>
+                                  <span className="ml-2">{article.name}</span>
+                                </span>
+                                <span className={cn(
+                                  "text-xs px-2 py-0.5 rounded-full",
+                                  totalStock > 0 ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                                )}>
+                                  {totalStock > 0 ? `${totalStock} dispo` : 'Rupture'}
+                                </span>
+                              </div>
+                            )
+                          })}
+                        {articles.filter((article) =>
+                          !articleFilter ||
+                          article.code.toLowerCase().includes(articleFilter.toLowerCase()) ||
+                          article.name.toLowerCase().includes(articleFilter.toLowerCase())
+                        ).length === 0 && (
+                          <div className="px-3 py-2 text-gray-500 text-sm">Aucun article trouvé</div>
+                        )}
+                      </div>
+                    </div>
                     <Select
                       value={selectedLot || 'none'}
                       onValueChange={(value) => setSelectedLot(value === 'none' ? '' : value)}
@@ -1535,7 +1612,442 @@ export default function CommandesPage() {
                 </div>
               </form>
             </DialogContent>
+        </Dialog>
+      </ProtectedModule>
+    )
+  }
+
+  return (
+    <ProtectedModule module="commandes">
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Commandes</h1>
+            <p className="text-gray-500">Gerez vos commandes clients</p>
+          </div>
+
+          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+            <DialogContent
+              className={cn(
+                "overflow-y-auto transition-all duration-200",
+                isFullscreen
+                  ? "!max-w-[98vw] !max-h-[98vh] !w-[98vw] !h-[98vh]"
+                  : "max-w-4xl max-h-[90vh]"
+              )}
+              resizable={!isFullscreen}
+            >
+              <DialogHeader className="flex flex-row items-center justify-between">
+                <DialogTitle>Nouvelle commande</DialogTitle>
+                <button
+                  type="button"
+                  onClick={() => setIsFullscreen(!isFullscreen)}
+                  className="p-1 hover:bg-gray-100 rounded mr-8"
+                  title={isFullscreen ? "Réduire" : "Plein écran"}
+                >
+                  {isFullscreen ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
+                </button>
+              </DialogHeader>
+
+              {/* Message d'erreur */}
+              {errorMessage && (
+                <div className="bg-red-50 border-2 border-red-400 rounded-lg p-4 flex items-start gap-3">
+                  <AlertCircle className="h-5 w-5 text-red-600 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <h4 className="font-semibold text-red-800">Erreur de création</h4>
+                    <p className="text-red-700 text-sm mt-1">{errorMessage}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setErrorMessage(null)}
+                    className="text-red-600 hover:text-red-800"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+              )}
+
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Client *</Label>
+                    <Select
+                      value={formData.client_id}
+                      onValueChange={(value) => {
+                        setFormData({ ...formData, client_id: value })
+                      }}
+                    >
+                      <SelectTrigger className="w-full bg-[#F5E6C8]">
+                        <SelectValue placeholder="Sélectionner un client..." />
+                      </SelectTrigger>
+                      <SelectContent className="max-h-[300px]">
+                        {clients.map((client) => (
+                          <SelectItem key={client.id} value={client.id}>
+                            {client.code} - {client.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="order_date">Date de commande</Label>
+                    <Input
+                      id="order_date"
+                      type="date"
+                      value={formData.order_date}
+                      onChange={(e) => setFormData({ ...formData, order_date: e.target.value })}
+                      className="bg-[#F5E6C8]"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="notes">Notes</Label>
+                  <Input
+                    id="notes"
+                    value={formData.notes}
+                    onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                    placeholder="Notes sur la commande"
+                    className="bg-[#F5E6C8]"
+                  />
+                </div>
+
+                {/* Source de prix */}
+                {formData.client_id && (
+                  <div className="border-t pt-4 space-y-4">
+                    <div className="flex items-center gap-4">
+                      <Label className="font-medium">Source de prix :</Label>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          variant={priceSource === 'catalogue' ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() => {
+                            setPriceSource('catalogue')
+                            setSelectedDDC('')
+                            setDdcItems([])
+                          }}
+                          className={priceSource === 'catalogue' ? 'bg-[#B8860B] hover:bg-[#9A7209]' : ''}
+                        >
+                          Catalogue
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={priceSource === 'ddc' ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() => setPriceSource('ddc')}
+                          className={priceSource === 'ddc' ? 'bg-[#B8860B] hover:bg-[#9A7209]' : ''}
+                          disabled={clientDDCs.length === 0}
+                        >
+                          DDC {clientDDCs.length > 0 && `(${clientDDCs.length})`}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={priceSource === 'libre' ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() => {
+                            setPriceSource('libre')
+                            setSelectedDDC('')
+                            setDdcItems([])
+                          }}
+                          className={priceSource === 'libre' ? 'bg-green-600 hover:bg-green-700' : ''}
+                        >
+                          Saisie libre
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* DDC Selector */}
+                    {priceSource === 'ddc' && clientDDCs.length > 0 && (
+                      <div className="flex items-center gap-4">
+                        <Label>DDC validé :</Label>
+                        <Select value={selectedDDC} onValueChange={setSelectedDDC}>
+                          <SelectTrigger className="w-[300px] bg-blue-50">
+                            <SelectValue placeholder="Sélectionner un DDC" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {clientDDCs.map((ddc) => (
+                              <SelectItem key={ddc.id} value={ddc.id}>
+                                {ddc.ddc_number} - {format(new Date(ddc.request_date), 'dd/MM/yyyy', { locale: fr })} ({formatPrice(ddc.total_ht)})
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {selectedDDC && ddcItems.length > 0 && (
+                          <Badge className="bg-blue-100 text-blue-800">
+                            {ddcItems.length} articles
+                          </Badge>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Info message */}
+                    <div className="text-sm text-gray-500">
+                      {priceSource === 'catalogue' && (
+                        <span>Prix depuis le catalogue (prix client personnalisé si existant)</span>
+                      )}
+                      {priceSource === 'ddc' && !selectedDDC && (
+                        <span className="text-orange-600">Sélectionnez un DDC validé pour utiliser ses prix</span>
+                      )}
+                      {priceSource === 'ddc' && selectedDDC && (
+                        <span className="text-blue-600">Les prix seront pris du DDC sélectionné</span>
+                      )}
+                      {priceSource === 'libre' && (
+                        <span className="text-green-600">Saisissez le prix manuellement (CR affiché pour référence)</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div className="border-t pt-4">
+                  <h3 className="font-medium mb-3">
+                    Articles
+                    {clientPrices.length > 0 && priceSource === 'catalogue' && (
+                      <Badge className="ml-2 bg-amber-100 text-[#9A7209]">
+                        {clientPrices.length} prix personnalises
+                      </Badge>
+                    )}
+                    {priceSource === 'ddc' && selectedDDC && ddcItems.length > 0 && (
+                      <Badge className="ml-2 bg-blue-100 text-blue-800">
+                        DDC: {ddcItems.length} articles
+                      </Badge>
+                    )}
+                    {priceSource === 'libre' && (
+                      <Badge className="ml-2 bg-green-100 text-green-800">
+                        Saisie libre
+                      </Badge>
+                    )}
+                    {selectedArticle && (
+                      <Badge className="ml-2 bg-gray-100 text-gray-800">
+                        Stock: {getLotsWithStockForArticle(selectedArticle).reduce((sum, s) => sum + s.quantity, 0)}
+                      </Badge>
+                    )}
+                  </h3>
+                  <div className="flex gap-2 mb-4 flex-wrap items-end">
+                    <div className="flex-1 min-w-[300px]">
+                      <Input
+                        placeholder="Rechercher un article (code ou nom)..."
+                        value={articleFilter}
+                        onChange={(e) => setArticleFilter(e.target.value)}
+                        className="bg-[#F5E6C8]"
+                      />
+                      {/* Liste des articles toujours visible */}
+                      <div className="mt-2 bg-white border rounded-md shadow-sm max-h-[200px] overflow-y-auto">
+                        {articles
+                          .filter((article) =>
+                            !articleFilter ||
+                            article.code.toLowerCase().includes(articleFilter.toLowerCase()) ||
+                            article.name.toLowerCase().includes(articleFilter.toLowerCase())
+                          )
+                          .map((article) => {
+                            const totalStock = getLotsWithStockForArticle(article.id).reduce((sum, s) => sum + s.quantity, 0)
+                            const isSelected = selectedArticle === article.id
+                            return (
+                              <div
+                                key={article.id}
+                                className={cn(
+                                  "px-3 py-2 cursor-pointer border-b last:border-b-0 flex justify-between items-center",
+                                  isSelected ? "bg-amber-100 border-l-4 border-l-[#B8860B]" : "hover:bg-amber-50"
+                                )}
+                                onClick={() => {
+                                  setSelectedArticle(article.id)
+                                  setSelectedLot('')
+                                }}
+                              >
+                                <span>
+                                  <span className="font-mono font-medium text-[#B8860B]">{article.code}</span>
+                                  <span className="ml-2">{article.name}</span>
+                                </span>
+                                <span className={cn(
+                                  "text-xs px-2 py-0.5 rounded-full",
+                                  totalStock > 0 ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                                )}>
+                                  {totalStock > 0 ? `${totalStock} dispo` : 'Rupture'}
+                                </span>
+                              </div>
+                            )
+                          })}
+                        {articles.filter((article) =>
+                          !articleFilter ||
+                          article.code.toLowerCase().includes(articleFilter.toLowerCase()) ||
+                          article.name.toLowerCase().includes(articleFilter.toLowerCase())
+                        ).length === 0 && (
+                          <div className="px-3 py-2 text-gray-500 text-sm">Aucun article trouvé</div>
+                        )}
+                      </div>
+                    </div>
+                    <Select
+                      value={selectedLot || 'none'}
+                      onValueChange={(value) => setSelectedLot(value === 'none' ? '' : value)}
+                    >
+                      <SelectTrigger className="w-[250px] bg-[#F5E6C8]">
+                        <SelectValue placeholder="N° Lot (stock)" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Sans lot</SelectItem>
+                        {selectedArticle ? (
+                          getLotsWithStockForArticle(selectedArticle).map((stock) => (
+                            <SelectItem key={stock.lot_id || 'no-lot'} value={stock.lot_id || 'none'}>
+                              {stock.lot?.lot_number || 'Sans lot'} ({stock.quantity} dispo)
+                            </SelectItem>
+                          ))
+                        ) : (
+                          lots.map((lot) => (
+                            <SelectItem key={lot.id} value={lot.id}>
+                              {lot.lot_number}
+                            </SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
+                    <Input
+                      type="text"
+                      inputMode="decimal"
+                      value={selectedQuantity}
+                      onChange={(e) => setSelectedQuantity(e.target.value.replace(/[^0-9.,]/g, ''))}
+                      className="w-24 bg-[#F5E6C8]"
+                      placeholder="Qte"
+                    />
+                    {priceSource === 'libre' && selectedArticle && (
+                      <div className="flex items-center gap-2">
+                        <div className="text-sm text-gray-500">
+                          CR: <span className="font-medium text-orange-600">{formatPrice(getArticleCR(selectedArticle) || 0)}</span>
+                        </div>
+                        <Input
+                          type="text"
+                          inputMode="decimal"
+                          value={manualPrice}
+                          onChange={(e) => setManualPrice(e.target.value.replace(/[^0-9.,]/g, ''))}
+                          className="w-28 bg-green-50 border-green-300"
+                          placeholder="Prix HT"
+                        />
+                      </div>
+                    )}
+                    {priceSource !== 'libre' && selectedArticle && (
+                      <div className="text-sm text-gray-600 flex items-center">
+                        Prix: <span className="font-medium ml-1 text-[#9A7209]">{formatPrice(getArticlePrice(selectedArticle))}</span>
+                        {priceSource === 'ddc' && !ddcItems.find(i => i.article_id === selectedArticle) && (
+                          <span className="ml-2 text-orange-500 text-xs">(non dans DDC)</span>
+                        )}
+                      </div>
+                    )}
+                    <Button type="button" onClick={addItem} className="bg-[#B8860B] hover:bg-[#9A7209] text-white">
+                      Ajouter
+                    </Button>
+                  </div>
+
+                  {orderItems.length > 0 && (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Article</TableHead>
+                          <TableHead>N° Lot</TableHead>
+                          <TableHead className="text-right">Qte</TableHead>
+                          <TableHead className="text-right">Prix unit.</TableHead>
+                          <TableHead className="text-right">Total HT</TableHead>
+                          <TableHead></TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {orderItems.map((item, index) => {
+                          const availableStock = getAvailableStock(item.article_id, item.lot_id || null)
+                          const orderedQty = orderItems
+                            .filter(i => i.article_id === item.article_id && (i.lot_id || '') === (item.lot_id || ''))
+                            .reduce((sum, i) => sum + i.quantity, 0)
+                          const isOverStock = availableStock > 0 && orderedQty > availableStock
+
+                          return (
+                            <TableRow key={index} className={isOverStock ? 'bg-red-50' : ''}>
+                              <TableCell>
+                                <div>
+                                  <span className="font-mono text-sm">{item.article_code}</span>
+                                  <span className="ml-2">{item.article_name}</span>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                {item.lot_number ? (
+                                  <div>
+                                    <span className="font-mono text-xs text-blue-600">{item.lot_number}</span>
+                                    <span className="text-xs text-gray-500 ml-1">({availableStock} dispo)</span>
+                                  </div>
+                                ) : (
+                                  <span className="text-gray-400 text-xs">-</span>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <span className={isOverStock ? 'text-red-600 font-bold' : ''}>
+                                  {item.quantity}
+                                </span>
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <div className="flex items-center justify-end gap-1">
+                                  {formatPrice(item.unit_price)}
+                                  {item.price_source === 'ddc' && (
+                                    <Badge className="bg-blue-50 text-blue-600 text-[10px] px-1">DDC</Badge>
+                                  )}
+                                  {item.price_source === 'libre' && (
+                                    <Badge className="bg-green-50 text-green-600 text-[10px] px-1">Libre</Badge>
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-right">{formatPrice(item.total_ht)}</TableCell>
+                              <TableCell>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => removeItem(index)}
+                                >
+                                  <Trash2 className="h-4 w-4 text-red-600" />
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          )
+                        })}
+                        <TableRow>
+                          <TableCell colSpan={4} className="text-right font-medium">
+                            Total HT:
+                          </TableCell>
+                          <TableCell className="text-right font-bold">
+                            {formatPrice(orderItems.reduce((sum, item) => sum + item.total_ht, 0))}
+                          </TableCell>
+                          <TableCell></TableCell>
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  )}
+                </div>
+
+                <div className="flex justify-end gap-2 pt-4 border-t mt-4 relative z-50">
+                  <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                    Annuler
+                  </Button>
+                  <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]" disabled={isSubmitting}>
+                    {isSubmitting ? 'Création en cours...' : 'Creer la commande'}
+                  </Button>
+                </div>
+              </form>
+            </DialogContent>
           </Dialog>
+        </div>
+
+        {/* Filtre par mois */}
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <Label className="text-sm font-medium whitespace-nowrap">Mois:</Label>
+            <Select value={monthFilter} onValueChange={setMonthFilter}>
+              <SelectTrigger className="w-[180px] border-[#B8860B]">
+                <SelectValue placeholder="Tous les mois" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Tous les mois</SelectItem>
+                {monthOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
 
         {/* Status Filter Buttons */}

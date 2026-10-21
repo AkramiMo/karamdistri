@@ -194,10 +194,8 @@ export default function ClientPricesPage() {
   )
 
   const formatPrice = (price: number) => {
-    return new Intl.NumberFormat('fr-MA', {
-      style: 'currency',
-      currency: 'MAD',
-    }).format(price)
+    const formatted = price.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+    return `${formatted} MAD`
   }
 
   const customPricesCount = clientPrices.length

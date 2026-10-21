@@ -493,10 +493,8 @@ export default function FichesTrajetPage() {
   })
 
   const formatPrice = (price: number | null) => {
-    return new Intl.NumberFormat('fr-MA', {
-      style: 'currency',
-      currency: 'MAD',
-    }).format(price || 0)
+    const formatted = (price || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+    return `${formatted} MAD`
   }
 
   // Stats
@@ -1121,11 +1119,9 @@ export default function FichesTrajetPage() {
                   <div>
                     <p className="text-sm text-gray-500">Total HT</p>
                     <p className="font-bold text-[#B8860B]">
-                      {new Intl.NumberFormat('fr-MA', { style: 'currency', currency: 'MAD' }).format(
-                        viewingDelivery.delivery_items?.reduce((sum: number, item: any) =>
+                      {(viewingDelivery.delivery_items?.reduce((sum: number, item: any) =>
                           sum + ((item.quantity_delivered || 0) * (item.unit_price || 0)), 0
-                        ) || 0
-                      )}
+                        ) || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')} MAD
                     </p>
                   </div>
                 </div>
@@ -1198,10 +1194,10 @@ export default function FichesTrajetPage() {
                               <TableCell className="text-right">{item.quantity_ordered || 0}</TableCell>
                               <TableCell className="text-right">{item.quantity_delivered || 0}</TableCell>
                               <TableCell className="text-right">
-                                {new Intl.NumberFormat('fr-MA', { style: 'currency', currency: 'MAD' }).format(item.unit_price || 0)}
+                                {(item.unit_price || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')} MAD
                               </TableCell>
                               <TableCell className="text-right font-medium">
-                                {new Intl.NumberFormat('fr-MA', { style: 'currency', currency: 'MAD' }).format(totalHT)}
+                                {totalHT.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')} MAD
                               </TableCell>
                             </TableRow>
                           )
@@ -1209,11 +1205,9 @@ export default function FichesTrajetPage() {
                         <TableRow className="bg-gray-50">
                           <TableCell colSpan={5} className="text-right font-semibold">Total HT:</TableCell>
                           <TableCell className="text-right font-bold text-[#B8860B]">
-                            {new Intl.NumberFormat('fr-MA', { style: 'currency', currency: 'MAD' }).format(
-                              viewingDelivery.delivery_items.reduce((sum: number, item: any) =>
+                            {viewingDelivery.delivery_items.reduce((sum: number, item: any) =>
                                 sum + ((item.quantity_delivered || 0) * (item.unit_price || 0)), 0
-                              )
-                            )}
+                              ).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')} MAD
                           </TableCell>
                         </TableRow>
                       </TableBody>

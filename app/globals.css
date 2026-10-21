@@ -134,6 +134,35 @@
   }
 }
 
+/* Animation flottante pour le logo */
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-15px);
+  }
+}
+
+.animate-bounce-slow {
+  animation: float 3s ease-in-out infinite;
+}
+
+/* Animation barre de progression */
+@keyframes progress-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+.animate-progress {
+  width: 25%;
+  animation: progress-slide 1.2s ease-in-out infinite;
+}
+
 /* Dialog redimensionnable */
 .dialog-resizable {
   resize: both !important;

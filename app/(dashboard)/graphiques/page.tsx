@@ -486,10 +486,8 @@ export default function GraphiquesPage() {
   const avgPerDay = totalCommandes / (parseInt(period) + 1)
 
   const formatPrice = (price: number) => {
-    return new Intl.NumberFormat('fr-MA', {
-      style: 'currency',
-      currency: 'MAD',
-    }).format(price || 0)
+    const formatted = (price || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+    return `${formatted} MAD`
   }
 
   // Télécharger en PNG avec titre

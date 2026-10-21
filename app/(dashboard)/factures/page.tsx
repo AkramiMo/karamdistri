@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useCompanySettings } from '@/hooks/useCompanySettings'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
@@ -22,7 +23,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog'
 import {
   Select,
@@ -33,8 +33,9 @@ import {
 } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Plus, Search, FileText, Eye, Pencil, Trash2, AlertTriangle, Download } from 'lucide-react'
+import { Plus, Search, FileText, Eye, Pencil, Trash2, AlertTriangle, Download, Loader2 } from 'lucide-react'
 import { generateFacturePDF } from '@/lib/pdf/facture'
+import { initFolderHandles, requestFactureFolderPermission } from '@/lib/pdf/saveWithPicker'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 
@@ -90,19 +91,35 @@ const statusLabels: Record<string, string> = {
 }
 
 export default function FacturesPage() {
+  const searchParams = useSearchParams()
+  const router = useRouter()
   const [factures, setFactures] = useState<Facture[]>([])
   const [clients, setClients] = useState<Client[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
+  const [selectedMonth, setSelectedMonth] = useState<string>('all')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isNewOnlyMode, setIsNewOnlyMode] = useState(false)
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [viewingFacture, setViewingFacture] = useState<Facture | null>(null)
   const [editingFacture, setEditingFacture] = useState<Facture | null>(null)
   const [clientDeliveries, setClientDeliveries] = useState<ClientDelivery[]>([])
   const [formClientDeliveries, setFormClientDeliveries] = useState<ClientDelivery[]>([])
   const [selectedDeliveryIds, setSelectedDeliveryIds] = useState<string[]>([])
+  const [selectedFactureIds, setSelectedFactureIds] = useState<Set<string>>(new Set())
+  const [isPDFCreatedDialogOpen, setIsPDFCreatedDialogOpen] = useState(false)
+  const [createdFacture, setCreatedFacture] = useState<Facture | null>(null)
+  const [createdFactureDeliveries, setCreatedFactureDeliveries] = useState<ClientDelivery[]>([])
   const supabase = createClient()
   const { companySettings } = useCompanySettings()
+
+  // Ouvrir le dialog si ?action=new
+  useEffect(() => {
+    if (searchParams.get('action') === 'new') {
+      setIsDialogOpen(true)
+      setIsNewOnlyMode(true)
+    }
+  }, [searchParams])
 
   const getDefaultDueDate = (factureDate: string) => {
     try {
@@ -121,9 +138,10 @@ export default function FacturesPage() {
       client_id: '',
       facture_date: today,
       total_ht: '',
+      transport_fees: '0',
       total_tva: '',
       total_ttc: '',
-      tva_rate: '20',
+      tva_rate: '0',
       due_date: getDefaultDueDate(today),
       status: 'draft',
       notes: '',
@@ -160,6 +178,8 @@ export default function FacturesPage() {
   }
 
   useEffect(() => {
+    // Initialiser les handles de dossiers pour la sauvegarde automatique des PDF
+    initFolderHandles()
     fetchFactures()
     fetchClients()
   }, [])
@@ -211,27 +231,40 @@ export default function FacturesPage() {
 
     const facturedDeliveryIds = new Set((facturedDeliveries || []).map((fd: { delivery_id: string }) => fd.delivery_id))
 
-    // Fetch deliveries for this client (excluding already factured ones)
+    // Also check old format: delivery_id directly in factures table
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: oldFactures } = await (supabase
+      .from('factures')
+      .select('delivery_id')
+      .not('delivery_id', 'is', null) as any)
+
+    for (const f of (oldFactures || [])) {
+      if (f.delivery_id) facturedDeliveryIds.add(f.delivery_id)
+    }
+
+    // Fetch deliveries for this client (excluding already factured and already paid)
     const { data } = await supabase
       .from('deliveries')
-      .select('id, delivery_number, delivery_date, total_ht')
+      .select('id, delivery_number, delivery_date, total_ht, payment_status')
       .eq('client_id', clientId)
       .eq('status', 'delivered')
       .order('delivery_date', { ascending: false })
 
-    // Filter out already factured deliveries
-    const availableDeliveries = (data || []).filter(d => !facturedDeliveryIds.has(d.id))
+    // Filter out already factured deliveries AND already paid deliveries
+    const availableDeliveries = (data || []).filter(d =>
+      !facturedDeliveryIds.has(d.id) && d.payment_status !== 'paid'
+    )
     setFormClientDeliveries(availableDeliveries)
   }
 
-  const recalcTotals = (deliveryIds: string[], deliveriesList: ClientDelivery[], tvaRate: number = 20) => {
+  const recalcTotals = (deliveryIds: string[], deliveriesList: ClientDelivery[], tvaRate: number = 0, transportFees: number = 0) => {
     const totalHt = deliveriesList
       .filter(d => deliveryIds.includes(d.id))
       .reduce((sum, d) => sum + (d.total_ht || 0), 0)
     const totalHtRounded = Math.round(totalHt * 100) / 100
     const tvaRateDecimal = tvaRate / 100
     const totalTva = Math.round(totalHtRounded * tvaRateDecimal * 100) / 100
-    const totalTtc = Math.round((totalHtRounded + totalTva) * 100) / 100
+    const totalTtc = Math.round((totalHtRounded + transportFees + totalTva) * 100) / 100
     return { totalHtRounded, totalTva, totalTtc }
   }
 
@@ -243,8 +276,9 @@ export default function FacturesPage() {
       ? [...selectedDeliveryIds, deliveryId]
       : selectedDeliveryIds.filter(id => id !== deliveryId)
     setSelectedDeliveryIds(newIds)
-    const tvaRate = formData.tva_rate !== '' ? parseFloat(formData.tva_rate) : 20
-    const { totalHtRounded, totalTva, totalTtc } = recalcTotals(newIds, formClientDeliveries, isNaN(tvaRate) ? 20 : tvaRate)
+    const tvaRate = formData.tva_rate !== '' ? parseFloat(formData.tva_rate) : 0
+    const transportFees = parseFloat(formData.transport_fees) || 0
+    const { totalHtRounded, totalTva, totalTtc } = recalcTotals(newIds, formClientDeliveries, isNaN(tvaRate) ? 0 : tvaRate, transportFees)
     setFormData(prev => ({
       ...prev,
       total_ht: totalHtRounded.toString(),
@@ -255,7 +289,8 @@ export default function FacturesPage() {
 
   const handleTvaRateChange = (newTvaRate: string) => {
     const tvaRate = parseFloat(newTvaRate) || 0
-    const { totalHtRounded, totalTva, totalTtc } = recalcTotals(selectedDeliveryIds, formClientDeliveries, tvaRate)
+    const transportFees = parseFloat(formData.transport_fees) || 0
+    const { totalHtRounded, totalTva, totalTtc } = recalcTotals(selectedDeliveryIds, formClientDeliveries, tvaRate, transportFees)
     setFormData(prev => ({
       ...prev,
       tva_rate: newTvaRate,
@@ -264,8 +299,75 @@ export default function FacturesPage() {
     }))
   }
 
+  const handleTransportFeesChange = (newTransportFees: string) => {
+    const tvaRate = parseFloat(formData.tva_rate) || 0
+    const transportFees = parseFloat(newTransportFees) || 0
+    const { totalHtRounded, totalTva, totalTtc } = recalcTotals(selectedDeliveryIds, formClientDeliveries, tvaRate, transportFees)
+    setFormData(prev => ({
+      ...prev,
+      transport_fees: newTransportFees,
+      total_ttc: totalTtc.toString(),
+    }))
+  }
+
+  // Fonction pour mettre à jour le statut de paiement des BL
+  const updateDeliveriesPaymentStatus = async (deliveryIds: string[], action: 'paid' | 'recalculate') => {
+    for (const deliveryId of deliveryIds) {
+      try {
+        // Récupérer les items du BL pour calculer la recette
+        const { data: items, error: itemsError } = await supabase
+          .from('delivery_items')
+          .select('quantity_delivered, quantity_returned, unit_price')
+          .eq('delivery_id', deliveryId)
+
+        if (itemsError || !items) continue
+
+        // Calculer la recette
+        const recette = items.reduce((sum, item) => {
+          return sum + ((item.quantity_delivered - item.quantity_returned) * item.unit_price)
+        }, 0)
+
+        if (action === 'paid') {
+          // Marquer comme payé: amount_paid = recette
+          await supabase
+            .from('deliveries')
+            .update({
+              amount_paid: recette,
+              balance_due: 0,
+              payment_status: 'paid',
+            })
+            .eq('id', deliveryId)
+        } else {
+          // Recalculer basé sur les paiements existants
+          const { data: payments } = await supabase
+            .from('payments')
+            .select('amount')
+            .eq('delivery_id', deliveryId)
+
+          const totalPaid = payments?.reduce((sum, p) => sum + (p.amount || 0), 0) || 0
+          const balanceDue = Math.max(0, recette - totalPaid)
+          const status = balanceDue <= 0 ? 'paid' : totalPaid > 0 ? 'partial' : 'pending'
+
+          await supabase
+            .from('deliveries')
+            .update({
+              amount_paid: totalPaid,
+              balance_due: balanceDue,
+              payment_status: status,
+            })
+            .eq('id', deliveryId)
+        }
+      } catch (err) {
+        console.error('Error updating delivery payment status:', err)
+      }
+    }
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+
+    // Demander la permission IMMÉDIATEMENT au clic (avant toute opération async)
+    await requestFactureFolderPermission()
 
     if (!formData.client_id) {
       alert('Veuillez sélectionner un client')
@@ -310,6 +412,18 @@ export default function FacturesPage() {
       console.log('Updating facture_deliveries for facture:', editingFacture.id)
       console.log('Selected delivery IDs:', selectedDeliveryIds)
 
+      // Récupérer les BL liés AVANT de supprimer les liens
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: existingLinks } = await (supabase.from('facture_deliveries') as any)
+        .select('delivery_id')
+        .eq('facture_id', editingFacture.id)
+      let existingDeliveryIds = (existingLinks || []).map((link: { delivery_id: string }) => link.delivery_id)
+
+      // Fallback sur l'ancien champ delivery_id si pas de liens dans facture_deliveries
+      if (existingDeliveryIds.length === 0 && editingFacture.delivery_id) {
+        existingDeliveryIds = [editingFacture.delivery_id]
+      }
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { error: deleteError } = await (supabase.from('facture_deliveries') as any)
         .delete()
@@ -318,6 +432,9 @@ export default function FacturesPage() {
       if (deleteError) {
         console.error('Error deleting old facture_deliveries:', deleteError)
       }
+
+      // Déterminer les BL à mettre à jour
+      const deliveryIdsToUpdate = selectedDeliveryIds.length > 0 ? selectedDeliveryIds : existingDeliveryIds
 
       if (selectedDeliveryIds.length > 0) {
         const deliveryLinks = selectedDeliveryIds.map(deliveryId => ({
@@ -331,6 +448,16 @@ export default function FacturesPage() {
           alert(`Avertissement: Erreur liaison BL: ${insertError.message}`)
         } else {
           console.log('Successfully inserted', deliveryLinks.length, 'delivery links')
+        }
+      }
+
+      // Si le statut passe à "paid", mettre à jour les BL liés
+      if (deliveryIdsToUpdate.length > 0) {
+        if (formData.status === 'paid') {
+          await updateDeliveriesPaymentStatus(deliveryIdsToUpdate, 'paid')
+        } else if (editingFacture.status === 'paid' && formData.status !== 'paid') {
+          // Si le statut était "paid" et change, recalculer les BL
+          await updateDeliveriesPaymentStatus(deliveryIdsToUpdate, 'recalculate')
         }
       }
     } else {
@@ -376,10 +503,106 @@ export default function FacturesPage() {
       }
     }
 
+    // Télécharger automatiquement le PDF
+    try {
+      // Récupérer la facture complète pour générer le PDF
+      const factureId = editingFacture ? editingFacture.id : null
+      if (factureId || (!editingFacture && selectedDeliveryIds.length > 0)) {
+        // Récupérer la facture avec client
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: factureComplete } = await (supabase.from('factures') as any)
+          .select(`
+            id, facture_number, facture_date, total_ht, total_tva, total_ttc, tva_rate,
+            client:clients(code, name, phone, city, ice)
+          `)
+          .eq(editingFacture ? 'id' : 'client_id', editingFacture ? editingFacture.id : formData.client_id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single()
+
+        if (factureComplete && factureComplete.client) {
+          // Récupérer les livraisons avec items
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: deliveries } = await (supabase as any)
+            .from('deliveries')
+            .select(`
+              id, delivery_number, delivery_date, total_ht,
+              delivery_items(
+                id,
+                quantity_delivered,
+                quantity_returned,
+                unit_price,
+                article:articles(code, name, description)
+              )
+            `)
+            .in('id', selectedDeliveryIds.length > 0 ? selectedDeliveryIds : ['00000000-0000-0000-0000-000000000000'])
+            .order('delivery_date', { ascending: false })
+
+          const deliveriesWithItems = (deliveries || []).map((del: any) => ({
+            id: del.id,
+            delivery_number: del.delivery_number,
+            delivery_date: del.delivery_date,
+            total_ht: del.total_ht,
+            items: (del.delivery_items || []).map((item: any) => ({
+              article_code: item.article?.code || '',
+              article_name: item.article?.description || item.article?.name || '',
+              quantity: (item.quantity_delivered || 0) - (item.quantity_returned || 0),
+              unit_price: item.unit_price || 0,
+              total: ((item.quantity_delivered || 0) - (item.quantity_returned || 0)) * (item.unit_price || 0)
+            })).filter((item: any) => item.quantity > 0)
+          }))
+
+          const factureData = {
+            id: factureComplete.id,
+            facture_number: factureComplete.facture_number,
+            facture_date: factureComplete.facture_date,
+            total_ht: factureComplete.total_ht,
+            transport_fees: parseFloat(formData.transport_fees) || 0,
+            total_tva: factureComplete.total_tva,
+            total_ttc: factureComplete.total_ttc,
+            tva_rate: factureComplete.tva_rate !== null && factureComplete.tva_rate !== undefined ? factureComplete.tva_rate : 0,
+            client: {
+              code: factureComplete.client.code,
+              name: factureComplete.client.name,
+              phone: factureComplete.client.phone,
+              city: factureComplete.client.city,
+              ice: factureComplete.client.ice,
+            },
+          }
+
+          await generateFacturePDF(factureData, deliveriesWithItems, '/Logo.png', {
+            ice: companySettings?.ice,
+            if_number: companySettings?.if_number,
+            tp: companySettings?.patente,
+          })
+
+          // Afficher le dialogue de confirmation (seulement pour nouvelle facture)
+          if (!editingFacture) {
+            const selectedClient = clients.find(c => c.id === formData.client_id)
+            setCreatedFacture({
+              ...factureComplete,
+              client: selectedClient || factureComplete.client,
+            })
+            setCreatedFactureDeliveries(deliveriesWithItems)
+            setIsPDFCreatedDialogOpen(true)
+          }
+        }
+      }
+    } catch (pdfError) {
+      console.error('Erreur génération PDF auto:', pdfError)
+    }
+
+    if (editingFacture) {
+      alert('Facture mise à jour et PDF téléchargé')
+    }
     fetchFactures()
-    setIsDialogOpen(false)
-    setEditingFacture(null)
-    resetForm()
+    if (isNewOnlyMode) {
+      handleCloseNewOnly()
+    } else {
+      setIsDialogOpen(false)
+      setEditingFacture(null)
+      resetForm()
+    }
   }
 
   const resetForm = () => {
@@ -388,15 +611,20 @@ export default function FacturesPage() {
       client_id: '',
       facture_date: today,
       total_ht: '',
+      transport_fees: '0',
       total_tva: '',
       total_ttc: '',
-      tva_rate: '20',
+      tva_rate: '0',
       due_date: getDefaultDueDate(today),
       status: 'draft',
       notes: '',
     })
     setSelectedDeliveryIds([])
     setFormClientDeliveries([])
+  }
+
+  const handleCloseNewOnly = () => {
+    router.replace('/')
   }
 
   const handleEdit = async (facture: Facture) => {
@@ -431,17 +659,31 @@ export default function FacturesPage() {
 
     const otherFacturedDeliveryIds = new Set((otherFacturedDeliveries || []).map((fd: { delivery_id: string }) => fd.delivery_id))
 
+    // Also check old format: delivery_id directly in factures table (excluding current facture)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: oldFactures } = await (supabase
+      .from('factures')
+      .select('delivery_id')
+      .not('delivery_id', 'is', null)
+      .neq('id', facture.id) as any)
+
+    for (const f of (oldFactures || [])) {
+      if (f.delivery_id) otherFacturedDeliveryIds.add(f.delivery_id)
+    }
+
     // Fetch deliveries for this client
     const { data } = await supabase
       .from('deliveries')
-      .select('id, delivery_number, delivery_date, total_ht')
+      .select('id, delivery_number, delivery_date, total_ht, payment_status')
       .eq('client_id', facture.client_id)
       .eq('status', 'delivered')
       .order('delivery_date', { ascending: false })
 
     // Filter out deliveries already linked to other factures (keep current facture's deliveries)
+    // Also exclude paid deliveries unless they're already linked to this facture
     const availableDeliveries = (data || []).filter(d =>
-      !otherFacturedDeliveryIds.has(d.id) || currentDeliveryIds.includes(d.id)
+      (currentDeliveryIds.includes(d.id)) ||
+      (!otherFacturedDeliveryIds.has(d.id) && d.payment_status !== 'paid')
     )
     setFormClientDeliveries(availableDeliveries)
     // Set selected IDs from facture_deliveries, fallback to delivery_id for old data
@@ -505,6 +747,9 @@ export default function FacturesPage() {
   }
 
   const handleDownloadPDF = async (facture: Facture) => {
+    // Demander la permission IMMÉDIATEMENT au clic (avant toute opération async)
+    await requestFactureFolderPermission()
+
     // Fetch delivery IDs linked to this facture via facture_deliveries
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: factureDeliveryLinks } = await (supabase
@@ -530,7 +775,7 @@ export default function FacturesPage() {
           quantity_delivered,
           quantity_returned,
           unit_price,
-          article:articles(code, name)
+          article:articles(code, name, description)
         )
       `)
       .in('id', deliveryIds.length > 0 ? deliveryIds : ['00000000-0000-0000-0000-000000000000'])
@@ -551,7 +796,7 @@ export default function FacturesPage() {
         quantity_delivered: number
         quantity_returned: number
         unit_price: number
-        article?: { code: string; name: string }
+        article?: { code: string; name: string; description?: string }
       }>
     }) => ({
       id: del.id,
@@ -560,7 +805,7 @@ export default function FacturesPage() {
       total_ht: del.total_ht,
       items: (del.delivery_items || []).map(item => ({
         article_code: item.article?.code || '',
-        article_name: item.article?.name || '',
+        article_name: item.article?.description || item.article?.name || '',
         quantity: (item.quantity_delivered || 0) - (item.quantity_returned || 0),
         unit_price: item.unit_price || 0,
         total: ((item.quantity_delivered || 0) - (item.quantity_returned || 0)) * (item.unit_price || 0)
@@ -572,9 +817,10 @@ export default function FacturesPage() {
       facture_number: facture.facture_number,
       facture_date: facture.facture_date,
       total_ht: facture.total_ht,
+      transport_fees: (facture as any).transport_fees || 0,
       total_tva: facture.total_tva,
       total_ttc: facture.total_ttc,
-      tva_rate: facture.tva_rate !== null && facture.tva_rate !== undefined ? facture.tva_rate : 20,
+      tva_rate: facture.tva_rate !== null && facture.tva_rate !== undefined ? facture.tva_rate : 0,
       client: {
         code: facture.client.code,
         name: facture.client.name,
@@ -608,19 +854,31 @@ export default function FacturesPage() {
     return facture.status
   }
 
-  const filteredFactures = factures.filter(
-    (f) =>
-      f.facture_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      f.client?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      f.client?.code?.toLowerCase().includes(searchTerm.toLowerCase())
-  )
+  // Générer la liste des mois disponibles
+  const availableMonths = Array.from(
+    new Set(factures.map(f => f.facture_date.substring(0, 7)))
+  ).sort().reverse()
+
+  const filteredFactures = factures.filter((f) => {
+    // Filtre par mois
+    if (selectedMonth !== 'all' && !f.facture_date.startsWith(selectedMonth)) {
+      return false
+    }
+    // Filtre par recherche
+    if (searchTerm) {
+      return (
+        f.facture_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        f.client?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        f.client?.code?.toLowerCase().includes(searchTerm.toLowerCase())
+      )
+    }
+    return true
+  })
 
   const formatPrice = (price: number | null) => {
     if (price === null || price === undefined) return '-'
-    return new Intl.NumberFormat('fr-MA', {
-      style: 'currency',
-      currency: 'MAD',
-    }).format(price)
+    const formatted = price.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+    return `${formatted} MAD`
   }
 
   // Stats
@@ -629,6 +887,251 @@ export default function FacturesPage() {
   const monthTotalTTC = monthFactures.reduce((sum, f) => sum + (f.total_ttc || 0), 0)
   const paidCount = factures.filter(f => f.status === 'paid').length
   const overdueCount = factures.filter(f => getDisplayStatus(f) === 'overdue').length
+
+  // Mode formulaire seul via Actions
+  if (isNewOnlyMode) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <Dialog open={isDialogOpen} onOpenChange={(open) => {
+          if (!open) {
+            handleCloseNewOnly()
+          }
+        }}>
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Nouvelle facture</DialogTitle>
+            </DialogHeader>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="space-y-2">
+                <Label>Client *</Label>
+                <Select
+                  value={formData.client_id}
+                  onValueChange={handleFormClientSelect}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Sélectionner un client" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {clients.map((client) => (
+                      <SelectItem key={client.id} value={client.id}>
+                        {client.code} - {client.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {formData.client_id && (
+                <div className="space-y-2">
+                  <Label>Bons de livraison</Label>
+                  {formClientDeliveries.length === 0 ? (
+                    <p className="text-sm text-gray-500 py-2">Aucun BL livré pour ce client</p>
+                  ) : (
+                    <div className="border rounded-lg max-h-48 overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-10"></TableHead>
+                            <TableHead>Date</TableHead>
+                            <TableHead>N° BL</TableHead>
+                            <TableHead className="text-right">Recette BL</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {formClientDeliveries.map((del) => {
+                            const isSelected = selectedDeliveryIds.includes(del.id)
+                            return (
+                            <TableRow
+                              key={del.id}
+                              className={`cursor-pointer transition-colors ${isSelected ? 'bg-amber-100 hover:bg-amber-200' : 'hover:bg-gray-50'}`}
+                              onClick={() => handleDeliveryToggle(del.id, !isSelected)}
+                            >
+                              <TableCell onClick={(e) => e.stopPropagation()}>
+                                <Checkbox
+                                  checked={isSelected}
+                                  onCheckedChange={(checked) => handleDeliveryToggle(del.id, !!checked)}
+                                  className={`border-2 ${isSelected ? 'border-[#B8860B] bg-[#B8860B] data-[state=checked]:bg-[#B8860B]' : 'border-gray-400'}`}
+                                />
+                              </TableCell>
+                              <TableCell className={`text-sm ${isSelected ? 'font-medium' : ''}`}>
+                                {del.delivery_date
+                                  ? format(new Date(del.delivery_date), 'dd/MM/yyyy', { locale: fr })
+                                  : '-'}
+                              </TableCell>
+                              <TableCell className={`font-mono text-sm ${isSelected ? 'font-bold text-[#B8860B]' : ''}`}>{del.delivery_number}</TableCell>
+                              <TableCell className={`text-right text-sm font-medium ${isSelected ? 'text-[#B8860B]' : ''}`}>
+                                {formatPrice(del.total_ht)}
+                              </TableCell>
+                            </TableRow>
+                            )
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="facture_date">Date de facture</Label>
+                  <Input
+                    id="facture_date"
+                    type="date"
+                    value={formData.facture_date}
+                    onChange={(e) => {
+                      const newDate = e.target.value
+                      setFormData(prev => ({
+                        ...prev,
+                        facture_date: newDate,
+                        due_date: getDefaultDueDate(newDate),
+                      }))
+                    }}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="due_date">Date d&apos;échéance</Label>
+                  <Input
+                    id="due_date"
+                    type="date"
+                    value={formData.due_date}
+                    onChange={(e) => setFormData({ ...formData, due_date: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-5 gap-3">
+                <div className="space-y-2">
+                  <Label>Total HT</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={formData.total_ht}
+                    readOnly
+                    className="bg-gray-50"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Transport</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={formData.transport_fees}
+                    onChange={(e) => handleTransportFeesChange(e.target.value)}
+                    className="bg-white"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>TVA (%)</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max="100"
+                    value={formData.tva_rate}
+                    onChange={(e) => handleTvaRateChange(e.target.value)}
+                    className="bg-white"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>TVA (MAD)</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={formData.total_tva}
+                    readOnly
+                    className="bg-gray-50"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Total TTC</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={formData.total_ttc}
+                    readOnly
+                    className="bg-gray-50 font-bold"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Statut</Label>
+                <Select
+                  value={formData.status}
+                  onValueChange={(value) => setFormData({ ...formData, status: value })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="draft">Brouillon</SelectItem>
+                    <SelectItem value="sent">Envoyée</SelectItem>
+                    <SelectItem value="paid">Payée</SelectItem>
+                    <SelectItem value="partial">Partielle</SelectItem>
+                    <SelectItem value="overdue">En retard</SelectItem>
+                    <SelectItem value="cancelled">Annulée</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="notes">Notes</Label>
+                <Textarea
+                  id="notes"
+                  value={formData.notes}
+                  onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                  placeholder="Notes optionnelles..."
+                  rows={3}
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-4">
+                <Button type="button" variant="outline" onClick={handleCloseNewOnly}>
+                  Annuler
+                </Button>
+                <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
+                  Créer la facture
+                </Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
+
+        {/* PDF Created Dialog for form-only mode */}
+        <Dialog open={isPDFCreatedDialogOpen} onOpenChange={setIsPDFCreatedDialogOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-green-600">
+                <Download className="h-5 w-5" />
+                Facture créée avec succès!
+              </DialogTitle>
+            </DialogHeader>
+            {createdFacture && (
+              <div className="space-y-4">
+                <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-center">
+                  <p className="text-sm text-green-700">Facture</p>
+                  <p className="text-2xl font-bold text-green-800">{createdFacture.facture_number}</p>
+                </div>
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-center text-sm text-blue-700">
+                  Le PDF a été sauvegardé automatiquement
+                </div>
+                <div className="flex justify-center pt-4">
+                  <Button
+                    onClick={handleCloseNewOnly}
+                    className="bg-[#B8860B] hover:bg-[#9A7209]"
+                  >
+                    OK
+                  </Button>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+      </div>
+    )
+  }
 
   return (
     <ProtectedModule module="factures">
@@ -639,7 +1142,7 @@ export default function FacturesPage() {
             <p className="text-gray-500">Gestion des factures clients</p>
           </div>
 
-          <ProtectedModule module="factures" action="create">
+          <div className="flex gap-2">
             <Dialog open={isDialogOpen} onOpenChange={(open) => {
               setIsDialogOpen(open)
               if (!open) {
@@ -647,19 +1150,6 @@ export default function FacturesPage() {
                 resetForm()
               }
             }}>
-              <DialogTrigger asChild>
-                <Button
-                  className="bg-[#B8860B] hover:bg-[#9A7209]"
-                  onClick={() => {
-                    setEditingFacture(null)
-                    resetForm()
-                    setIsDialogOpen(true)
-                  }}
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Nouvelle facture
-                </Button>
-              </DialogTrigger>
               <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                   <DialogTitle>
@@ -765,9 +1255,9 @@ export default function FacturesPage() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-4 gap-4">
+                  <div className="grid grid-cols-5 gap-3">
                     <div className="space-y-2">
-                      <Label>Total HT (MAD)</Label>
+                      <Label>Total HT</Label>
                       <Input
                         type="number"
                         step="0.01"
@@ -777,7 +1267,18 @@ export default function FacturesPage() {
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label>Taux TVA (%)</Label>
+                      <Label>Transport</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={formData.transport_fees}
+                        onChange={(e) => handleTransportFeesChange(e.target.value)}
+                        className="bg-white"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>TVA (%)</Label>
                       <Input
                         type="number"
                         step="0.01"
@@ -799,7 +1300,7 @@ export default function FacturesPage() {
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label>Total TTC (MAD)</Label>
+                      <Label>Total TTC</Label>
                       <Input
                         type="number"
                         step="0.01"
@@ -856,7 +1357,7 @@ export default function FacturesPage() {
                 </form>
               </DialogContent>
             </Dialog>
-          </ProtectedModule>
+          </div>
         </div>
 
         {/* Stats */}
@@ -914,7 +1415,7 @@ export default function FacturesPage() {
         {/* Table */}
         <Card>
           <CardHeader>
-            <div className="flex items-center gap-4">
+            <div className="flex flex-col md:flex-row items-start md:items-center gap-4">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <Input
@@ -923,6 +1424,29 @@ export default function FacturesPage() {
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-10"
                 />
+              </div>
+              <div className="flex items-center gap-2">
+                <Label className="text-sm text-gray-600 whitespace-nowrap">Mois:</Label>
+                <Select value={selectedMonth} onValueChange={setSelectedMonth}>
+                  <SelectTrigger className="w-[180px]">
+                    <SelectValue placeholder="Tous les mois" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Tous les mois</SelectItem>
+                    {availableMonths.map((month) => (
+                      <SelectItem key={month} value={month}>
+                        {new Date(month + '-01').toLocaleDateString('fr-FR', { year: 'numeric', month: 'long' })}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center gap-2 bg-[#B8860B]/10 px-3 py-1.5 rounded-lg border border-[#B8860B]">
+                <span className="text-sm font-medium text-gray-700">Total:</span>
+                <span className="text-lg font-bold text-[#B8860B]">
+                  {formatPrice(filteredFactures.reduce((sum, f) => sum + (f.total_ttc || 0), 0))}
+                </span>
+                <span className="text-xs text-gray-500">({filteredFactures.length})</span>
               </div>
             </div>
           </CardHeader>
@@ -937,6 +1461,18 @@ export default function FacturesPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-10">
+                      <Checkbox
+                        checked={selectedFactureIds.size === filteredFactures.length && filteredFactures.length > 0}
+                        onCheckedChange={(checked) => {
+                          if (checked) {
+                            setSelectedFactureIds(new Set(filteredFactures.map(f => f.id)))
+                          } else {
+                            setSelectedFactureIds(new Set())
+                          }
+                        }}
+                      />
+                    </TableHead>
                     <TableHead>Date</TableHead>
                     <TableHead>N° Facture</TableHead>
                     <TableHead>Code Client</TableHead>
@@ -954,6 +1490,20 @@ export default function FacturesPage() {
                     const displayStatus = getDisplayStatus(facture)
                     return (
                       <TableRow key={facture.id}>
+                        <TableCell>
+                          <Checkbox
+                            checked={selectedFactureIds.has(facture.id)}
+                            onCheckedChange={(checked) => {
+                              const newSet = new Set(selectedFactureIds)
+                              if (checked) {
+                                newSet.add(facture.id)
+                              } else {
+                                newSet.delete(facture.id)
+                              }
+                              setSelectedFactureIds(newSet)
+                            }}
+                          />
+                        </TableCell>
                         <TableCell>
                           {format(new Date(facture.facture_date), 'dd/MM/yyyy', { locale: fr })}
                         </TableCell>
@@ -1136,6 +1686,90 @@ export default function FacturesPage() {
                   >
                     <Download className="mr-2 h-4 w-4" />
                     Télécharger Facture
+                  </Button>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+
+        {/* PDF Created Dialog */}
+        <Dialog open={isPDFCreatedDialogOpen} onOpenChange={setIsPDFCreatedDialogOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-green-600">
+                <Download className="h-5 w-5" />
+                Facture créée avec succès!
+              </DialogTitle>
+            </DialogHeader>
+            {createdFacture && (
+              <div className="space-y-4">
+                <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-center">
+                  <p className="text-sm text-green-700">Facture</p>
+                  <p className="text-2xl font-bold text-green-800">{createdFacture.facture_number}</p>
+                </div>
+
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Client:</span>
+                    <span className="font-medium">{createdFacture.client?.name}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Date:</span>
+                    <span>{new Date(createdFacture.facture_date).toLocaleDateString('fr-FR')}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Total TTC:</span>
+                    <span className="font-bold text-[#B8860B]">{formatPrice(createdFacture.total_ttc || 0)}</span>
+                  </div>
+                </div>
+
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-center text-sm text-blue-700">
+                  Le PDF a été sauvegardé automatiquement
+                </div>
+
+                <div className="flex gap-3 pt-4">
+                  <Button
+                    onClick={() => setIsPDFCreatedDialogOpen(false)}
+                    variant="outline"
+                    className="flex-1"
+                  >
+                    Fermer
+                  </Button>
+                  <Button
+                    onClick={async () => {
+                      // Demander la permission IMMÉDIATEMENT au clic
+                      await requestFactureFolderPermission()
+
+                      if (createdFacture) {
+                        const factureData = {
+                          id: createdFacture.id,
+                          facture_number: createdFacture.facture_number,
+                          facture_date: createdFacture.facture_date,
+                          total_ht: createdFacture.total_ht,
+                          transport_fees: 0,
+                          total_tva: createdFacture.total_tva,
+                          total_ttc: createdFacture.total_ttc,
+                          tva_rate: createdFacture.tva_rate || 0,
+                          client: {
+                            code: createdFacture.client?.code || '',
+                            name: createdFacture.client?.name || '',
+                            phone: createdFacture.client?.phone || '',
+                            city: createdFacture.client?.city || '',
+                            ice: createdFacture.client?.ice || '',
+                          },
+                        }
+                        await generateFacturePDF(factureData, createdFactureDeliveries, '/Logo.png', {
+                          ice: companySettings?.ice,
+                          if_number: companySettings?.if_number,
+                          tp: companySettings?.patente,
+                        })
+                      }
+                    }}
+                    className="flex-1 bg-[#B8860B] hover:bg-[#9A7209] gap-2"
+                  >
+                    <FileText className="h-4 w-4" />
+                    Télécharger PDF
                   </Button>
                 </div>
               </div>

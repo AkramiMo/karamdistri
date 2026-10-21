@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useSupabase } from '@/hooks/useSupabase'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -22,7 +22,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
-import { Search, Package, RefreshCw, ShoppingCart, Users, FileText } from 'lucide-react'
+import { Search, Package, RefreshCw, ShoppingCart, Users, Calendar } from 'lucide-react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 
@@ -45,10 +45,8 @@ interface ArticleVendu {
 
 const formatPrice = (price: number | null) => {
   if (price === null) return '-'
-  return new Intl.NumberFormat('fr-MA', {
-    style: 'currency',
-    currency: 'MAD',
-  }).format(price)
+  const formatted = price.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+  return `${formatted} MAD`
 }
 
 export default function ArticlesVendusPage() {
@@ -59,6 +57,10 @@ export default function ArticlesVendusPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [filterClient, setFilterClient] = useState<string>('all')
   const [filterArticle, setFilterArticle] = useState<string>('all')
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
+    const now = new Date()
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  })
 
   const fetchArticlesVendus = useCallback(async () => {
     setIsLoading(true)
@@ -93,6 +95,20 @@ export default function ArticlesVendusPage() {
     new Map(articlesVendus.map(av => [av.article_code, { code: av.article_code, name: av.article?.name || av.article_code }])).values()
   ).sort((a, b) => a.code.localeCompare(b.code))
 
+  // Calculer les mois disponibles
+  const availableMonths = useMemo(() => {
+    const months = new Set<string>()
+    const currentMonth = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`
+    months.add(currentMonth)
+
+    articlesVendus.forEach((av) => {
+      const month = av.sale_date.substring(0, 7) // YYYY-MM
+      months.add(month)
+    })
+
+    return Array.from(months).sort((a, b) => b.localeCompare(a))
+  }, [articlesVendus])
+
   // Filtrage
   const filtered = articlesVendus.filter((av) => {
     const matchesSearch =
@@ -104,7 +120,8 @@ export default function ArticlesVendusPage() {
       (av.delivery?.delivery_number || '').toLowerCase().includes(searchTerm.toLowerCase())
     const matchesClient = filterClient === 'all' || av.client_code === filterClient
     const matchesArticle = filterArticle === 'all' || av.article_code === filterArticle
-    return matchesSearch && matchesClient && matchesArticle
+    const matchesMonth = selectedMonth === 'all' || av.sale_date.startsWith(selectedMonth)
+    return matchesSearch && matchesClient && matchesArticle && matchesMonth
   })
 
   // Stats
@@ -221,6 +238,20 @@ export default function ArticlesVendusPage() {
                   {uniqueArticles.map((a) => (
                     <SelectItem key={a.code} value={a.code}>
                       {a.code} - {a.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={selectedMonth} onValueChange={setSelectedMonth}>
+                <SelectTrigger className="w-full md:w-44 border-2 border-[#B8860B]">
+                  <Calendar className="h-4 w-4 mr-2" />
+                  <SelectValue placeholder="Mois" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Tous les mois</SelectItem>
+                  {availableMonths.map((month) => (
+                    <SelectItem key={month} value={month}>
+                      {format(new Date(month + '-01'), 'MMMM yyyy', { locale: fr })}
                     </SelectItem>
                   ))}
                 </SelectContent>

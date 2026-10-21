@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import { createClient, resetClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
 import {
   DropdownMenu,
@@ -27,10 +27,36 @@ export function Header() {
     setMounted(true)
   }, [])
 
-  const handleSignOut = async () => {
-    // Déconnexion puis redirection forcée
-    await supabase.auth.signOut()
-    window.location.href = '/login'
+  const handleSignOut = () => {
+    // 1. Nettoyer TOUT le localStorage immédiatement
+    const keysToRemove: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (key && (key.startsWith('sb-') || key.includes('supabase') || key.includes('auth'))) {
+        keysToRemove.push(key)
+      }
+    }
+    keysToRemove.forEach(key => localStorage.removeItem(key))
+
+    // 2. Nettoyer sessionStorage
+    sessionStorage.clear()
+
+    // 3. Supprimer les cookies Supabase
+    document.cookie.split(';').forEach(cookie => {
+      const name = cookie.split('=')[0].trim()
+      if (name.startsWith('sb-') || name.includes('supabase')) {
+        document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`
+      }
+    })
+
+    // 4. Réinitialiser le client Supabase singleton
+    resetClient()
+
+    // 5. Signaler à Supabase la déconnexion (sans attendre)
+    supabase.auth.signOut({ scope: 'global' }).catch(() => {})
+
+    // 6. Redirection immédiate
+    window.location.replace('/login')
   }
 
   const initials = profile?.full_name

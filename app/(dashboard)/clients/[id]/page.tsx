@@ -169,14 +169,16 @@ const paymentStatusLabels: Record<string, string> = {
 }
 
 const paymentMethodLabels: Record<string, string> = {
-  cash: 'Especes',
-  check: 'Cheque',
+  cash: 'Espèces',
+  cash_deposit: "Versement d'espèces",
+  check: 'Chèque',
   transfer: 'Virement',
   card: 'Carte',
 }
 
 const paymentMethodIcons: Record<string, React.ReactNode> = {
   cash: <Banknote className="h-4 w-4" />,
+  cash_deposit: <Banknote className="h-4 w-4" />,
   check: <Receipt className="h-4 w-4" />,
   transfer: <Building2 className="h-4 w-4" />,
   card: <CreditCard className="h-4 w-4" />,
@@ -410,10 +412,8 @@ export default function ClientDetailPage() {
 
   const formatPrice = (price: number | null) => {
     if (price === null) return '-'
-    return new Intl.NumberFormat('fr-MA', {
-      style: 'currency',
-      currency: 'MAD',
-    }).format(price)
+    const formatted = price.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+    return `${formatted} MAD`
   }
 
   const printAccountStatement = () => {

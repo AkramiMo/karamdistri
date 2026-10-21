@@ -102,8 +102,8 @@ class SupabaseHealthManager {
       // User is authenticated, perform DB health check using modules table (accessible to all)
       const { error } = await Promise.race([
         client.from('modules').select('id').limit(1),
-        new Promise<{ data: null; error: Error }>((_, reject) =>
-          setTimeout(() => reject(new Error('Health check timeout')), 5000)
+        new Promise<{ data: null; error: Error }>((resolve) =>
+          setTimeout(() => resolve({ data: null, error: new Error('Health check timeout') }), 5000)
         )
       ]);
 

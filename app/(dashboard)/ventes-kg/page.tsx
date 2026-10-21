@@ -70,7 +70,7 @@ const fournitureNames: Record<string, string> = {
   'OVI': 'Olives Violettes',
   'OMX': 'Olives Mix',
   'OCKTM': 'Olive Cocktail Mariné',
-  'HAR': 'Harissa',
+  'HR': 'Harissa',
   'COR': 'Cornichons',
   'CIT': 'Citrons Confits',
   'CTR': 'Citrons',
@@ -83,15 +83,16 @@ const fournitureNames: Record<string, string> = {
 // Ex: Se9LOVE -> OVE, Bo370OTR -> OTR, Se11LOVE -> OVE, Ctr-Vrac -> Ctr
 // Ex: Se9LHr7 -> HAR, Se9LHr5 -> HAR, Bi5LHr -> HAR (tous les harissas regroupés)
 const extractFournitureCode = (articleCode: string): string => {
-  let code = articleCode
+  let code = articleCode.trim()
 
-  // D'abord, retirer le suffixe "-Vrac" si présent
-  if (code.toLowerCase().endsWith('-vrac')) {
-    code = code.slice(0, -5) // Retirer les 5 derniers caractères "-Vrac"
+  // D'abord, retirer le suffixe "-Vrac" si présent (insensible à la casse)
+  const vracMatch = code.match(/[-\s]?vrac$/i)
+  if (vracMatch) {
+    code = code.slice(0, -vracMatch[0].length).trim()
     const vracCode = code.toUpperCase()
     // Vérifier si c'est une variante de Harissa
     if (/^HR[\d.]*$/i.test(vracCode) || vracCode === 'HAR') {
-      return 'HAR'
+      return 'HR'
     }
     return vracCode
   }
@@ -122,10 +123,10 @@ const extractFournitureCode = (articleCode: string): string => {
   // Normaliser en majuscules
   fournitureCode = (fournitureCode || code).toUpperCase()
 
-  // Regrouper toutes les variantes de harissa sous "HAR"
-  // Hr, Hr5, Hr7, Hr5.5, HAR -> HAR (harissa 5kg, 7kg, 5.5kg etc.)
+  // Regrouper toutes les variantes de harissa sous "HR"
+  // Hr, Hr5, Hr7, Hr5.5, HAR -> HR (harissa 5kg, 7kg, 5.5kg etc.)
   if (/^HR[\d.]*$/i.test(fournitureCode) || fournitureCode === 'HAR') {
-    return 'HAR'
+    return 'HR'
   }
 
   return fournitureCode
@@ -134,6 +135,20 @@ const extractFournitureCode = (articleCode: string): string => {
 // Fonction pour obtenir le nom de la fourniture
 const getFournitureName = (code: string): string => {
   return fournitureNames[code] || code
+}
+
+// Fonction pour vérifier si un article est en vrac
+const isVracArticle = (articleCode: string): boolean => {
+  return /[-\s]?vrac$/i.test(articleCode.trim())
+}
+
+// Fonction pour obtenir le poids net effectif d'un article
+// Pour les articles vrac, le poids net = 1 kg (quantité = kg)
+const getEffectiveWeightNet = (articleCode: string, weightNet: number | null): number => {
+  if (isVracArticle(articleCode)) {
+    return 1 // 1 kg par unité pour les articles vrac
+  }
+  return weightNet || 0
 }
 
 type PeriodFilter = 'day' | 'week' | 'month' | 'all'
@@ -145,6 +160,11 @@ export default function VentesKgPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [periodFilter, setPeriodFilter] = useState<PeriodFilter>('month')
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    const now = new Date()
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  })
+  const [selectedFourniture, setSelectedFourniture] = useState<string | null>(null)
 
   const fetchArticlesVendus = useCallback(async () => {
     setIsLoading(true)
@@ -169,6 +189,20 @@ export default function VentesKgPage() {
     fetchArticlesVendus()
   }, [fetchArticlesVendus])
 
+  // Calculer les mois disponibles
+  const availableMonths = useMemo(() => {
+    const months = new Set<string>()
+    const currentMonth = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`
+    months.add(currentMonth)
+
+    articlesVendus.forEach((av) => {
+      const month = av.sale_date.substring(0, 7) // YYYY-MM
+      months.add(month)
+    })
+
+    return Array.from(months).sort((a, b) => b.localeCompare(a))
+  }, [articlesVendus])
+
   // Filtrer par periode
   const filteredByPeriod = useMemo(() => {
     const now = new Date()
@@ -184,15 +218,14 @@ export default function VentesKgPage() {
           const weekEnd = endOfWeek(now, { weekStartsOn: 1 })
           return isWithinInterval(saleDate, { start: weekStart, end: weekEnd })
         case 'month':
-          const monthStart = startOfMonth(now)
-          const monthEnd = endOfMonth(now)
-          return isWithinInterval(saleDate, { start: monthStart, end: monthEnd })
+          // Filtrer par le mois sélectionné
+          return av.sale_date.startsWith(selectedMonth)
         case 'all':
         default:
           return true
       }
     })
-  }, [articlesVendus, periodFilter])
+  }, [articlesVendus, periodFilter, selectedMonth])
 
   // Grouper par FOURNITURE (matiere premiere) et calculer les kg
   const fournituresSummary = useMemo(() => {
@@ -202,7 +235,7 @@ export default function VentesKgPage() {
     filteredByPeriod.forEach((av) => {
       const fournitureCode = extractFournitureCode(av.article_code)
       const existing = summaryMap.get(fournitureCode)
-      const weightNet = av.article?.weight_net || 0
+      const weightNet = getEffectiveWeightNet(av.article_code, av.article?.weight_net ?? null)
       const kgSold = av.quantity_sold * weightNet
 
       // Track unique articles per fourniture
@@ -243,11 +276,47 @@ export default function VentesKgPage() {
   const totalQuantity = filteredSummary.reduce((sum, item) => sum + item.total_quantity, 0)
   const fournituresCount = filteredSummary.length
 
+  // Détail des articles pour la fourniture sélectionnée
+  const fournitureDetail = useMemo(() => {
+    if (!selectedFourniture) return []
+
+    const detailMap = new Map<string, {
+      article_code: string
+      article_name: string
+      weight_net: number
+      quantity_sold: number
+      total_kg: number
+    }>()
+
+    filteredByPeriod.forEach((av) => {
+      const fournitureCode = extractFournitureCode(av.article_code)
+      if (fournitureCode !== selectedFourniture) return
+
+      const weightNet = getEffectiveWeightNet(av.article_code, av.article?.weight_net ?? null)
+      const kgSold = av.quantity_sold * weightNet
+      const key = av.article_code
+
+      const existing = detailMap.get(key)
+      if (existing) {
+        existing.quantity_sold += av.quantity_sold
+        existing.total_kg += kgSold
+      } else {
+        detailMap.set(key, {
+          article_code: av.article_code,
+          article_name: av.article?.name || '',
+          weight_net: weightNet, // Utilise le poids effectif (1 kg pour vrac)
+          quantity_sold: av.quantity_sold,
+          total_kg: kgSold,
+        })
+      }
+    })
+
+    return Array.from(detailMap.values()).sort((a, b) => b.total_kg - a.total_kg)
+  }, [filteredByPeriod, selectedFourniture])
+
   const formatKg = (kg: number) => {
-    return new Intl.NumberFormat('fr-FR', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(kg) + ' kg'
+    const formatted = kg.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+    return `${formatted} kg`
   }
 
   const getPeriodLabel = () => {
@@ -355,16 +424,31 @@ export default function VentesKgPage() {
                 />
               </div>
               <Select value={periodFilter} onValueChange={(val) => setPeriodFilter(val as PeriodFilter)}>
-                <SelectTrigger className="w-full md:w-56 border-2 border-[#B8860B]">
+                <SelectTrigger className="w-full md:w-44 border-2 border-[#B8860B]">
                   <SelectValue placeholder="Periode" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="day">Aujourd'hui</SelectItem>
+                  <SelectItem value="day">Aujourd&apos;hui</SelectItem>
                   <SelectItem value="week">Cette semaine</SelectItem>
-                  <SelectItem value="month">Ce mois</SelectItem>
+                  <SelectItem value="month">Par mois</SelectItem>
                   <SelectItem value="all">Toutes periodes</SelectItem>
                 </SelectContent>
               </Select>
+              {periodFilter === 'month' && (
+                <Select value={selectedMonth} onValueChange={setSelectedMonth}>
+                  <SelectTrigger className="w-full md:w-40 border-2 border-[#B8860B]">
+                    <Calendar className="h-4 w-4 mr-2" />
+                    <SelectValue placeholder="Mois" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableMonths.map((month) => (
+                      <SelectItem key={month} value={month}>
+                        {format(new Date(month + '-01'), 'MMMM yyyy', { locale: fr })}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </div>
           </CardHeader>
           <CardContent>
@@ -388,25 +472,66 @@ export default function VentesKgPage() {
                     </TableRow>
                   ) : (
                     filteredSummary.map((item) => (
-                      <TableRow key={item.fourniture_code}>
-                        <TableCell>
-                          <Badge className="bg-amber-100 text-[#9A7209] font-mono font-bold text-base">
-                            {item.fourniture_code}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="font-medium">{item.fourniture_name}</TableCell>
-                        <TableCell className="text-center">
-                          <Badge className="bg-gray-100 text-gray-700">{item.articles_count}</Badge>
-                        </TableCell>
-                        <TableCell className="text-center">
-                          <Badge className="bg-blue-100 text-blue-800">{item.total_quantity}</Badge>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Badge className="bg-green-100 text-green-800 text-base px-3 py-1 font-bold">
-                            {formatKg(item.total_kg)}
-                          </Badge>
-                        </TableCell>
-                      </TableRow>
+                      <>
+                        <TableRow
+                          key={item.fourniture_code}
+                          className={`cursor-pointer hover:bg-amber-50 ${selectedFourniture === item.fourniture_code ? 'bg-amber-100' : ''}`}
+                          onClick={() => setSelectedFourniture(selectedFourniture === item.fourniture_code ? null : item.fourniture_code)}
+                        >
+                          <TableCell>
+                            <Badge className="bg-amber-100 text-[#9A7209] font-mono font-bold text-base">
+                              {item.fourniture_code}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="font-medium">{item.fourniture_name}</TableCell>
+                          <TableCell className="text-center">
+                            <Badge className="bg-gray-100 text-gray-700">{item.articles_count}</Badge>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <Badge className="bg-blue-100 text-blue-800">{item.total_quantity}</Badge>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Badge className="bg-green-100 text-green-800 text-base px-3 py-1 font-bold">
+                              {formatKg(item.total_kg)}
+                            </Badge>
+                          </TableCell>
+                        </TableRow>
+                        {selectedFourniture === item.fourniture_code && fournitureDetail.length > 0 && (
+                          <TableRow key={`${item.fourniture_code}-detail`}>
+                            <TableCell colSpan={5} className="bg-gray-50 p-4">
+                              <div className="text-sm font-medium mb-2 text-gray-700">
+                                Détail des articles pour {item.fourniture_code} :
+                              </div>
+                              <Table>
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHead>Code Article</TableHead>
+                                    <TableHead>Nom</TableHead>
+                                    <TableHead className="text-right">Poids Net</TableHead>
+                                    <TableHead className="text-right">Qté Vendue</TableHead>
+                                    <TableHead className="text-right">Total Kg</TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {fournitureDetail.map((detail) => (
+                                    <TableRow key={detail.article_code}>
+                                      <TableCell className="font-mono">{detail.article_code}</TableCell>
+                                      <TableCell>{detail.article_name}</TableCell>
+                                      <TableCell className="text-right">{detail.weight_net} kg</TableCell>
+                                      <TableCell className="text-right">{detail.quantity_sold}</TableCell>
+                                      <TableCell className="text-right font-bold">{formatKg(detail.total_kg)}</TableCell>
+                                    </TableRow>
+                                  ))}
+                                  <TableRow className="bg-amber-50 font-bold">
+                                    <TableCell colSpan={4} className="text-right">Total :</TableCell>
+                                    <TableCell className="text-right">{formatKg(fournitureDetail.reduce((sum, d) => sum + d.total_kg, 0))}</TableCell>
+                                  </TableRow>
+                                </TableBody>
+                              </Table>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </>
                     ))
                   )}
                 </TableBody>

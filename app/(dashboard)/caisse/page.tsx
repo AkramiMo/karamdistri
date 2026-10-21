@@ -163,10 +163,8 @@ export default function CaissePage() {
     .reduce((sum, e) => sum + e.amount, 0)
 
   const formatPrice = (price: number) => {
-    return new Intl.NumberFormat('fr-MA', {
-      style: 'currency',
-      currency: 'MAD',
-    }).format(price)
+    const formatted = price.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+    return `${formatted} MAD`
   }
 
   return (

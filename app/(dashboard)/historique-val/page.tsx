@@ -49,6 +49,7 @@ import {
   Eye,
   FileSpreadsheet,
   Image,
+  ShoppingCart,
 } from 'lucide-react'
 import {
   LineChart,
@@ -139,7 +140,23 @@ interface ArticleChartData {
   quantite: number
 }
 
-type TabType = 'client' | 'article'
+type TabType = 'client' | 'article' | 'fourniture'
+
+interface Supply {
+  id: string
+  code: string
+  name: string
+}
+
+interface SupplyReceptionData {
+  reception_number: string
+  reception_date: string
+  supplier_code: string
+  supplier_name: string
+  quantity_received: number
+  unit_price: number
+  total_ht: number
+}
 
 const statusColors: Record<string, string> = {
   pending: 'bg-gray-100 text-gray-800',
@@ -194,6 +211,7 @@ export default function HistoriqueVALPage() {
   const [clientDeliveries, setClientDeliveries] = useState<Delivery[]>([])
   const [viewingDelivery, setViewingDelivery] = useState<Delivery | null>(null)
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
+  const [clientDateError, setClientDateError] = useState('')
 
   // Article tab state
   const [selectedArticleId, setSelectedArticleId] = useState('')
@@ -207,11 +225,28 @@ export default function HistoriqueVALPage() {
     return format(d, 'yyyy-MM-dd')
   })
   const [articleDeliveries, setArticleDeliveries] = useState<ArticleDeliveryData[]>([])
+  const [articleDateError, setArticleDateError] = useState('')
 
-  // Fetch clients and articles
+  // Fourniture tab state
+  const [supplies, setSupplies] = useState<Supply[]>([])
+  const [selectedSupplyId, setSelectedSupplyId] = useState('')
+  const [supplyOpen, setSupplyOpen] = useState(false)
+  const [supplyDateFrom, setSupplyDateFrom] = useState(() => {
+    const d = startOfMonth(new Date())
+    return format(d, 'yyyy-MM-dd')
+  })
+  const [supplyDateTo, setSupplyDateTo] = useState(() => {
+    const d = endOfMonth(new Date())
+    return format(d, 'yyyy-MM-dd')
+  })
+  const [supplyReceptions, setSupplyReceptions] = useState<SupplyReceptionData[]>([])
+  const [supplyDateError, setSupplyDateError] = useState('')
+
+
+  // Fetch clients, articles and supplies
   useEffect(() => {
     const fetchData = async () => {
-      const [clientsResult, articlesResult] = await Promise.all([
+      const [clientsResult, articlesResult, suppliesResult] = await Promise.all([
         supabase
           .from('clients')
           .select('id, code, name')
@@ -222,10 +257,16 @@ export default function HistoriqueVALPage() {
           .select('id, code, name')
           .eq('is_active', true)
           .order('code'),
+        supabase
+          .from('supplies')
+          .select('id, code, name')
+          .eq('is_active', true)
+          .order('code'),
       ])
 
       setClients(clientsResult.data || [])
       setArticles(articlesResult.data || [])
+      setSupplies(suppliesResult.data || [])
     }
 
     fetchData()
@@ -234,6 +275,12 @@ export default function HistoriqueVALPage() {
   // Fetch client deliveries
   const fetchClientDeliveries = async () => {
     if (!selectedClientId) return
+
+    if (!clientDateFrom || !clientDateTo) {
+      setClientDateError('Veuillez entrer des dates valides (ex: 31/09 n\'existe pas)')
+      return
+    }
+    setClientDateError('')
 
     setIsLoading(true)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -257,9 +304,23 @@ export default function HistoriqueVALPage() {
     setIsLoading(false)
   }
 
+  // Auto-fetch when client or dates change
+  useEffect(() => {
+    if (selectedClientId && clientDateFrom && clientDateTo) {
+      fetchClientDeliveries()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedClientId, clientDateFrom, clientDateTo])
+
   // Fetch article deliveries
   const fetchArticleDeliveries = async () => {
     if (!selectedArticleId) return
+
+    if (!articleDateFrom || !articleDateTo) {
+      setArticleDateError('Veuillez entrer des dates valides (ex: 31/09 n\'existe pas)')
+      return
+    }
+    setArticleDateError('')
 
     setIsLoading(true)
     // D'abord récupérer les livraisons dans la période
@@ -302,6 +363,70 @@ export default function HistoriqueVALPage() {
     setIsLoading(false)
   }
 
+  // Auto-fetch when article or dates change
+  useEffect(() => {
+    if (selectedArticleId && articleDateFrom && articleDateTo) {
+      fetchArticleDeliveries()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedArticleId, articleDateFrom, articleDateTo])
+
+  // Fetch supply receptions
+  const fetchSupplyReceptions = async () => {
+    if (!selectedSupplyId) return
+
+    if (!supplyDateFrom || !supplyDateTo) {
+      setSupplyDateError('Veuillez entrer des dates valides')
+      return
+    }
+    setSupplyDateError('')
+
+    setIsLoading(true)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: receptionsData, error: receptionsError } = await (supabase.from('receptions') as any)
+      .select(`
+        id, reception_number, reception_date,
+        supplier:suppliers(code, name),
+        reception_items!inner(id, article_id, quantity_received, unit_price)
+      `)
+      .eq('reception_items.article_id', selectedSupplyId)
+      .gte('reception_date', supplyDateFrom)
+      .lte('reception_date', supplyDateTo)
+      .order('reception_date', { ascending: false })
+
+    if (receptionsError) {
+      console.error('Error fetching supply receptions:', receptionsError)
+    } else {
+      const formattedData: SupplyReceptionData[] = []
+
+      ;(receptionsData || []).forEach((reception: any) => {
+        const items = reception.reception_items?.filter((item: any) => item.article_id === selectedSupplyId) || []
+        items.forEach((item: any) => {
+          formattedData.push({
+            reception_number: reception.reception_number,
+            reception_date: reception.reception_date,
+            supplier_code: reception.supplier?.code || '',
+            supplier_name: reception.supplier?.name || '',
+            quantity_received: item.quantity_received || 0,
+            unit_price: item.unit_price || 0,
+            total_ht: (item.quantity_received || 0) * (item.unit_price || 0),
+          })
+        })
+      })
+
+      setSupplyReceptions(formattedData)
+    }
+    setIsLoading(false)
+  }
+
+  // Auto-fetch when supply or dates change
+  useEffect(() => {
+    if (selectedSupplyId && supplyDateFrom && supplyDateTo) {
+      fetchSupplyReceptions()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSupplyId, supplyDateFrom, supplyDateTo])
+
   // Calculate client statistics
   const clientStats = useMemo(() => {
     const totalBL = clientDeliveries.length
@@ -327,6 +452,16 @@ export default function HistoriqueVALPage() {
 
     return { totalDelivered, totalReturned, totalNet, totalHT }
   }, [articleDeliveries])
+
+  // Calculate supply statistics
+  const supplyStats = useMemo(() => {
+    const totalBR = supplyReceptions.length
+    const totalReceived = supplyReceptions.reduce((sum, d) => sum + d.quantity_received, 0)
+    const totalHT = supplyReceptions.reduce((sum, d) => sum + d.total_ht, 0)
+
+    return { totalBR, totalReceived, totalHT }
+  }, [supplyReceptions])
+
 
   // Prepare chart data for client
   const clientChartData = useMemo(() => {
@@ -385,11 +520,33 @@ export default function HistoriqueVALPage() {
       }))
   }, [articleDeliveries])
 
+  // Prepare chart data for supply
+  const supplyChartData = useMemo(() => {
+    const dataMap = new Map<string, number>()
+
+    supplyReceptions.forEach((d) => {
+      if (!d.reception_date) return
+      const date = d.reception_date
+
+      if (dataMap.has(date)) {
+        dataMap.set(date, dataMap.get(date)! + d.quantity_received)
+      } else {
+        dataMap.set(date, d.quantity_received)
+      }
+    })
+
+    return Array.from(dataMap.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, quantite]) => ({
+        date,
+        label: format(parseISO(date), 'dd/MM', { locale: fr }),
+        quantite,
+      }))
+  }, [supplyReceptions])
+
   const formatPrice = (price: number) => {
-    return new Intl.NumberFormat('fr-MA', {
-      style: 'currency',
-      currency: 'MAD',
-    }).format(price)
+    const formatted = price.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+    return `${formatted} MAD`
   }
 
   // Export functions
@@ -626,6 +783,116 @@ export default function HistoriqueVALPage() {
     URL.revokeObjectURL(url)
   }
 
+  const exportSupplyPDF = async () => {
+    const supply = supplies.find((s) => s.id === selectedSupplyId)
+    if (!supply) return
+
+    const doc = new jsPDF()
+    const pageWidth = doc.internal.pageSize.getWidth()
+
+    // Logo à gauche
+    try {
+      const img = new window.Image()
+      img.crossOrigin = 'anonymous'
+      await new Promise<void>((resolve) => {
+        img.onload = () => {
+          try {
+            doc.addImage(img, 'PNG', 5, 5, 40, 25)
+          } catch (e) {
+            console.error('Error adding logo:', e)
+          }
+          resolve()
+        }
+        img.onerror = () => resolve()
+        img.src = '/Logo.png'
+      })
+    } catch (e) {
+      console.error('Error loading logo:', e)
+    }
+
+    // ICE, IF, TP en dessous du logo
+    doc.setFontSize(8)
+    doc.setFont('helvetica', 'normal')
+    doc.setTextColor(80, 80, 80)
+    let companyY = 33
+    if (companySettings?.ice) {
+      doc.text(`ICE: ${companySettings.ice}`, 15, companyY)
+      companyY += 4
+    }
+    if (companySettings?.if_number) {
+      doc.text(`IF: ${companySettings.if_number}`, 15, companyY)
+      companyY += 4
+    }
+    if (companySettings?.patente) {
+      doc.text(`TP: ${companySettings.patente}`, 15, companyY)
+    }
+
+    // Titre centré
+    doc.setFontSize(14)
+    doc.setFont('helvetica', 'bold')
+    doc.setTextColor(0, 0, 0)
+    doc.text('Historique Achats Fourniture', pageWidth / 2, 20, { align: 'center' })
+
+    // Informations fourniture
+    doc.setFontSize(10)
+    doc.setFont('helvetica', 'normal')
+    doc.text(`Fourniture: ${supply.code} - ${supply.name}`, 14, 50)
+    doc.text(`Periode: ${format(parseISO(supplyDateFrom), 'dd/MM/yyyy')} - ${format(parseISO(supplyDateTo), 'dd/MM/yyyy')}`, 14, 56)
+
+    // Table
+    const tableData = supplyReceptions.map((d) => [
+      d.reception_number,
+      d.reception_date ? format(parseISO(d.reception_date), 'dd/MM/yyyy') : '-',
+      `${d.supplier_code} - ${d.supplier_name}`,
+      d.quantity_received.toString(),
+      formatPrice(d.unit_price),
+      formatPrice(d.total_ht),
+    ])
+
+    autoTable(doc, {
+      startY: 62,
+      head: [['N° BR', 'Date', 'Fournisseur', 'Qté Reçue', 'Prix Unit', 'Total HT']],
+      body: tableData,
+      theme: 'striped',
+      headStyles: { fillColor: [184, 134, 11] },
+    })
+
+    // Summary à droite
+    const finalY = (doc as any).lastAutoTable.finalY + 10
+    doc.setFontSize(10)
+    doc.setFont('helvetica', 'bold')
+    doc.setTextColor(0, 0, 0)
+    doc.text(`Total BR: ${supplyStats.totalBR}`, pageWidth - 14, finalY, { align: 'right' })
+    doc.text(`Qté Totale: ${supplyStats.totalReceived}`, pageWidth - 14, finalY + 6, { align: 'right' })
+    doc.text(`Total HT: ${formatPrice(supplyStats.totalHT)}`, pageWidth - 14, finalY + 12, { align: 'right' })
+
+    doc.save(`historique_fourniture_${supply.code}_${supplyDateFrom}_${supplyDateTo}.pdf`)
+  }
+
+  const exportSupplyExcel = () => {
+    const supply = supplies.find((s) => s.id === selectedSupplyId)
+    if (!supply) return
+
+    // Create CSV content
+    let csv = 'N° BR;Date;Fournisseur;Qté Reçue;Prix Unit;Total HT\n'
+
+    supplyReceptions.forEach((d) => {
+      csv += `${d.reception_number};${d.reception_date ? format(parseISO(d.reception_date), 'dd/MM/yyyy') : '-'};${d.supplier_code} - ${d.supplier_name};${d.quantity_received};${d.unit_price.toFixed(2)};${d.total_ht.toFixed(2)}\n`
+    })
+
+    csv += `\nTotal BR;${supplyStats.totalBR}\n`
+    csv += `Qté Totale;${supplyStats.totalReceived}\n`
+    csv += `Total HT;${supplyStats.totalHT.toFixed(2)}\n`
+
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `historique_fourniture_${supply.code}_${supplyDateFrom}_${supplyDateTo}.csv`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
   const exportChartAsImage = async () => {
     if (!chartRef.current) return
 
@@ -650,8 +917,8 @@ export default function HistoriqueVALPage() {
       <div className="space-y-6">
         {/* Header */}
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Historique VAL</h1>
-          <p className="text-gray-500">Ventes - Articles - Livraisons</p>
+          <h1 className="text-2xl font-bold text-gray-900">Historique VALA</h1>
+          <p className="text-gray-500">Ventes - Articles - Livraisons - Achats</p>
         </div>
 
         {/* Tabs */}
@@ -671,6 +938,14 @@ export default function HistoriqueVALPage() {
           >
             <Package className="h-4 w-4 mr-2" />
             Par Article
+          </Button>
+          <Button
+            variant={activeTab === 'fourniture' ? 'default' : 'outline'}
+            onClick={() => setActiveTab('fourniture')}
+            className={activeTab === 'fourniture' ? 'bg-[#B8860B] hover:bg-[#9A7209]' : ''}
+          >
+            <ShoppingCart className="h-4 w-4 mr-2" />
+            Par Fourniture
           </Button>
         </div>
 
@@ -733,7 +1008,7 @@ export default function HistoriqueVALPage() {
                     <Input
                       type="date"
                       value={clientDateFrom}
-                      onChange={(e) => setClientDateFrom(e.target.value)}
+                      onChange={(e) => { setClientDateFrom(e.target.value); setClientDateError('') }}
                       className="bg-[#F5E6C8]"
                     />
                   </div>
@@ -742,7 +1017,7 @@ export default function HistoriqueVALPage() {
                     <Input
                       type="date"
                       value={clientDateTo}
-                      onChange={(e) => setClientDateTo(e.target.value)}
+                      onChange={(e) => { setClientDateTo(e.target.value); setClientDateError('') }}
                       className="bg-[#F5E6C8]"
                     />
                   </div>
@@ -755,6 +1030,9 @@ export default function HistoriqueVALPage() {
                     Rechercher
                   </Button>
                 </div>
+                {clientDateError && (
+                  <p className="text-red-600 text-sm mt-2">{clientDateError}</p>
+                )}
               </CardContent>
             </Card>
 
@@ -816,7 +1094,7 @@ export default function HistoriqueVALPage() {
                             <LabelList
                               dataKey="montant"
                               position="top"
-                              formatter={(value: number) => new Intl.NumberFormat('fr-FR').format(value)}
+                              formatter={(value: number) => Math.round(value).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ')}
                               style={{ fill: '#166534', fontSize: 11, fontWeight: 600 }}
                             />
                           </Bar>
@@ -971,7 +1249,7 @@ export default function HistoriqueVALPage() {
                     <Input
                       type="date"
                       value={articleDateFrom}
-                      onChange={(e) => setArticleDateFrom(e.target.value)}
+                      onChange={(e) => { setArticleDateFrom(e.target.value); setArticleDateError('') }}
                       className="bg-[#F5E6C8]"
                     />
                   </div>
@@ -980,7 +1258,7 @@ export default function HistoriqueVALPage() {
                     <Input
                       type="date"
                       value={articleDateTo}
-                      onChange={(e) => setArticleDateTo(e.target.value)}
+                      onChange={(e) => { setArticleDateTo(e.target.value); setArticleDateError('') }}
                       className="bg-[#F5E6C8]"
                     />
                   </div>
@@ -993,6 +1271,9 @@ export default function HistoriqueVALPage() {
                     Rechercher
                   </Button>
                 </div>
+                {articleDateError && (
+                  <p className="text-red-600 text-sm mt-2">{articleDateError}</p>
+                )}
               </CardContent>
             </Card>
 
@@ -1042,19 +1323,19 @@ export default function HistoriqueVALPage() {
                   <CardContent>
                     <div ref={chartRef} className="h-[300px]">
                       <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={articleChartData}>
+                        <BarChart data={articleChartData} barSize={40}>
                           <XAxis dataKey="label" axisLine={false} tickLine={false} />
                           <YAxis axisLine={false} tickLine={false} />
                           <Tooltip labelFormatter={(label) => `Date: ${label}`} />
-                          <Line
-                            type="monotone"
-                            dataKey="quantite"
-                            name="Quantite"
-                            stroke="#22c55e"
-                            strokeWidth={3}
-                            dot={{ fill: '#22c55e', r: 5 }}
-                          />
-                        </LineChart>
+                          <Bar dataKey="quantite" name="Quantité" fill="#22c55e" radius={[8, 8, 0, 0]}>
+                            <LabelList
+                              dataKey="quantite"
+                              position="top"
+                              formatter={(value: number) => value.toLocaleString('fr-FR')}
+                              style={{ fill: '#166534', fontSize: 11, fontWeight: 600 }}
+                            />
+                          </Bar>
+                        </BarChart>
                       </ResponsiveContainer>
                     </div>
                   </CardContent>
@@ -1123,6 +1404,218 @@ export default function HistoriqueVALPage() {
               <Card className="border-2 border-gray-200">
                 <CardContent className="py-8 text-center text-gray-500">
                   Aucune livraison trouvee pour cette periode
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        )}
+
+        {/* Fourniture Tab */}
+        {activeTab === 'fourniture' && (
+          <div className="space-y-6">
+            {/* Filters */}
+            <Card className="border-2 border-[#B8860B]">
+              <CardContent className="pt-6">
+                <div className="flex flex-wrap gap-4 items-end">
+                  <div className="flex-1 min-w-[250px]">
+                    <Label>Fourniture</Label>
+                    <Popover open={supplyOpen} onOpenChange={setSupplyOpen}>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          role="combobox"
+                          aria-expanded={supplyOpen}
+                          className="w-full justify-between bg-[#F5E6C8]"
+                        >
+                          {selectedSupplyId
+                            ? supplies.find((s) => s.id === selectedSupplyId)?.name || 'Fourniture selectionnee'
+                            : 'Rechercher une fourniture...'}
+                          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-[400px] p-0" align="start">
+                        <Command>
+                          <CommandInput placeholder="Rechercher par code ou nom..." />
+                          <CommandList>
+                            <CommandEmpty>Aucune fourniture trouvee.</CommandEmpty>
+                            <CommandGroup>
+                              {supplies.map((supply) => (
+                                <CommandItem
+                                  key={supply.id}
+                                  value={`${supply.code} ${supply.name}`}
+                                  onSelect={() => {
+                                    setSelectedSupplyId(supply.id)
+                                    setSupplyOpen(false)
+                                  }}
+                                >
+                                  <Check
+                                    className={cn(
+                                      'mr-2 h-4 w-4',
+                                      selectedSupplyId === supply.id ? 'opacity-100' : 'opacity-0'
+                                    )}
+                                  />
+                                  <span className="font-medium">{supply.code}</span>
+                                  <span className="ml-2 text-gray-600">{supply.name}</span>
+                                </CommandItem>
+                              ))}
+                            </CommandGroup>
+                          </CommandList>
+                        </Command>
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+                  <div>
+                    <Label>Du</Label>
+                    <Input
+                      type="date"
+                      value={supplyDateFrom}
+                      onChange={(e) => { setSupplyDateFrom(e.target.value); setSupplyDateError('') }}
+                      className="bg-[#F5E6C8]"
+                    />
+                  </div>
+                  <div>
+                    <Label>Au</Label>
+                    <Input
+                      type="date"
+                      value={supplyDateTo}
+                      onChange={(e) => { setSupplyDateTo(e.target.value); setSupplyDateError('') }}
+                      className="bg-[#F5E6C8]"
+                    />
+                  </div>
+                  <Button
+                    onClick={fetchSupplyReceptions}
+                    className="bg-[#B8860B] hover:bg-[#9A7209]"
+                    disabled={!selectedSupplyId}
+                  >
+                    <Search className="h-4 w-4 mr-2" />
+                    Rechercher
+                  </Button>
+                </div>
+                {supplyDateError && (
+                  <p className="text-red-600 text-sm mt-2">{supplyDateError}</p>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Results */}
+            {supplyReceptions.length > 0 && (
+              <>
+                {/* Statistics Cards */}
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  <Card className="border-[#B8860B]">
+                    <CardContent className="pt-4">
+                      <div className="text-sm text-gray-500">Total BR</div>
+                      <div className="text-2xl font-bold text-[#B8860B]">{supplyStats.totalBR}</div>
+                    </CardContent>
+                  </Card>
+                  <Card className="border-[#B8860B]">
+                    <CardContent className="pt-4">
+                      <div className="text-sm text-gray-500">Qte Totale Recue</div>
+                      <div className="text-2xl font-bold text-blue-600">{supplyStats.totalReceived}</div>
+                    </CardContent>
+                  </Card>
+                  <Card className="border-[#B8860B]">
+                    <CardContent className="pt-4">
+                      <div className="text-sm text-gray-500">Total HT</div>
+                      <div className="text-2xl font-bold text-red-600">{formatPrice(supplyStats.totalHT)}</div>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                {/* Chart */}
+                <Card className="border-2 border-[#B8860B]">
+                  <CardHeader className="flex flex-row items-center justify-between">
+                    <CardTitle className="flex items-center gap-2">
+                      <TrendingUp className="h-5 w-5 text-[#B8860B]" />
+                      Evolution des quantites achetees
+                    </CardTitle>
+                    <Button variant="outline" size="sm" onClick={exportChartAsImage}>
+                      <Image className="h-4 w-4 mr-2" />
+                      Export Image
+                    </Button>
+                  </CardHeader>
+                  <CardContent>
+                    <div ref={chartRef} className="h-[300px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={supplyChartData} barSize={40}>
+                          <XAxis dataKey="label" axisLine={false} tickLine={false} />
+                          <YAxis axisLine={false} tickLine={false} />
+                          <Tooltip labelFormatter={(label) => `Date: ${label}`} />
+                          <Bar dataKey="quantite" name="Quantité" fill="#3b82f6" radius={[8, 8, 0, 0]}>
+                            <LabelList
+                              dataKey="quantite"
+                              position="top"
+                              formatter={(value: number) => value.toLocaleString('fr-FR')}
+                              style={{ fill: '#1e40af', fontSize: 11, fontWeight: 600 }}
+                            />
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Table */}
+                <Card className="border-2 border-[#B8860B]">
+                  <CardHeader className="flex flex-row items-center justify-between">
+                    <CardTitle className="flex items-center gap-2">
+                      <ShoppingCart className="h-5 w-5 text-[#B8860B]" />
+                      Detail des receptions
+                    </CardTitle>
+                    <div className="flex gap-2">
+                      <Button variant="outline" size="sm" onClick={exportSupplyPDF}>
+                        <FileText className="h-4 w-4 mr-2" />
+                        PDF
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={exportSupplyExcel}>
+                        <FileSpreadsheet className="h-4 w-4 mr-2" />
+                        Excel
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>N° BR</TableHead>
+                            <TableHead>Date</TableHead>
+                            <TableHead>Fournisseur</TableHead>
+                            <TableHead className="text-right">Qte Recue</TableHead>
+                            <TableHead className="text-right">Prix Unit</TableHead>
+                            <TableHead className="text-right">Total HT</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {supplyReceptions.map((item, index) => (
+                            <TableRow key={index}>
+                              <TableCell className="font-mono font-medium">{item.reception_number}</TableCell>
+                              <TableCell>
+                                {item.reception_date
+                                  ? format(parseISO(item.reception_date), 'dd/MM/yyyy', { locale: fr })
+                                  : '-'}
+                              </TableCell>
+                              <TableCell>
+                                <span className="font-medium">{item.supplier_code}</span>
+                                <span className="text-gray-500 ml-2">{item.supplier_name}</span>
+                              </TableCell>
+                              <TableCell className="text-right font-medium text-blue-600">{item.quantity_received}</TableCell>
+                              <TableCell className="text-right">{formatPrice(item.unit_price)}</TableCell>
+                              <TableCell className="text-right font-medium">{formatPrice(item.total_ht)}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </CardContent>
+                </Card>
+              </>
+            )}
+
+            {selectedSupplyId && supplyReceptions.length === 0 && !isLoading && (
+              <Card className="border-2 border-gray-200">
+                <CardContent className="py-8 text-center text-gray-500">
+                  Aucune reception trouvee pour cette periode
                 </CardContent>
               </Card>
             )}

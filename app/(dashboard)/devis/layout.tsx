@@ -1,6 +1,6 @@
 'use client'
 
-import { usePathname } from 'next/navigation'
+import { usePathname, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { FileText, Users, Building2, FileInput } from 'lucide-react'
@@ -32,6 +32,12 @@ export default function DevisLayout({
   children: React.ReactNode
 }) {
   const pathname = usePathname()
+  const searchParams = useSearchParams()
+
+  // Mode formulaire seul via Actions - ne pas afficher le layout
+  if (searchParams.get('action') === 'new') {
+    return <>{children}</>
+  }
 
   return (
     <div className="space-y-6">

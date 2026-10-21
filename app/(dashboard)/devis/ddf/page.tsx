@@ -2,6 +2,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { useSupabase } from '@/hooks/useSupabase'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -100,14 +101,14 @@ const statusLabels: Record<string, string> = {
 }
 
 const formatPrice = (price: number) => {
-  return new Intl.NumberFormat('fr-MA', {
-    style: 'currency',
-    currency: 'MAD',
-  }).format(price)
+  const formatted = price.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+  return `${formatted} MAD`
 }
 
 export default function DDFPage() {
   const supabase = useSupabase()
+  const searchParams = useSearchParams()
+  const router = useRouter()
   const [ddfs, setDdfs] = useState<DDF[]>([])
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [supplies, setSupplies] = useState<Supply[]>([])
@@ -118,6 +119,7 @@ export default function DDFPage() {
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [viewingDDF, setViewingDDF] = useState<DDF | null>(null)
   const [editingDDF, setEditingDDF] = useState<DDF | null>(null)
+  const [isNewOnlyMode, setIsNewOnlyMode] = useState(false)
 
   const [formData, setFormData] = useState({
     supplier_id: '',
@@ -170,6 +172,13 @@ export default function DDFPage() {
     fetchSuppliers()
     fetchSupplies()
   }, [fetchDDFs, fetchSuppliers, fetchSupplies])
+
+  useEffect(() => {
+    if (searchParams.get('action') === 'new') {
+      setIsDialogOpen(true)
+      setIsNewOnlyMode(true)
+    }
+  }, [searchParams])
 
   const generateDDFNumber = async (): Promise<string> => {
     const year = new Date().getFullYear()
@@ -316,8 +325,12 @@ export default function DDFPage() {
       await (supabase as any).from('supplier_quote_request_items').insert(itemsToInsert)
     }
 
-    resetForm()
-    setIsDialogOpen(false)
+    if (isNewOnlyMode) {
+      handleCloseNewOnly()
+    } else {
+      resetForm()
+      setIsDialogOpen(false)
+    }
     fetchDDFs()
   }
 
@@ -402,6 +415,10 @@ export default function DDFPage() {
     setEditingDDF(null)
   }
 
+  const handleCloseNewOnly = () => {
+    router.replace('/')
+  }
+
   const filteredDDFs = ddfs.filter((ddf) => {
     const matchesSearch =
       ddf.ddf_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -416,6 +433,146 @@ export default function DDFPage() {
     draft: ddfs.filter((d) => d.status === 'draft').length,
     sent: ddfs.filter((d) => d.status === 'sent').length,
     received: ddfs.filter((d) => d.status === 'received').length,
+  }
+
+  if (isNewOnlyMode) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-6">
+        <Card className="max-w-4xl mx-auto">
+          <CardHeader className="border-b bg-[#B8860B] text-white rounded-t-lg">
+            <CardTitle className="text-xl flex items-center gap-2">
+              <Building2 className="h-5 w-5" />
+              Nouvelle Demande de Devis Fournisseur
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-6">
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Fournisseur *</Label>
+                  <Select
+                    value={formData.supplier_id}
+                    onValueChange={(value) => setFormData({ ...formData, supplier_id: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Sélectionner un fournisseur" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {suppliers.map((supplier) => (
+                        <SelectItem key={supplier.id} value={supplier.id}>
+                          {supplier.code} - {supplier.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Date de demande *</Label>
+                  <Input
+                    type="date"
+                    value={formData.request_date}
+                    onChange={(e) => setFormData({ ...formData, request_date: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Date limite de réponse</Label>
+                  <Input
+                    type="date"
+                    value={formData.response_deadline}
+                    onChange={(e) => setFormData({ ...formData, response_deadline: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Notes</Label>
+                  <Textarea
+                    value={formData.notes}
+                    onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                    placeholder="Notes ou remarques..."
+                  />
+                </div>
+              </div>
+
+              {/* Items */}
+              <div className="border-t pt-4">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-semibold">Fournitures</h3>
+                  <Button type="button" variant="outline" size="sm" onClick={handleAddItem}>
+                    <Plus className="h-4 w-4 mr-1" />
+                    Ajouter fourniture
+                  </Button>
+                </div>
+
+                {formItems.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500 bg-gray-50 rounded-lg">
+                    Aucune fourniture ajoutée
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Fourniture</TableHead>
+                        <TableHead className="w-32">Quantité</TableHead>
+                        <TableHead className="w-16"></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {formItems.map((item, index) => (
+                        <TableRow key={index}>
+                          <TableCell>
+                            <Select
+                              value={item.supply_id}
+                              onValueChange={(value) => handleItemChange(index, 'supply_id', value)}
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder="Sélectionner" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {supplies.map((supply) => (
+                                  <SelectItem key={supply.id} value={supply.id}>
+                                    {supply.code} - {supply.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </TableCell>
+                          <TableCell>
+                            <Input
+                              type="text"
+                              value={item.quantity}
+                              onChange={(e) => handleItemChange(index, 'quantity', e.target.value)}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleRemoveItem(index)}
+                            >
+                              <Trash2 className="h-4 w-4 text-red-500" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
+
+              <div className="flex justify-end gap-2 pt-4 border-t">
+                <Button type="button" variant="outline" onClick={handleCloseNewOnly}>
+                  Annuler
+                </Button>
+                <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
+                  Créer
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
+    )
   }
 
   return (

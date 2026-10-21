@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { useSupabase, queryWithRetry } from '@/hooks/useSupabase'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
 import { Button } from '@/components/ui/button'
@@ -18,7 +19,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog'
 import {
   Select,
@@ -42,13 +42,24 @@ interface Category {
 }
 
 export default function CategoriesPage() {
+  const searchParams = useSearchParams()
+  const router = useRouter()
   const [categories, setCategories] = useState<Category[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isNewOnlyMode, setIsNewOnlyMode] = useState(false)
   const [editingCategory, setEditingCategory] = useState<Category | null>(null)
   const supabase = useSupabase()
+
+  // Ouvrir le dialog si ?action=new
+  useEffect(() => {
+    if (searchParams.get('action') === 'new') {
+      setIsDialogOpen(true)
+      setIsNewOnlyMode(true)
+    }
+  }, [searchParams])
 
   const [formData, setFormData] = useState({
     name: '',
@@ -118,8 +129,12 @@ export default function CategoriesPage() {
       }
 
       fetchData()
-      setIsDialogOpen(false)
-      resetForm()
+      if (isNewOnlyMode) {
+        handleCloseNewOnly()
+      } else {
+        setIsDialogOpen(false)
+        resetForm()
+      }
     } catch (error) {
       console.error('Error saving category:', error)
       toast.error('Erreur lors de l\'enregistrement')
@@ -143,6 +158,10 @@ export default function CategoriesPage() {
       description: '',
       parent_id: '',
     })
+  }
+
+  const handleCloseNewOnly = () => {
+    router.replace('/')
   }
 
   // Get parent categories (categories without parent)
@@ -187,6 +206,79 @@ export default function CategoriesPage() {
   const mainCategoriesCount = parentCategories.length
   const subCategoriesCount = categories.filter(c => c.parent_id !== null).length
 
+  // Mode plein écran pour nouvelle catégorie via Actions
+  if (isNewOnlyMode) {
+    return (
+      <ProtectedModule module="articles">
+        <div className="min-h-screen bg-gray-50 p-6">
+          <Card className="max-w-md mx-auto">
+            <CardHeader className="border-b bg-[#B8860B] text-white rounded-t-lg">
+              <CardTitle className="text-xl flex items-center gap-2">
+                <FolderTree className="h-5 w-5" />
+                Nouvelle catégorie
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-6">
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="name">Nom *</Label>
+                  <Input
+                    id="name"
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    placeholder="Ex: Olives Vertes"
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="description">Description</Label>
+                  <Input
+                    id="description"
+                    value={formData.description}
+                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                    placeholder="Description de la catégorie"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="parent_id">Catégorie parente</Label>
+                  <Select
+                    value={formData.parent_id}
+                    onValueChange={(value) =>
+                      setFormData({ ...formData, parent_id: value === 'none' ? '' : value })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Aucune (catégorie principale)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Aucune (catégorie principale)</SelectItem>
+                      {parentCategories.map((category) => (
+                        <SelectItem key={category.id} value={category.id}>
+                          {category.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-gray-500">
+                    Laissez vide pour créer une catégorie principale
+                  </p>
+                </div>
+                <div className="flex justify-end gap-2 pt-4">
+                  <Button type="button" variant="outline" onClick={handleCloseNewOnly}>
+                    Annuler
+                  </Button>
+                  <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
+                    Créer
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+      </ProtectedModule>
+    )
+  }
+
   return (
     <ProtectedModule module="articles">
       <div className="space-y-6">
@@ -196,20 +288,10 @@ export default function CategoriesPage() {
             <p className="text-gray-500">Gérez les catégories de produits</p>
           </div>
 
-          <ProtectedModule module="articles" action="create">
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-              <DialogTrigger asChild>
-                <Button
-                  className="bg-[#B8860B] hover:bg-[#9A7209]"
-                  onClick={() => {
-                    resetForm()
-                    setIsDialogOpen(true)
-                  }}
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Nouvelle catégorie
-                </Button>
-              </DialogTrigger>
+            <Dialog open={isDialogOpen} onOpenChange={(open) => {
+              if (open) resetForm()
+              setIsDialogOpen(open)
+            }}>
               <DialogContent className="max-w-md">
                 <DialogHeader>
                   <DialogTitle>
@@ -281,7 +363,6 @@ export default function CategoriesPage() {
                 </form>
               </DialogContent>
             </Dialog>
-          </ProtectedModule>
         </div>
 
         {/* Stats */}

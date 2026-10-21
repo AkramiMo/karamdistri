@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useSearchParams } from 'next/navigation'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
 import { Button } from '@/components/ui/button'
 import { Package, Leaf } from 'lucide-react'
@@ -9,6 +9,12 @@ import { cn } from '@/lib/utils'
 
 export default function StocksLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
+  const searchParams = useSearchParams()
+
+  // Mode formulaire seul via Actions - ne pas afficher le layout
+  if (searchParams.get('action') === 'new') {
+    return <>{children}</>
+  }
 
   const isArticles = pathname === '/stocks/articles'
   const isFournitures = pathname === '/stocks/fournitures'

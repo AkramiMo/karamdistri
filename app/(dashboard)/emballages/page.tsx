@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { useSupabase } from '@/hooks/useSupabase'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
 import { Button } from '@/components/ui/button'
@@ -38,13 +39,24 @@ interface Emballage {
 }
 
 export default function EmballagesPage() {
+  const searchParams = useSearchParams()
+  const router = useRouter()
   const [emballages, setEmballages] = useState<Emballage[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isNewOnlyMode, setIsNewOnlyMode] = useState(false)
   const [editingEmballage, setEditingEmballage] = useState<Emballage | null>(null)
   const supabase = useSupabase()
+
+  // Ouvrir le dialog si ?action=new
+  useEffect(() => {
+    if (searchParams.get('action') === 'new') {
+      setIsDialogOpen(true)
+      setIsNewOnlyMode(true)
+    }
+  }, [searchParams])
 
   const [formData, setFormData] = useState({
     code: '',
@@ -119,8 +131,12 @@ export default function EmballagesPage() {
       }
 
       fetchData()
-      setIsDialogOpen(false)
-      resetForm()
+      if (isNewOnlyMode) {
+        handleCloseNewOnly()
+      } else {
+        setIsDialogOpen(false)
+        resetForm()
+      }
     } catch (error) {
       console.error('Error saving emballage:', error)
       toast.error('Erreur lors de l\'enregistrement')
@@ -170,6 +186,10 @@ export default function EmballagesPage() {
     })
   }
 
+  const handleCloseNewOnly = () => {
+    router.replace('/')
+  }
+
   const filteredEmballages = emballages.filter((emballage) => {
     const matchesSearch =
       emballage.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -180,10 +200,102 @@ export default function EmballagesPage() {
 
   const formatPrice = (price: number | null) => {
     if (price === null) return '-'
-    return new Intl.NumberFormat('fr-MA', {
-      style: 'currency',
-      currency: 'MAD',
-    }).format(price)
+    const formatted = price.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+    return `${formatted} MAD`
+  }
+
+  // Mode plein écran pour nouvel emballage via Actions
+  if (isNewOnlyMode) {
+    return (
+      <ProtectedModule module="articles">
+        <div className="min-h-screen bg-gray-50 p-6">
+          <Card className="max-w-md mx-auto">
+            <CardHeader className="border-b bg-[#B8860B] text-white rounded-t-lg">
+              <CardTitle className="text-xl flex items-center gap-2">
+                <Box className="h-5 w-5" />
+                Nouvel emballage
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-6">
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="code">Code *</Label>
+                    <Input
+                      id="code"
+                      value={formData.code}
+                      onChange={(e) => setFormData({ ...formData, code: e.target.value })}
+                      placeholder="Ex: EMB001"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="name">Nom *</Label>
+                    <Input
+                      id="name"
+                      value={formData.name}
+                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                      placeholder="Ex: Seau 5kg"
+                      required
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="description">Description</Label>
+                  <Input
+                    id="description"
+                    value={formData.description}
+                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                    placeholder="Description de l'emballage"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="capacity">Capacité</Label>
+                    <Input
+                      id="capacity"
+                      type="number"
+                      step="0.01"
+                      value={formData.capacity}
+                      onChange={(e) => setFormData({ ...formData, capacity: e.target.value })}
+                      placeholder="Ex: 5"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="unit">Unité</Label>
+                    <Input
+                      id="unit"
+                      value={formData.unit}
+                      onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
+                      placeholder="kg, L, etc."
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="price">Prix unitaire (DH)</Label>
+                  <Input
+                    id="price"
+                    type="number"
+                    step="0.01"
+                    value={formData.price}
+                    onChange={(e) => setFormData({ ...formData, price: e.target.value })}
+                    placeholder="Ex: 15.00"
+                  />
+                </div>
+                <div className="flex justify-end gap-2 pt-4">
+                  <Button type="button" variant="outline" onClick={handleCloseNewOnly}>
+                    Annuler
+                  </Button>
+                  <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
+                    Créer
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+      </ProtectedModule>
+    )
   }
 
   return (

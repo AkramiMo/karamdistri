@@ -121,6 +121,7 @@ export async function POST(
     const paymentNumber = `REC${String(nextNum).padStart(5, '0')}`
 
     // Record in payments table
+    // Note: L'ajout en caisse est géré automatiquement par le trigger 'trigger_sync_payment_to_cash'
     try {
       await supabaseAdmin
         .from('payments')
@@ -138,27 +139,6 @@ export async function POST(
     } catch (paymentError) {
       console.error('Payment insert error:', paymentError)
       // Don't fail, payment was already recorded on delivery
-    }
-
-    // Record in cash register if it's a cash payment
-    if (method === 'cash') {
-      try {
-        await supabaseAdmin
-          .from('cash_register')
-          .insert({
-            transaction_date: now.split('T')[0],
-            category: 'vente',
-            operation_type: 'encaissement',
-            amount: amount,
-            reference: `BL ${delivery.delivery_number}`,
-            reference_id: deliveryId,
-            notes: notes || `Paiement livraison ${delivery.delivery_number}`,
-            user_id: authResult.user!.id
-          })
-      } catch (cashError) {
-        console.error('Cash register insert error:', cashError)
-        // Don't fail the payment, just log the error
-      }
     }
 
     // If there's a sales record, update it too

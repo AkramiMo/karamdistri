@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { useRouter } from 'next/navigation'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { useSupabase, querySimple } from '@/hooks/useSupabase'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -22,7 +22,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog'
 import {
   DropdownMenu,
@@ -70,12 +69,16 @@ import {
   User,
   Calendar,
   Package,
+  MessageCircle,
+  Check,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { generateDeliveryNotePDF } from '@/lib/pdf/invoice'
+import { initFolderHandles, requestBLFolderPermission } from '@/lib/pdf/saveWithPicker'
 import { useCompanySettings } from '@/hooks/useCompanySettings'
 import { useAuth } from '@/hooks/useAuth'
+import { DeliveryStats } from '@/components/livraisons/DeliveryStats'
 
 interface DeliveryItem {
   id: string
@@ -142,10 +145,37 @@ interface Order {
   client?: { name: string }
 }
 
+interface NewDeliveryItem {
+  id: string
+  article_id: string
+  article_code: string
+  article_name: string
+  quantity_ordered: number
+  quantity_to_deliver: number
+  unit_price: number
+}
+
+interface DDC {
+  id: string
+  ddc_number: string
+  client_id: string
+  status: string
+  total_ht: number
+  client?: { name: string }
+  items?: {
+    article_id: string
+    article_code: string
+    article_name: string
+    quantity: number
+    unit_price: number
+  }[]
+}
+
 interface ClientSimple {
   id: string
   code: string
   name: string
+  ddc_id: string | null
 }
 
 interface OptimizedDelivery {
@@ -264,8 +294,9 @@ const paymentStatusLabels: Record<string, string> = {
 }
 
 const paymentMethodLabels: Record<string, string> = {
-  cash: 'Especes',
-  check: 'Cheque',
+  cash: 'Espèces',
+  cash_deposit: "Versement d'espèces",
+  check: 'Chèque',
   transfer: 'Virement',
   card: 'Carte',
 }
@@ -301,32 +332,49 @@ const itemStatusLabels: Record<string, string> = {
   cancelled: 'Annule',
 }
 
-type TabType = 'bl' | 'blt'
+type TabType = 'bl' | 'blt' | 'stats'
 
 export default function LivraisonsPage() {
+  const searchParams = useSearchParams()
   const router = useRouter()
   const [activeTab, setActiveTab] = useState<TabType>('bl')
+
   const [deliveries, setDeliveries] = useState<Delivery[]>([])
   const [orders, setOrders] = useState<Order[]>([])
+  const [ddcs, setDDCs] = useState<DDC[]>([])
   const [clients, setClients] = useState<ClientSimple[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
-  const [selectedBLMonth, setSelectedBLMonth] = useState<string>('all') // 'all' = tous les mois, ou 'YYYY-MM' pour un mois spécifique
+  const [selectedBLMonth, setSelectedBLMonth] = useState<string>(() => {
+    const now = new Date()
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  }) // Mois en cours par défaut, ou 'all' pour tous les mois
   const [showOnlyWithBalance, setShowOnlyWithBalance] = useState(false)
   const [showOnlyNotInSale, setShowOnlyNotInSale] = useState(false)
   const [deliveryIdsInSales, setDeliveryIdsInSales] = useState<Set<string>>(new Set())
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isNewOnlyMode, setIsNewOnlyMode] = useState(false)
+
+  // Ouvrir le dialog si ?action=new (mode formulaire uniquement)
+  useEffect(() => {
+    if (searchParams.get('action') === 'new') {
+      setIsDialogOpen(true)
+      setIsNewOnlyMode(true)
+    }
+  }, [searchParams])
   const [viewDelivery, setViewDelivery] = useState<Delivery | null>(null)
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [editingDelivery, setEditingDelivery] = useState<Delivery | null>(null)
+  const [isWhatsAppDialogOpen, setIsWhatsAppDialogOpen] = useState(false)
   const [editFormData, setEditFormData] = useState({
     delivery_date: '',
     notes: '',
     status: '',
     order_id: '',
+    ddc_id: '',
   })
   const [editItems, setEditItems] = useState<DeliveryItem[]>([])
 
@@ -338,6 +386,10 @@ export default function LivraisonsPage() {
   const [useCurrentLocation, setUseCurrentLocation] = useState(false)
   const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null)
   const [isGettingLocation, setIsGettingLocation] = useState(false)
+
+  // PDF Created dialog state
+  const [isPDFCreatedDialogOpen, setIsPDFCreatedDialogOpen] = useState(false)
+  const [createdDelivery, setCreatedDelivery] = useState<Delivery | null>(null)
 
   // Payment state
   const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false)
@@ -383,6 +435,7 @@ export default function LivraisonsPage() {
     delivery_date: new Date().toISOString().split('T')[0],
     notes: '',
   })
+  const [newItems, setNewItems] = useState<NewDeliveryItem[]>([])
 
   const fetchData = useCallback(async () => {
     setIsLoading(true)
@@ -414,23 +467,35 @@ export default function LivraisonsPage() {
       }
 
       // Fetch all data in parallel for faster loading
-      const [deliveriesResult, ordersResult, clientsResult] = await Promise.all([
+      const [deliveriesResult, ordersResult, clientsResult, ddcsResult] = await Promise.all([
         querySimple(() => buildDeliveriesQuery()),
         querySimple(() =>
           supabase
             .from('orders')
             .select('id, order_number, client_id, status, total_ht, client:clients(name)')
-            .in('status', ['confirmed', 'in_progress'])
+            .in('status', ['pending', 'confirmed', 'in_progress', 'in_preparation', 'ready'])
             .order('order_date', { ascending: false })
-            .limit(30)
+            .limit(100)
         ),
         querySimple(() =>
           supabase
             .from('clients')
-            .select('id, code, name')
+            .select('id, code, name, ddc_id')
             .eq('is_active', true)
             .order('name')
             .limit(100)
+        ),
+        querySimple(() =>
+          supabase
+            .from('client_quote_requests')
+            .select(`
+              id, ddc_number, client_id, status, total_ht,
+              client:clients(name),
+              items:client_quote_request_items(article_id, article_code, article_name, quantity, unit_price)
+            `)
+            .eq('status', 'current')
+            .order('created_at', { ascending: false })
+            .limit(50)
         ),
       ])
 
@@ -478,6 +543,7 @@ export default function LivraisonsPage() {
       setDeliveries((deliveriesResult.data as Delivery[]) || [])
       setOrders((ordersResult.data as Order[]) || [])
       setClients((clientsResult.data as ClientSimple[]) || [])
+      setDDCs((ddcsResult.data as DDC[]) || [])
     } catch (error) {
       console.error('Error fetching data:', error)
       setLoadError(error instanceof Error ? error.message : 'Erreur de chargement')
@@ -489,6 +555,26 @@ export default function LivraisonsPage() {
   useEffect(() => {
     fetchData()
   }, [fetchData])
+
+  // Gérer le paramètre order_id dans l'URL pour pré-charger une commande
+  useEffect(() => {
+    const orderId = searchParams.get('order_id')
+    if (orderId && orders.length > 0) {
+      const order = orders.find(o => o.id === orderId)
+      if (order) {
+        // Ouvrir le formulaire et pré-charger la commande
+        setIsDialogOpen(true)
+        setIsNewOnlyMode(true)
+        handleOrderSelect(orderId)
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, orders])
+
+  // Initialiser les handles de dossiers PDF au chargement
+  useEffect(() => {
+    initFolderHandles()
+  }, [])
 
   // BLT - Fetch rounds
   const fetchRounds = useCallback(async () => {
@@ -827,6 +913,52 @@ export default function LivraisonsPage() {
 
     if (!error) {
       await syncOrderStatus(deliveryId, newStatus)
+
+      // Récupérer les infos du BL pour insérer les articles vendus
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: deliveryData } = await (supabase.from('deliveries') as any)
+        .select(`
+          id, delivery_number, delivery_date, client_id,
+          client:clients(code),
+          delivery_items(
+            article_id,
+            quantity_delivered,
+            quantity_returned,
+            article:articles(code)
+          )
+        `)
+        .eq('id', deliveryId)
+        .single()
+
+      if (deliveryData && deliveryData.delivery_items) {
+        // Insérer les articles vendus (quantité livrée - quantité retournée)
+        const articlesVendusData: any[] = []
+        for (const di of deliveryData.delivery_items) {
+          const qtySold = (di.quantity_delivered || 0) - (di.quantity_returned || 0)
+          if (qtySold > 0) {
+            articlesVendusData.push({
+              sale_id: null, // Pas de vente associée pour BL direct
+              sale_date: deliveryData.delivery_date || new Date().toISOString().split('T')[0],
+              sale_number: deliveryData.delivery_number,
+              article_id: di.article_id,
+              article_code: di.article?.code || '',
+              client_id: deliveryData.client_id,
+              client_code: deliveryData.client?.code || '',
+              quantity_sold: qtySold,
+              delivery_id: deliveryId,
+            })
+          }
+        }
+
+        if (articlesVendusData.length > 0) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { error: avError } = await (supabase.from('articles_vendus') as any).insert(articlesVendusData)
+          if (avError) {
+            console.error('Error inserting articles vendus:', avError)
+          }
+        }
+      }
+
       // Refresh both rounds and deliveries tables
       await fetchRounds()
       await fetchData()
@@ -951,15 +1083,33 @@ export default function LivraisonsPage() {
     completed: rounds.filter(r => r.status === 'completed').length,
   }
 
-  const generateDeliveryNumber = () => {
+  const generateDeliveryNumber = async () => {
     const date = new Date()
     const year = date.getFullYear()
     const month = String(date.getMonth() + 1).padStart(2, '0')
-    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0')
-    return `BL-${year}${month}-${random}`
+    const prefix = `BL-${year}${month}-`
+
+    // Afficher TOUS les BL d'octobre pour vérifier
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: allBLs, error } = await (supabase.from('deliveries') as any)
+      .select('delivery_number, delivery_date')
+      .gte('delivery_date', `${year}-${month}-01`)
+      .lte('delivery_date', `${year}-${month}-31`)
+
+    console.log('========== DEBUG BL ==========')
+    console.log('Mois recherché:', `${month}/${year}`)
+    console.log('Nombre de BL trouvés:', allBLs?.length || 0)
+    console.log('Liste des BL:', allBLs)
+    console.log('Erreur:', error)
+    console.log('Prochain numéro:', (allBLs?.length || 0) + 1)
+    console.log('===============================')
+
+    const nextNumber = (allBLs?.length || 0) + 1
+
+    return `${prefix}${nextNumber.toString().padStart(3, '0')}`
   }
 
-  const handleOrderSelect = (orderId: string) => {
+  const handleOrderSelect = async (orderId: string) => {
     const order = orders.find(o => o.id === orderId)
     if (order) {
       setFormData({
@@ -967,7 +1117,44 @@ export default function LivraisonsPage() {
         order_id: orderId,
         client_id: order.client_id,
       })
+
+      // Charger les articles de la commande
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: orderItems } = await (supabase.from('order_items') as any)
+        .select('id, article_id, quantity, unit_price, article:articles(code, name)')
+        .eq('order_id', orderId)
+
+      if (orderItems && orderItems.length > 0) {
+        const items: NewDeliveryItem[] = orderItems.map((item: { id: string; article_id: string; quantity: number; unit_price: number; article?: { code: string; name: string } }) => ({
+          id: item.id,
+          article_id: item.article_id,
+          article_code: item.article?.code || '',
+          article_name: item.article?.name || '',
+          quantity_ordered: item.quantity,
+          quantity_to_deliver: item.quantity, // Par défaut, livrer tout
+          unit_price: item.unit_price,
+        }))
+        setNewItems(items)
+      } else {
+        setNewItems([])
+      }
     }
+  }
+
+  const updateNewItem = (itemId: string, field: 'quantity_to_deliver' | 'unit_price', value: number) => {
+    setNewItems(newItems.map(item => {
+      if (item.id !== itemId) return item
+      if (field === 'quantity_to_deliver') {
+        // Qte à livrer ne peut pas dépasser Qte commandée
+        const newValue = Math.min(Math.max(0, value), item.quantity_ordered)
+        return { ...item, quantity_to_deliver: newValue }
+      }
+      return { ...item, [field]: Math.max(0, value) }
+    }))
+  }
+
+  const removeNewItem = (itemId: string) => {
+    setNewItems(newItems.filter(item => item.id !== itemId))
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -978,17 +1165,45 @@ export default function LivraisonsPage() {
       return
     }
 
-    const selectedOrder = orders.find(o => o.id === formData.order_id)
+    // Vérifier s'il existe déjà un BL similaire (même client, même date)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: existingDeliveries } = await (supabase.from('deliveries') as any)
+      .select('delivery_number, total_ht')
+      .eq('client_id', formData.client_id)
+      .eq('delivery_date', formData.delivery_date)
+
+    if (existingDeliveries && existingDeliveries.length > 0) {
+      const selectedClient = clients.find(c => c.id === formData.client_id)
+      const existingList = existingDeliveries
+        .map((d: { delivery_number: string; total_ht: number }) =>
+          `- ${d.delivery_number} (${formatPrice(d.total_ht)})`
+        )
+        .join('\n')
+
+      const confirmCreate = confirm(
+        `Attention ! Il existe déjà ${existingDeliveries.length} BL pour ${selectedClient?.name || 'ce client'} à cette date:\n\n${existingList}\n\nVoulez-vous vraiment créer un nouveau BL ?`
+      )
+
+      if (!confirmCreate) {
+        return
+      }
+    }
+
+    // Calculer le total HT basé sur les articles modifiés
+    const totalHT = newItems.length > 0
+      ? newItems.reduce((sum, item) => sum + (item.quantity_to_deliver * item.unit_price), 0)
+      : 0
 
     // Create the delivery
+    const deliveryNumber = await generateDeliveryNumber()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: newDelivery, error } = await (supabase.from('deliveries') as any).insert([{
-      delivery_number: generateDeliveryNumber(),
+      delivery_number: deliveryNumber,
       order_id: formData.order_id || null,
       client_id: formData.client_id,
       delivery_date: formData.delivery_date,
       status: 'pending',
-      total_ht: selectedOrder?.total_ht || 0,
+      total_ht: totalHT,
       notes: formData.notes || null,
     }]).select().single()
 
@@ -998,37 +1213,104 @@ export default function LivraisonsPage() {
       return
     }
 
-    // If order is selected, copy order_items to delivery_items
-    if (formData.order_id && newDelivery) {
-      // Fetch order items
+    // Créer les delivery_items à partir des articles modifiés
+    if (newItems.length > 0 && newDelivery) {
+      const deliveryItems = newItems.map(item => ({
+        delivery_id: newDelivery.id,
+        article_id: item.article_id,
+        quantity_ordered: item.quantity_ordered,
+        quantity_delivered: item.quantity_to_deliver,
+        quantity_returned: 0,
+        unit_price: item.unit_price,
+      }))
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: orderItems } = await (supabase.from('order_items') as any)
-        .select('article_id, quantity, unit_price, total_ht')
-        .eq('order_id', formData.order_id)
+      const { error: itemsError } = await (supabase.from('delivery_items') as any).insert(deliveryItems)
 
-      if (orderItems && orderItems.length > 0) {
-        // Create delivery items from order items
-        const deliveryItems = orderItems.map((item: { article_id: string; quantity: number; unit_price: number }) => ({
-          delivery_id: newDelivery.id,
-          article_id: item.article_id,
-          quantity_ordered: item.quantity,
-          quantity_delivered: item.quantity, // Default to full delivery
-          quantity_returned: 0,
-          unit_price: item.unit_price,
-        }))
-
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { error: itemsError } = await (supabase.from('delivery_items') as any).insert(deliveryItems)
-
-        if (itemsError) {
-          console.error('Error creating delivery items:', itemsError)
-        }
+      if (itemsError) {
+        console.error('Error creating delivery items:', itemsError)
       }
     }
 
-    fetchData()
-    setIsDialogOpen(false)
-    resetForm()
+    // Récupérer les données complètes du BL créé
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: fullDelivery } = await (supabase.from('deliveries') as any)
+      .select(`
+        *,
+        client:clients(id, code, name, contact_name, phone, email, address, city),
+        delivery_items(
+          id,
+          article_id,
+          quantity_ordered,
+          quantity_delivered,
+          quantity_returned,
+          unit_price,
+          article:articles(id, code, name, description)
+        )
+      `)
+      .eq('id', newDelivery.id)
+      .single()
+
+    // Ajouter le BL à la liste existante (toujours, même sans articles)
+    if (fullDelivery) {
+      setDeliveries(prev => [fullDelivery, ...prev])
+    }
+
+    if (fullDelivery && fullDelivery.client && fullDelivery.delivery_items?.length > 0) {
+      // Générer et sauvegarder le PDF automatiquement
+      try {
+        const orderData = {
+          order_number: fullDelivery.delivery_number,
+          order_date: fullDelivery.delivery_date,
+          total_ht: fullDelivery.total_ht,
+          total_ttc: fullDelivery.total_ttc || fullDelivery.total_ht,
+          notes: fullDelivery.notes,
+          client: {
+            code: fullDelivery.client.code,
+            name: fullDelivery.client.name,
+            contact_name: fullDelivery.client.contact_name,
+            phone: fullDelivery.client.phone,
+            email: null,
+            address: fullDelivery.client.address,
+            city: fullDelivery.client.city,
+          },
+          order_items: fullDelivery.delivery_items.map((item: any) => ({
+            article: {
+              code: item.article?.code || '',
+              name: item.article?.name || '',
+              description: item.article?.description || null,
+            },
+            quantity: item.quantity_delivered,
+            unit_price: item.unit_price,
+            total_ht: item.quantity_delivered * item.unit_price,
+          })),
+        }
+
+        // Demander la permission pour sauvegarder dans le dossier BL
+        await requestBLFolderPermission()
+        await generateDeliveryNotePDF(orderData, companySettings, '/Logo.png')
+
+        // Afficher le dialogue de confirmation
+        setCreatedDelivery(fullDelivery)
+        setIsPDFCreatedDialogOpen(true)
+      } catch (error) {
+        console.error('Erreur génération PDF:', error)
+        alert('Erreur lors de la génération du PDF: ' + (error as Error).message)
+      }
+    } else if (fullDelivery) {
+      // BL créé mais sans articles - informer l'utilisateur
+      alert(`BL ${fullDelivery.delivery_number} créé, mais le PDF n'a pas été généré car il n'y a pas d'articles.`)
+    }
+
+    if (isNewOnlyMode) {
+      handleCloseNewOnly()
+    } else {
+      setIsDialogOpen(false)
+      resetForm()
+    }
+
+    // Rafraîchir les données en arrière-plan (non bloquant)
+    fetchData().catch(console.error)
   }
 
   const resetForm = () => {
@@ -1038,6 +1320,11 @@ export default function LivraisonsPage() {
       delivery_date: new Date().toISOString().split('T')[0],
       notes: '',
     })
+    setNewItems([])
+  }
+
+  const handleCloseNewOnly = () => {
+    router.replace('/')
   }
 
   const handleViewDelivery = (delivery: Delivery) => {
@@ -1087,6 +1374,7 @@ export default function LivraisonsPage() {
         })),
       }
 
+      await requestBLFolderPermission()
       await generateDeliveryNotePDF(orderData, companySettings, '/Logo.png')
     } catch (error) {
       console.error('Error generating PDF:', error)
@@ -1249,6 +1537,60 @@ export default function LivraisonsPage() {
     }
   }
 
+  // Load items from a DDC (Demande de Devis Client)
+  const handleEditDDCChange = async (newDDCId: string) => {
+    const ddcId = newDDCId === 'none' ? '' : newDDCId
+    setEditFormData({ ...editFormData, ddc_id: ddcId, order_id: '' })
+
+    if (ddcId && editingDelivery) {
+      // Find the selected DDC
+      const selectedDDC = ddcs.find(d => d.id === ddcId)
+      if (!selectedDDC || !selectedDDC.items || selectedDDC.items.length === 0) {
+        return
+      }
+
+      // Delete existing delivery items
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase.from('delivery_items') as any)
+        .delete()
+        .eq('delivery_id', editingDelivery.id)
+
+      // Create new delivery items from DDC
+      const newDeliveryItems = selectedDDC.items.map((item) => ({
+        delivery_id: editingDelivery.id,
+        article_id: item.article_id,
+        quantity_ordered: item.quantity,
+        quantity_delivered: item.quantity,
+        quantity_returned: 0,
+        unit_price: item.unit_price,
+      }))
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase.from('delivery_items') as any).insert(newDeliveryItems)
+
+      // Reload items with article info
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: items } = await (supabase.from('delivery_items') as any)
+        .select(`
+          id, article_id, quantity_ordered, quantity_delivered, quantity_returned, unit_price,
+          article:articles(code, name, description)
+        `)
+        .eq('delivery_id', editingDelivery.id)
+
+      setEditItems(items || [])
+
+      // Update delivery with DDC client
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase.from('deliveries') as any)
+        .update({
+          client_id: selectedDDC.client_id,
+          total_ht: selectedDDC.total_ht,
+          order_id: null,
+        })
+        .eq('id', editingDelivery.id)
+    }
+  }
+
   const handleSaveEdit = async () => {
     console.log('handleSaveEdit called')
     console.log('editingDelivery:', editingDelivery)
@@ -1304,7 +1646,57 @@ export default function LivraisonsPage() {
       // Sync order status with the new delivery status
       await syncOrderStatus(editingDelivery.id, editFormData.status)
 
-      alert('Bon de livraison mis à jour avec succès')
+      // Télécharger automatiquement le PDF du BL
+      try {
+        // Recharger les données complètes de la livraison
+        const { data: updatedDelivery } = await supabase
+          .from('deliveries')
+          .select(`
+            id, delivery_number, delivery_date, total_ht, notes,
+            client:clients(code, name, contact_name, phone, address, city),
+            delivery_items(
+              id, article_id, quantity_ordered, quantity_delivered, quantity_returned, unit_price,
+              article:articles(code, name, description)
+            )
+          `)
+          .eq('id', editingDelivery.id)
+          .single()
+
+        if (updatedDelivery && updatedDelivery.client && updatedDelivery.delivery_items) {
+          const orderData = {
+            order_number: updatedDelivery.delivery_number,
+            order_date: updatedDelivery.delivery_date,
+            total_ht: newTotal,
+            total_ttc: newTotal,
+            notes: updatedDelivery.notes,
+            client: {
+              code: updatedDelivery.client.code,
+              name: updatedDelivery.client.name,
+              contact_name: updatedDelivery.client.contact_name,
+              phone: updatedDelivery.client.phone,
+              email: null,
+              address: updatedDelivery.client.address,
+              city: updatedDelivery.client.city,
+            },
+            order_items: updatedDelivery.delivery_items.map((item: any) => ({
+              article: {
+                code: item.article?.code || '',
+                name: item.article?.name || '',
+                description: item.article?.description || null,
+              },
+              quantity: item.quantity_delivered,
+              unit_price: item.unit_price,
+              total_ht: item.quantity_delivered * item.unit_price,
+            })),
+          }
+          await requestBLFolderPermission()
+          await generateDeliveryNotePDF(orderData, companySettings, '/Logo.png')
+        }
+      } catch (pdfError) {
+        console.error('Erreur génération PDF auto:', pdfError)
+      }
+
+      alert('Bon de livraison mis à jour et PDF téléchargé')
       setIsEditDialogOpen(false)
       fetchData()
     } catch (err) {
@@ -1881,10 +2273,28 @@ export default function LivraisonsPage() {
 
   const formatPrice = (price: number | null) => {
     if (price === null) return '-'
-    return new Intl.NumberFormat('fr-MA', {
-      style: 'currency',
-      currency: 'MAD',
-    }).format(price)
+    const formatted = price.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+    return `${formatted} MAD`
+  }
+
+  // Générer le lien WhatsApp pour partager le BL
+  const generateWhatsAppLink = (delivery: Delivery) => {
+    const dateFormatted = format(new Date(delivery.delivery_date), 'dd/MM/yyyy', { locale: fr })
+
+    let message = `*Votre bon de livraison a été bien enregistré*\n\n`
+    message += `N° ${delivery.delivery_number}\n`
+    message += `Client: ${delivery.client?.name || 'N/A'}\n`
+    message += `Date: ${dateFormatted}\n`
+    message += `Montant: ${formatPrice(delivery.total_ht)}\n\n`
+
+    message += `*Articles:*\n`
+    ;(delivery.delivery_items || []).forEach((item: any) => {
+      message += `- ${item.article?.name || 'Article'} x ${item.quantity_delivered}\n`
+    })
+
+    message += `\n_KARAM Olives & Sauces_`
+
+    return `https://wa.me/?text=${encodeURIComponent(message)}`
   }
 
   // Calculate statistics
@@ -1893,6 +2303,173 @@ export default function LivraisonsPage() {
   const pendingCount = deliveries.filter(d => d.status === 'pending' || d.status === 'in_progress').length
   // BL livrés mais non encore comptabilisés dans une vente
   const notInSaleCount = deliveries.filter(d => d.status === 'delivered' && !deliveryIdsInSales.has(d.id)).length
+
+  // Mode plein écran pour nouveau BL via Actions
+  if (isNewOnlyMode) {
+    return (
+      <ProtectedModule module="livraisons">
+        <div className="min-h-screen bg-gray-50 p-6">
+          <Card className="max-w-2xl mx-auto">
+            <CardHeader className="border-b bg-[#B8860B] text-white rounded-t-lg">
+              <CardTitle className="text-xl flex items-center gap-2">
+                <Truck className="h-5 w-5" />
+                Nouveau bon de livraison
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-6">
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Commande</Label>
+                  <Select
+                    value={formData.order_id}
+                    onValueChange={handleOrderSelect}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selectionner une commande" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {orders.map((order) => (
+                        <SelectItem key={order.id} value={order.id}>
+                          {order.order_number} - {order.client?.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Tableau des articles de la commande */}
+                {newItems.length > 0 && (
+                  <div className="space-y-2">
+                    <Label>Articles</Label>
+                    <div className="border rounded-lg overflow-hidden">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="bg-gray-50">
+                            <TableHead>Code</TableHead>
+                            <TableHead>Article</TableHead>
+                            <TableHead className="text-center">Qte Cmd</TableHead>
+                            <TableHead className="text-center">Qte à livrer</TableHead>
+                            <TableHead className="text-right">P.U.</TableHead>
+                            <TableHead className="text-right">Total</TableHead>
+                            <TableHead className="w-10"></TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {newItems.map((item) => (
+                            <TableRow key={item.id}>
+                              <TableCell className="font-mono text-sm">{item.article_code}</TableCell>
+                              <TableCell>{item.article_name}</TableCell>
+                              <TableCell className="text-center">{item.quantity_ordered}</TableCell>
+                              <TableCell className="text-center">
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  max={item.quantity_ordered}
+                                  value={item.quantity_to_deliver}
+                                  onChange={(e) => updateNewItem(item.id, 'quantity_to_deliver', parseInt(e.target.value) || 0)}
+                                  className="w-20 text-center"
+                                />
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  value={item.unit_price}
+                                  onChange={(e) => updateNewItem(item.id, 'unit_price', parseFloat(e.target.value) || 0)}
+                                  className="w-24 text-right"
+                                />
+                              </TableCell>
+                              <TableCell className="text-right font-medium">
+                                {formatPrice(item.quantity_to_deliver * item.unit_price)}
+                              </TableCell>
+                              <TableCell>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => removeNewItem(item.id)}
+                                  className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                    <div className="flex justify-end">
+                      <div className="w-72 space-y-2 bg-gray-50 p-4 rounded-lg">
+                        <div className="flex justify-between text-sm text-gray-600 pb-2">
+                          <span>Total Cmd:</span>
+                          <span>{formatPrice(newItems.reduce((sum, item) => sum + (item.quantity_ordered * item.unit_price), 0))}</span>
+                        </div>
+                        <div className="flex justify-between text-lg font-bold border-t pt-2">
+                          <span>Total BL:</span>
+                          <span className="text-[#B8860B]">
+                            {formatPrice(newItems.reduce((sum, item) => sum + (item.quantity_to_deliver * item.unit_price), 0))}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <Label>Client *</Label>
+                  <Select
+                    value={formData.client_id}
+                    onValueChange={(value) => setFormData({ ...formData, client_id: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selectionner un client" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {clients.map((client) => (
+                        <SelectItem key={client.id} value={client.id}>
+                          {client.code} - {client.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="delivery_date">Date de livraison</Label>
+                  <Input
+                    id="delivery_date"
+                    type="date"
+                    value={formData.delivery_date}
+                    onChange={(e) => setFormData({ ...formData, delivery_date: e.target.value })}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="notes">Notes</Label>
+                  <Input
+                    id="notes"
+                    value={formData.notes}
+                    onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                    placeholder="Notes sur la livraison"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2 pt-4">
+                  <Button type="button" onClick={handleCloseNewOnly} variant="outline">
+                    Annuler
+                  </Button>
+                  <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
+                    Créer le BL
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+      </ProtectedModule>
+    )
+  }
 
   return (
     <ProtectedModule module="livraisons">
@@ -1906,6 +2483,14 @@ export default function LivraisonsPage() {
           >
             <Truck className="h-4 w-4 mr-2" />
             BL - Bons de Livraison
+          </Button>
+          <Button
+            variant={activeTab === 'stats' ? 'default' : 'outline'}
+            onClick={() => setActiveTab('stats')}
+            className={activeTab === 'stats' ? 'bg-[#B8860B] hover:bg-[#9A7209]' : ''}
+          >
+            <TrendingUp className="h-4 w-4 mr-2" />
+            Statistiques
           </Button>
         </div>
 
@@ -1962,27 +2547,17 @@ export default function LivraisonsPage() {
               )}
 
               {!isLivreur && (
-                <ProtectedModule module="livraisons" action="create" fallback={null}>
-                  <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-                    <DialogTrigger asChild>
-                      <Button
-                        className="bg-[#B8860B] hover:bg-[#9A7209]"
-                        onClick={() => {
-                          resetForm()
-                          setIsDialogOpen(true)
-                        }}
-                      >
-                        <Plus className="mr-2 h-4 w-4" />
-                        Nouveau BL
-                      </Button>
-                    </DialogTrigger>
+                <Dialog open={isDialogOpen} onOpenChange={(open) => {
+                  if (open) resetForm()
+                  setIsDialogOpen(open)
+                }}>
               <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                   <DialogTitle>Nouveau bon de livraison</DialogTitle>
                 </DialogHeader>
                 <form onSubmit={handleSubmit} className="space-y-4">
                   <div className="space-y-2">
-                    <Label>Commande (optionnel)</Label>
+                    <Label>Commande</Label>
                     <Select
                       value={formData.order_id}
                       onValueChange={handleOrderSelect}
@@ -1999,6 +2574,85 @@ export default function LivraisonsPage() {
                       </SelectContent>
                     </Select>
                   </div>
+
+                  {/* Tableau des articles de la commande */}
+                  {newItems.length > 0 && (
+                    <div className="space-y-2">
+                      <Label>Articles</Label>
+                      <div className="border rounded-lg overflow-hidden">
+                        <Table>
+                          <TableHeader>
+                            <TableRow className="bg-gray-50">
+                              <TableHead>Code</TableHead>
+                              <TableHead>Article</TableHead>
+                              <TableHead className="text-center">Qte Cmd</TableHead>
+                              <TableHead className="text-center">Qte à livrer</TableHead>
+                              <TableHead className="text-right">P.U.</TableHead>
+                              <TableHead className="text-right">Total</TableHead>
+                              <TableHead className="w-10"></TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {newItems.map((item) => (
+                              <TableRow key={item.id}>
+                                <TableCell className="font-mono text-sm">{item.article_code}</TableCell>
+                                <TableCell>{item.article_name}</TableCell>
+                                <TableCell className="text-center">{item.quantity_ordered}</TableCell>
+                                <TableCell className="text-center">
+                                  <Input
+                                    type="number"
+                                    min="0"
+                                    max={item.quantity_ordered}
+                                    value={item.quantity_to_deliver}
+                                    onChange={(e) => updateNewItem(item.id, 'quantity_to_deliver', parseInt(e.target.value) || 0)}
+                                    className="w-20 text-center"
+                                  />
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  <Input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    value={item.unit_price}
+                                    onChange={(e) => updateNewItem(item.id, 'unit_price', parseFloat(e.target.value) || 0)}
+                                    className="w-24 text-right"
+                                  />
+                                </TableCell>
+                                <TableCell className="text-right font-medium">
+                                  {formatPrice(item.quantity_to_deliver * item.unit_price)}
+                                </TableCell>
+                                <TableCell>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => removeNewItem(item.id)}
+                                    className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                      <div className="flex justify-end">
+                        <div className="w-72 space-y-2 bg-gray-50 p-4 rounded-lg">
+                          <div className="flex justify-between text-sm text-gray-600 pb-2">
+                            <span>Total Cmd:</span>
+                            <span>{formatPrice(newItems.reduce((sum, item) => sum + (item.quantity_ordered * item.unit_price), 0))}</span>
+                          </div>
+                          <div className="flex justify-between text-lg font-bold border-t pt-2">
+                            <span>Total BL:</span>
+                            <span className="text-[#B8860B]">
+                              {formatPrice(newItems.reduce((sum, item) => sum + (item.quantity_to_deliver * item.unit_price), 0))}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="space-y-2">
                     <Label>Client *</Label>
@@ -2050,7 +2704,6 @@ export default function LivraisonsPage() {
                 </form>
               </DialogContent>
                 </Dialog>
-              </ProtectedModule>
               )}
             </div>
           </div>
@@ -2316,13 +2969,15 @@ export default function LivraisonsPage() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-48">
-                            <DropdownMenuItem
-                              onClick={() => handleOpenPayment(delivery)}
-                              className={`cursor-pointer ${delivery.payment_status === 'paid' ? 'opacity-50' : ''}`}
-                            >
-                              <Wallet className="h-4 w-4 mr-2 text-[#B8860B]" />
-                              Encaisser
-                            </DropdownMenuItem>
+                            {delivery.payment_status !== 'paid' && (
+                              <DropdownMenuItem
+                                onClick={() => handleOpenPayment(delivery)}
+                                className="cursor-pointer"
+                              >
+                                <Wallet className="h-4 w-4 mr-2 text-[#B8860B]" />
+                                Encaisser
+                              </DropdownMenuItem>
+                            )}
                             <DropdownMenuItem
                               onClick={() => handleViewDelivery(delivery)}
                               className="cursor-pointer"
@@ -3006,18 +3661,20 @@ export default function LivraisonsPage() {
                                           })}
                                         </TableBody>
                                       </Table>
-                                      <div className="flex justify-end mt-4 pt-3 border-t border-[#B8860B]">
-                                        <Button
-                                          onClick={() => {
-                                            setIsViewRoundDialogOpen(false)
-                                            handleOpenPayment(delivery)
-                                          }}
-                                          className="gap-2 bg-green-600 hover:bg-green-700"
-                                        >
-                                          <Wallet className="h-4 w-4" />
-                                          Encaisser
-                                        </Button>
-                                      </div>
+                                      {delivery.payment_status !== 'paid' && (
+                                        <div className="flex justify-end mt-4 pt-3 border-t border-[#B8860B]">
+                                          <Button
+                                            onClick={() => {
+                                              setIsViewRoundDialogOpen(false)
+                                              handleOpenPayment(delivery)
+                                            }}
+                                            className="gap-2 bg-green-600 hover:bg-green-700"
+                                          >
+                                            <Wallet className="h-4 w-4" />
+                                            Encaisser
+                                          </Button>
+                                        </div>
+                                      )}
                                     </div>
                                   </TableCell>
                                 </TableRow>
@@ -3141,6 +3798,17 @@ export default function LivraisonsPage() {
               </DialogContent>
             </Dialog>
           </>
+        )}
+
+        {/* Statistics Tab Content */}
+        {activeTab === 'stats' && (
+          <div className="space-y-6">
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Statistiques des Ventes</h1>
+              <p className="text-gray-500">Quantités vendues par article et par mois</p>
+            </div>
+            <DeliveryStats />
+          </div>
         )}
 
         {/* View Delivery Dialog */}
@@ -3269,16 +3937,18 @@ export default function LivraisonsPage() {
                     </Select>
                   </div>
                   <div className="flex gap-2">
-                    <Button
-                      onClick={() => {
-                        setIsViewDialogOpen(false)
-                        handleOpenPayment(viewDelivery)
-                      }}
-                      className="gap-2 bg-green-600 hover:bg-green-700"
-                    >
-                      <Wallet className="h-4 w-4" />
-                      Encaisser
-                    </Button>
+                    {viewDelivery.payment_status !== 'paid' && (
+                      <Button
+                        onClick={() => {
+                          setIsViewDialogOpen(false)
+                          handleOpenPayment(viewDelivery)
+                        }}
+                        className="gap-2 bg-green-600 hover:bg-green-700"
+                      >
+                        <Wallet className="h-4 w-4" />
+                        Encaisser
+                      </Button>
+                    )}
                     <Button
                       onClick={() => handleGeneratePDF(viewDelivery)}
                       className="gap-2 bg-[#B8860B] hover:bg-[#9A7209]"
@@ -3461,6 +4131,38 @@ export default function LivraisonsPage() {
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-gray-500">Changer la commande remplacera tous les articles</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="flex items-center gap-2">
+                      <FileText className="h-4 w-4" />
+                      Devis DDC
+                    </Label>
+                    <Select
+                      value={editFormData.ddc_id || 'none'}
+                      onValueChange={handleEditDDCChange}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Sélectionner un devis accepté" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Aucun devis</SelectItem>
+                        {(() => {
+                          // Only show the DDC with status 'current' for this client
+                          const currentDDC = ddcs.find(d => d.client_id === editFormData.client_id)
+                          if (!currentDDC) return null
+                          return (
+                            <SelectItem key={currentDDC.id} value={currentDDC.id}>
+                              {currentDDC.ddc_number} - {currentDDC.client?.name} ({formatPrice(currentDDC.total_ht)})
+                            </SelectItem>
+                          )
+                        })()}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-gray-500">
+                      {ddcs.find(d => d.client_id === editFormData.client_id)
+                        ? "Devis DDC en cours pour ce client"
+                        : "Ce client n'a pas de devis en cours"}
+                    </p>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="edit_notes">Notes</Label>
@@ -3754,6 +4456,107 @@ export default function LivraisonsPage() {
                     </Button>
                   </div>
                 </form>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+
+        {/* PDF Created Dialog */}
+        <Dialog open={isPDFCreatedDialogOpen} onOpenChange={setIsPDFCreatedDialogOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-green-600">
+                <CheckCircle2 className="h-5 w-5" />
+                BL créé avec succès!
+              </DialogTitle>
+            </DialogHeader>
+            {createdDelivery && (
+              <div className="space-y-4">
+                <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-center">
+                  <p className="text-sm text-green-700">Bon de Livraison</p>
+                  <p className="text-2xl font-bold text-green-800">{createdDelivery.delivery_number}</p>
+                </div>
+
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Client:</span>
+                    <span className="font-medium">{createdDelivery.client?.name}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Date:</span>
+                    <span>{new Date(createdDelivery.delivery_date).toLocaleDateString('fr-FR')}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Total HT:</span>
+                    <span className="font-bold text-[#B8860B]">{formatPrice(createdDelivery.total_ht || 0)}</span>
+                  </div>
+                </div>
+
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-center text-sm text-blue-700">
+                  Le PDF a été sauvegardé automatiquement
+                </div>
+
+                <div className="flex flex-col gap-2 pt-4">
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={() => setIsPDFCreatedDialogOpen(false)}
+                      variant="outline"
+                      className="flex-1"
+                    >
+                      Fermer
+                    </Button>
+                    <Button
+                      onClick={async () => {
+                        if (createdDelivery && createdDelivery.client) {
+                          const orderData = {
+                            order_number: createdDelivery.delivery_number,
+                            order_date: createdDelivery.delivery_date,
+                            total_ht: createdDelivery.total_ht,
+                            total_ttc: createdDelivery.total_ttc || createdDelivery.total_ht,
+                            notes: createdDelivery.notes,
+                            client: {
+                              code: createdDelivery.client.code,
+                              name: createdDelivery.client.name,
+                              contact_name: createdDelivery.client.contact_name,
+                              phone: createdDelivery.client.phone,
+                              email: null,
+                              address: createdDelivery.client.address,
+                              city: createdDelivery.client.city,
+                            },
+                            order_items: (createdDelivery.delivery_items || []).map((item: any) => ({
+                              article: {
+                                code: item.article?.code || '',
+                                name: item.article?.name || '',
+                                description: item.article?.description || null,
+                              },
+                              quantity: item.quantity_delivered,
+                              unit_price: item.unit_price,
+                              total_ht: item.quantity_delivered * item.unit_price,
+                            })),
+                          }
+                          await requestBLFolderPermission()
+                          await generateDeliveryNotePDF(orderData, companySettings, '/Logo.png')
+                        }
+                      }}
+                      className="flex-1 bg-[#B8860B] hover:bg-[#9A7209] gap-2"
+                    >
+                      <FileText className="h-4 w-4" />
+                      Télécharger PDF
+                    </Button>
+                  </div>
+                  <Button
+                    onClick={() => {
+                      if (createdDelivery) {
+                        const link = generateWhatsAppLink(createdDelivery)
+                        window.open(link, '_blank')
+                      }
+                    }}
+                    className="w-full bg-green-600 hover:bg-green-700 gap-2"
+                  >
+                    <MessageCircle className="h-4 w-4" />
+                    Partager sur WhatsApp
+                  </Button>
+                </div>
               </div>
             )}
           </DialogContent>

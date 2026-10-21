@@ -2,6 +2,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { useSupabase } from '@/hooks/useSupabase'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -107,14 +108,14 @@ const statusLabels: Record<string, string> = {
 }
 
 const formatPrice = (price: number) => {
-  return new Intl.NumberFormat('fr-MA', {
-    style: 'currency',
-    currency: 'MAD',
-  }).format(price)
+  const formatted = price.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+  return `${formatted} MAD`
 }
 
 export default function RDFPage() {
   const supabase = useSupabase()
+  const searchParams = useSearchParams()
+  const router = useRouter()
   const [rdfs, setRdfs] = useState<RDF[]>([])
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [ddfs, setDdfs] = useState<DDF[]>([])
@@ -125,6 +126,7 @@ export default function RDFPage() {
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [viewingRDF, setViewingRDF] = useState<RDF | null>(null)
   const [editingRDF, setEditingRDF] = useState<RDF | null>(null)
+  const [isNewOnlyMode, setIsNewOnlyMode] = useState(false)
 
   const [formData, setFormData] = useState({
     ddf_id: '',
@@ -183,6 +185,13 @@ export default function RDFPage() {
     fetchSuppliers()
     fetchDDFs()
   }, [fetchRDFs, fetchSuppliers, fetchDDFs])
+
+  useEffect(() => {
+    if (searchParams.get('action') === 'new') {
+      setIsDialogOpen(true)
+      setIsNewOnlyMode(true)
+    }
+  }, [searchParams])
 
   const generateRDFNumber = async (): Promise<string> => {
     const year = new Date().getFullYear()
@@ -367,8 +376,12 @@ export default function RDFPage() {
       }
     }
 
-    resetForm()
-    setIsDialogOpen(false)
+    if (isNewOnlyMode) {
+      handleCloseNewOnly()
+    } else {
+      resetForm()
+      setIsDialogOpen(false)
+    }
     fetchRDFs()
     fetchDDFs()
   }
@@ -463,6 +476,10 @@ export default function RDFPage() {
     setEditingRDF(null)
   }
 
+  const handleCloseNewOnly = () => {
+    router.replace('/')
+  }
+
   const filteredRDFs = rdfs.filter((rdf) => {
     const matchesSearch =
       rdf.rdf_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -477,6 +494,191 @@ export default function RDFPage() {
     pending: rdfs.filter((r) => r.status === 'pending').length,
     accepted: rdfs.filter((r) => r.status === 'accepted').length,
     converted: rdfs.filter((r) => r.status === 'converted').length,
+  }
+
+  if (isNewOnlyMode) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-6">
+        <Card className="max-w-4xl mx-auto">
+          <CardHeader className="border-b bg-[#B8860B] text-white rounded-t-lg">
+            <CardTitle className="text-xl flex items-center gap-2">
+              <FileInput className="h-5 w-5" />
+              Nouvelle Réception de Devis Fournisseur
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-6">
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>DDF associée (optionnel)</Label>
+                  <Select
+                    value={formData.ddf_id || 'none'}
+                    onValueChange={handleDDFChange}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Sélectionner une DDF" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Aucune</SelectItem>
+                      {ddfs.map((ddf: any) => (
+                        <SelectItem key={ddf.id} value={ddf.id}>
+                          {ddf.ddf_number} - {ddf.supplier?.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Fournisseur *</Label>
+                  <Select
+                    value={formData.supplier_id}
+                    onValueChange={(value) => setFormData({ ...formData, supplier_id: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Sélectionner un fournisseur" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {suppliers.map((supplier) => (
+                        <SelectItem key={supplier.id} value={supplier.id}>
+                          {supplier.code} - {supplier.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Réf devis fournisseur</Label>
+                  <Input
+                    value={formData.supplier_quote_ref}
+                    onChange={(e) => setFormData({ ...formData, supplier_quote_ref: e.target.value })}
+                    placeholder="Référence du devis fournisseur"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Date de réception *</Label>
+                  <Input
+                    type="date"
+                    value={formData.reception_date}
+                    onChange={(e) => setFormData({ ...formData, reception_date: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="space-y-2 md:col-span-2">
+                  <Label>Notes</Label>
+                  <Textarea
+                    value={formData.notes}
+                    onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                    placeholder="Notes ou remarques..."
+                  />
+                </div>
+              </div>
+
+              {/* Items */}
+              <div className="border-t pt-4">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-semibold">Fournitures proposées</h3>
+                  <Button type="button" variant="outline" size="sm" onClick={handleAddItem}>
+                    <Plus className="h-4 w-4 mr-1" />
+                    Ajouter ligne
+                  </Button>
+                </div>
+
+                {formItems.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500 bg-gray-50 rounded-lg">
+                    Aucune fourniture ajoutée
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Code</TableHead>
+                        <TableHead>Désignation</TableHead>
+                        <TableHead className="w-24">Quantité</TableHead>
+                        <TableHead className="w-32">Prix Unit.</TableHead>
+                        <TableHead className="w-32 text-right">Total</TableHead>
+                        <TableHead className="w-16"></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {formItems.map((item, index) => (
+                        <TableRow key={index}>
+                          <TableCell>
+                            <Input
+                              value={item.supply_code}
+                              onChange={(e) => handleItemChange(index, 'supply_code', e.target.value)}
+                              placeholder="Code"
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Input
+                              value={item.supply_name}
+                              onChange={(e) => handleItemChange(index, 'supply_name', e.target.value)}
+                              placeholder="Désignation"
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Input
+                              type="text"
+                              value={item.quantity}
+                              onChange={(e) => {
+                                const value = e.target.value.replace(',', '.')
+                                handleItemChange(index, 'quantity', parseFloat(value) || 0)
+                              }}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Input
+                              type="text"
+                              inputMode="decimal"
+                              value={item.unit_price}
+                              onChange={(e) => {
+                                const value = e.target.value.replace(/,/g, '.')
+                                handleItemChange(index, 'unit_price', value)
+                              }}
+                            />
+                          </TableCell>
+                          <TableCell className="text-right font-medium">
+                            {formatPrice(item.quantity * (typeof item.unit_price === 'string' ? parseFloat(item.unit_price) || 0 : item.unit_price))}
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleRemoveItem(index)}
+                            >
+                              <Trash2 className="h-4 w-4 text-red-500" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+
+                {formItems.length > 0 && (
+                  <div className="flex justify-end mt-4">
+                    <div className="bg-[#B8860B]/10 border border-[#B8860B] rounded-lg px-4 py-2">
+                      <span className="text-gray-600">Total HT: </span>
+                      <span className="font-bold text-[#B8860B]">{formatPrice(calculateTotal())}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-end gap-2 pt-4 border-t">
+                <Button type="button" variant="outline" onClick={handleCloseNewOnly}>
+                  Annuler
+                </Button>
+                <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
+                  Créer
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
+    )
   }
 
   return (

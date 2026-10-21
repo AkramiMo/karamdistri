@@ -53,7 +53,7 @@ export function createClient(): SupabaseClient<Database> {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => {
           controller.abort();
-        }, 20000);
+        }, 60000);
 
         return fetch(url, {
           ...options,

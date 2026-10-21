@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { Settings, Building, Mail, FileText, Banknote, Save, Loader2, MapPin, Navigation } from 'lucide-react'
+import { Settings, Building, Mail, FileText, Banknote, Save, Loader2, MapPin, Navigation, Image } from 'lucide-react'
 
 interface CompanySettings {
   id: string
@@ -16,6 +16,7 @@ interface CompanySettings {
   city: string | null
   postal_code: string | null
   phone: string | null
+  whatsapp: string | null
   fax: string | null
   email: string | null
   website: string | null
@@ -29,6 +30,7 @@ interface CompanySettings {
   bank_account: string | null
   bank_rib: string | null
   logo_url: string | null
+  signature_url: string | null
   invoice_footer: string | null
   depot_lat: number | null
   depot_lng: number | null
@@ -48,6 +50,7 @@ export default function SettingsPage() {
     city: '',
     postal_code: '',
     phone: '',
+    whatsapp: '',
     fax: '',
     email: '',
     website: '',
@@ -60,6 +63,8 @@ export default function SettingsPage() {
     bank_name: '',
     bank_account: '',
     bank_rib: '',
+    logo_url: '',
+    signature_url: '',
     invoice_footer: '',
     depot_lat: '',
     depot_lng: '',
@@ -88,6 +93,7 @@ export default function SettingsPage() {
         city: settingsData.city || '',
         postal_code: settingsData.postal_code || '',
         phone: settingsData.phone || '',
+        whatsapp: settingsData.whatsapp || '',
         fax: settingsData.fax || '',
         email: settingsData.email || '',
         website: settingsData.website || '',
@@ -100,6 +106,8 @@ export default function SettingsPage() {
         bank_name: settingsData.bank_name || '',
         bank_account: settingsData.bank_account || '',
         bank_rib: settingsData.bank_rib || '',
+        logo_url: settingsData.logo_url || '',
+        signature_url: settingsData.signature_url || '',
         invoice_footer: settingsData.invoice_footer || '',
         depot_lat: settingsData.depot_lat?.toString() || '',
         depot_lng: settingsData.depot_lng?.toString() || '',
@@ -123,6 +131,7 @@ export default function SettingsPage() {
       city: formData.city || null,
       postal_code: formData.postal_code || null,
       phone: formData.phone || null,
+      whatsapp: formData.whatsapp || null,
       fax: formData.fax || null,
       email: formData.email || null,
       website: formData.website || null,
@@ -135,6 +144,8 @@ export default function SettingsPage() {
       bank_name: formData.bank_name || null,
       bank_account: formData.bank_account || null,
       bank_rib: formData.bank_rib || null,
+      logo_url: formData.logo_url || null,
+      signature_url: formData.signature_url || null,
       invoice_footer: formData.invoice_footer || null,
       depot_lat: formData.depot_lat ? parseFloat(formData.depot_lat) : null,
       depot_lng: formData.depot_lng ? parseFloat(formData.depot_lng) : null,
@@ -287,6 +298,16 @@ export default function SettingsPage() {
                 onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                 placeholder="+212 5XX XX XX XX"
               />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="whatsapp">WhatsApp (notifications)</Label>
+              <Input
+                id="whatsapp"
+                value={formData.whatsapp}
+                onChange={(e) => setFormData({ ...formData, whatsapp: e.target.value })}
+                placeholder="212612345678"
+              />
+              <p className="text-xs text-gray-500">Format international sans + (ex: 212612345678)</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="fax">Fax</Label>
@@ -497,6 +518,64 @@ export default function SettingsPage() {
             <p className="text-xs text-gray-500">
               Ces coordonnées seront utilisées comme point de départ pour calculer les trajets de livraison
             </p>
+          </CardContent>
+        </Card>
+
+        {/* Logo et Signature */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Image className="h-5 w-5" />
+              Logo et Signature
+            </CardTitle>
+            <CardDescription>
+              Images pour les documents (factures, reçus, BL)
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="logo_url">URL du Logo</Label>
+              <Input
+                id="logo_url"
+                value={formData.logo_url}
+                onChange={(e) => setFormData({ ...formData, logo_url: e.target.value })}
+                placeholder="https://... ou chemin vers l'image"
+              />
+              {formData.logo_url && (
+                <div className="mt-2 p-2 bg-gray-50 rounded border">
+                  <img
+                    src={formData.logo_url}
+                    alt="Logo preview"
+                    className="max-h-16 object-contain"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = 'none'
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="signature_url">URL de la Signature/Cachet</Label>
+              <Input
+                id="signature_url"
+                value={formData.signature_url}
+                onChange={(e) => setFormData({ ...formData, signature_url: e.target.value })}
+                placeholder="https://... ou chemin vers l'image"
+              />
+              <p className="text-xs text-gray-500">Image de signature pour les reçus de paiement</p>
+              {formData.signature_url && (
+                <div className="mt-2 p-2 bg-gray-50 rounded border">
+                  <img
+                    src={formData.signature_url}
+                    alt="Signature preview"
+                    className="max-h-16 object-contain"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = 'none'
+                    }}
+                  />
+                </div>
+              )}
+            </div>
           </CardContent>
         </Card>
 

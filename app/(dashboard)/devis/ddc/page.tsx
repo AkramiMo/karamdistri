@@ -1,7 +1,8 @@
 // @ts-nocheck
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { useSupabase } from '@/hooks/useSupabase'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -57,10 +58,25 @@ import {
   Download,
   Send,
   Ban,
+  Loader2,
+  Star,
+  RotateCcw,
+  AlertCircle,
 } from 'lucide-react'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { generateDevisPDF } from '@/lib/pdf/devis'
+import { CompanySettings, defaultCompanySettings } from '@/lib/company'
 
 interface Client {
   id: string
@@ -69,13 +85,22 @@ interface Client {
   phone: string | null
   email: string | null
   city: string | null
+  ddc_id: string | null
 }
 
 interface Article {
   id: string
   code: string
   name: string
+  description: string | null
   price_ht: number
+}
+
+interface Emballage {
+  id: string
+  code: string
+  name: string
+  unit_price: number
 }
 
 interface DDCItem {
@@ -105,6 +130,7 @@ const statusColors: Record<string, string> = {
   draft: 'bg-gray-100 text-gray-800',
   sent: 'bg-blue-100 text-blue-800',
   accepted: 'bg-green-100 text-green-800',
+  current: 'bg-yellow-100 text-yellow-800',
   rejected: 'bg-red-100 text-red-800',
   expired: 'bg-orange-100 text-orange-800',
 }
@@ -113,22 +139,26 @@ const statusLabels: Record<string, string> = {
   draft: 'Brouillon',
   sent: 'Envoyé',
   accepted: 'Validé',
+  current: 'En cours',
   rejected: 'Non validé',
   expired: 'Expiré',
 }
 
 const formatPrice = (price: number) => {
-  return new Intl.NumberFormat('fr-MA', {
-    style: 'currency',
-    currency: 'MAD',
-  }).format(price)
+  const formatted = price.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+  return `${formatted} MAD`
 }
 
 export default function DDCPage() {
   const supabase = useSupabase()
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const isNewOnlyMode = searchParams.get('action') === 'new'
   const [ddcs, setDdcs] = useState<DDC[]>([])
   const [clients, setClients] = useState<Client[]>([])
   const [articles, setArticles] = useState<Article[]>([])
+  const [emballages, setEmballages] = useState<Emballage[]>([])
+  const [companySettings, setCompanySettings] = useState<CompanySettings>(defaultCompanySettings)
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -144,6 +174,11 @@ export default function DDCPage() {
     notes: '',
   })
   const [formItems, setFormItems] = useState<DDCItem[]>([])
+  const [formEmballages, setFormEmballages] = useState<Emballage[]>([])
+  const [showDraftDialog, setShowDraftDialog] = useState(false)
+  const [savedDraft, setSavedDraft] = useState<any>(null)
+  const draftKey = 'ddc_draft'
+  const isRestoringDraft = useRef(false)
 
   const fetchDDCs = useCallback(async () => {
     setIsLoading(true)
@@ -169,7 +204,7 @@ export default function DDCPage() {
   const fetchClients = useCallback(async () => {
     const { data } = await supabase
       .from('clients')
-      .select('id, code, name, phone, email, city')
+      .select('id, code, name, phone, email, city, ddc_id')
       .eq('is_active', true)
       .order('name')
 
@@ -179,18 +214,108 @@ export default function DDCPage() {
   const fetchArticles = useCallback(async () => {
     const { data } = await supabase
       .from('articles')
-      .select('id, code, name, price_ht')
+      .select('id, code, name, description, price_ht')
       .eq('is_active', true)
       .order('name')
 
     if (data) setArticles(data)
   }, [supabase])
 
+  const fetchEmballages = useCallback(async () => {
+    const { data } = await supabase
+      .from('emballages')
+      .select('id, code, name, price')
+      .eq('is_active', true)
+      .order('name')
+
+    if (data) {
+      setEmballages(data.map(e => ({
+        id: e.id,
+        code: e.code,
+        name: e.name,
+        unit_price: e.price || 0
+      })))
+    }
+  }, [supabase])
+
+  const fetchCompanySettings = useCallback(async () => {
+    const { data } = await supabase
+      .from('company_settings')
+      .select('*')
+      .single()
+
+    if (data) {
+      setCompanySettings(data as CompanySettings)
+    }
+  }, [supabase])
+
   useEffect(() => {
     fetchDDCs()
     fetchClients()
     fetchArticles()
-  }, [fetchDDCs, fetchClients, fetchArticles])
+    fetchEmballages()
+    fetchCompanySettings()
+  }, [fetchDDCs, fetchClients, fetchArticles, fetchEmballages, fetchCompanySettings])
+
+  // Verifier si un brouillon existe au chargement
+  useEffect(() => {
+    const draft = localStorage.getItem(draftKey)
+    if (draft) {
+      try {
+        const parsedDraft = JSON.parse(draft)
+        // Verifier que le brouillon a moins de 24h
+        if (parsedDraft.timestamp && Date.now() - parsedDraft.timestamp < 24 * 60 * 60 * 1000) {
+          setSavedDraft(parsedDraft)
+          setShowDraftDialog(true)
+        } else {
+          localStorage.removeItem(draftKey)
+        }
+      } catch (e) {
+        localStorage.removeItem(draftKey)
+      }
+    }
+  }, [])
+
+  // Sauvegarder automatiquement le brouillon
+  useEffect(() => {
+    if (isRestoringDraft.current) return
+    if (!isDialogOpen || editingDDC) return
+
+    // Ne sauvegarder que si il y a des donnees
+    if (formData.client_id || formItems.length > 0 || formEmballages.length > 0 || formData.notes) {
+      const draft = {
+        formData,
+        formItems,
+        formEmballages,
+        timestamp: Date.now(),
+      }
+      localStorage.setItem(draftKey, JSON.stringify(draft))
+    }
+  }, [formData, formItems, formEmballages, isDialogOpen, editingDDC])
+
+  const restoreDraft = () => {
+    if (savedDraft) {
+      isRestoringDraft.current = true
+      setFormData(savedDraft.formData)
+      setFormItems(savedDraft.formItems || [])
+      setFormEmballages(savedDraft.formEmballages || [])
+      setShowDraftDialog(false)
+      setIsDialogOpen(true)
+      setTimeout(() => {
+        isRestoringDraft.current = false
+      }, 100)
+    }
+  }
+
+  const discardDraft = () => {
+    localStorage.removeItem(draftKey)
+    setSavedDraft(null)
+    setShowDraftDialog(false)
+  }
+
+  const clearDraft = () => {
+    localStorage.removeItem(draftKey)
+  }
 
   const generateDDCNumber = async (): Promise<string> => {
     const year = new Date().getFullYear()
@@ -240,7 +365,7 @@ export default function DDCPage() {
           ...newItems[index],
           article_id: article.id,
           article_code: article.code,
-          article_name: article.name,
+          article_name: article.description || article.name,
           unit_price: article.price_ht,
         }
       }
@@ -248,6 +373,26 @@ export default function DDCPage() {
       newItems[index] = { ...newItems[index], [field]: value }
     }
     setFormItems(newItems)
+  }
+
+  const handleAddEmballage = () => {
+    setFormEmballages([
+      ...formEmballages,
+      { id: '', code: '', name: '', unit_price: 0 },
+    ])
+  }
+
+  const handleRemoveEmballage = (index: number) => {
+    setFormEmballages(formEmballages.filter((_, i) => i !== index))
+  }
+
+  const handleEmballageChange = (index: number, emballageId: string) => {
+    const emballage = emballages.find((e) => e.id === emballageId)
+    if (emballage) {
+      const newEmballages = [...formEmballages]
+      newEmballages[index] = { ...emballage }
+      setFormEmballages(newEmballages)
+    }
   }
 
   const calculateTotal = () => {
@@ -312,6 +457,26 @@ export default function DDCPage() {
         console.error('Error inserting items:', itemsError)
         alert(`Erreur lors de l'ajout des articles: ${itemsError.message}`)
       }
+
+      // Delete old emballages and insert new ones
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any)
+        .from('ddc_emballages')
+        .delete()
+        .eq('ddc_id', editingDDC.id)
+
+      if (formEmballages.length > 0) {
+        const emballagesToInsert = formEmballages.filter(e => e.id).map((emb) => ({
+          ddc_id: editingDDC.id,
+          emballage_id: emb.id,
+          code: emb.code,
+          name: emb.name,
+          unit_price: emb.unit_price,
+        }))
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabase as any).from('ddc_emballages').insert(emballagesToInsert)
+      }
     } else {
       // Create new DDC
       const ddcNumber = await generateDDCNumber()
@@ -358,14 +523,33 @@ export default function DDCPage() {
         console.error('Error inserting items:', itemsError)
         alert(`Erreur lors de l'ajout des articles: ${itemsError.message}`)
       }
+
+      // Insert emballages
+      if (formEmballages.length > 0) {
+        const emballagesToInsert = formEmballages.filter(e => e.id).map((emb) => ({
+          ddc_id: newDDC.id,
+          emballage_id: emb.id,
+          code: emb.code,
+          name: emb.name,
+          unit_price: emb.unit_price,
+        }))
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabase as any).from('ddc_emballages').insert(emballagesToInsert)
+      }
     }
 
-    resetForm()
-    setIsDialogOpen(false)
+    clearDraft()
+    if (isNewOnlyMode) {
+      handleCloseNewOnly()
+    } else {
+      resetForm()
+      setIsDialogOpen(false)
+    }
     fetchDDCs()
   }
 
-  const handleEdit = (ddc: DDC) => {
+  const handleEdit = async (ddc: DDC) => {
     setEditingDDC(ddc)
     setFormData({
       client_id: ddc.client_id,
@@ -374,15 +558,35 @@ export default function DDCPage() {
       notes: ddc.notes || '',
     })
     setFormItems(
-      ddc.ddc_items?.map((item) => ({
-        id: item.id,
-        article_id: item.article_id,
-        article_code: item.article_code,
-        article_name: item.article_name,
-        quantity: item.quantity,
-        unit_price: item.unit_price,
+      ddc.ddc_items?.map((item) => {
+        // Récupérer la description de l'article si disponible
+        const article = articles.find(a => a.id === item.article_id)
+        return {
+          id: item.id,
+          article_id: item.article_id,
+          article_code: item.article_code,
+          article_name: article?.description || article?.name || item.article_name,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+        }
+      }) || []
+    )
+
+    // Charger les emballages existants
+    const { data: ddcEmballages } = await supabase
+      .from('ddc_emballages')
+      .select('emballage_id, code, name, unit_price')
+      .eq('ddc_id', ddc.id)
+
+    setFormEmballages(
+      ddcEmballages?.map((emb) => ({
+        id: emb.emballage_id || '',
+        code: emb.code,
+        name: emb.name,
+        unit_price: emb.unit_price,
       })) || []
     )
+
     setIsDialogOpen(true)
   }
 
@@ -400,11 +604,27 @@ export default function DDCPage() {
         console.error('Error fetching items:', error)
       }
 
+      // Charger les emballages
+      const { data: ddcEmballages } = await supabase
+        .from('ddc_emballages')
+        .select('code, name, unit_price')
+        .eq('ddc_id', ddc.id)
+
       console.log('Items loaded:', items)
+
+      // Remplacer article_name par la description si disponible
+      const itemsWithDescription = items?.map((item: DDCItem) => {
+        const article = articles.find(a => a.id === item.article_id)
+        return {
+          ...item,
+          article_name: article?.description || article?.name || item.article_name,
+        }
+      }) || []
 
       setViewingDDC({
         ...ddc,
-        ddc_items: items || []
+        ddc_items: itemsWithDescription,
+        emballages: ddcEmballages || []
       })
       setIsViewDialogOpen(true)
     } catch (err) {
@@ -423,28 +643,68 @@ export default function DDCPage() {
   }
 
   const handleUpdateStatus = async (id: string, newStatus: string) => {
-    // Trouver le DDC pour obtenir le client_id
-    const ddc = ddcs.find(d => d.id === id)
+    try {
+      // Trouver le DDC pour obtenir le client_id
+      const ddc = ddcs.find(d => d.id === id)
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (supabase as any)
-      .from('client_quote_requests')
-      .update({ status: newStatus })
-      .eq('id', id)
+      // Si le nouveau statut est "current" (en cours)
+      if (newStatus === 'current' && ddc?.client_id) {
+        // D'abord, mettre les autres DDC "current" du même client en "accepted"
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabase as any)
+          .from('client_quote_requests')
+          .update({ status: 'accepted' })
+          .eq('client_id', ddc.client_id)
+          .eq('status', 'current')
 
-    // Si le statut passe à "accepted" (validé), mettre à jour la référence dans le client
-    if (newStatus === 'accepted' && ddc?.client_id) {
+        // Mettre à jour la référence dans le client
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabase as any)
+          .from('clients')
+          .update({ ddc_id: id })
+          .eq('id', ddc.client_id)
+      }
+
+      // Mettre à jour le statut du DDC
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabase as any)
-        .from('clients')
-        .update({ ddc_id: id })
-        .eq('id', ddc.client_id)
-    }
+      const { error } = await (supabase as any)
+        .from('client_quote_requests')
+        .update({ status: newStatus })
+        .eq('id', id)
 
-    fetchDDCs()
+      if (error) {
+        console.error('Erreur mise a jour statut:', error)
+        alert(`Erreur: ${error.message}`)
+        return
+      }
+
+      // Si on retire le statut "current", enlever la référence du client
+      if (ddc?.client_id && newStatus !== 'current') {
+        const client = clients.find(c => c.id === ddc.client_id)
+        if (client?.ddc_id === id) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await (supabase as any)
+            .from('clients')
+            .update({ ddc_id: null })
+            .eq('id', ddc.client_id)
+        }
+      }
+
+      fetchDDCs()
+      fetchClients()
+    } catch (err) {
+      console.error('Erreur:', err)
+      alert('Une erreur est survenue lors de la mise a jour du statut')
+    }
   }
 
-  const handleDownloadPDF = (ddc: DDC) => {
+  const handleDownloadPDF = async (ddc: DDC) => {
+    // Charger les emballages associés au devis
+    const { data: ddcEmballages } = await supabase
+      .from('ddc_emballages')
+      .select('code, name, unit_price')
+      .eq('ddc_id', ddc.id)
+
     generateDevisPDF({
       id: ddc.id,
       ddc_number: ddc.ddc_number,
@@ -459,16 +719,20 @@ export default function DDCPage() {
         phone: ddc.client?.phone || null,
         city: ddc.client?.city || null,
       },
-      ddc_items: ddc.ddc_items?.map(item => ({
-        article_code: item.article_code,
-        article_name: item.article_name,
-        quantity: item.quantity,
-        unit_price: item.unit_price,
-      })) || [],
-    })
+      ddc_items: ddc.ddc_items?.map(item => {
+        const article = articles.find(a => a.id === item.article_id)
+        return {
+          article_code: item.article_code,
+          article_name: article?.description || article?.name || item.article_name,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+        }
+      }) || [],
+      emballages: ddcEmballages || [],
+    }, companySettings)
   }
 
-  const resetForm = () => {
+  const resetForm = (clearSavedDraft = true) => {
     setFormData({
       client_id: '',
       request_date: new Date().toISOString().split('T')[0],
@@ -476,7 +740,15 @@ export default function DDCPage() {
       notes: '',
     })
     setFormItems([])
+    setFormEmballages([])
     setEditingDDC(null)
+    if (clearSavedDraft) {
+      clearDraft()
+    }
+  }
+
+  const handleCloseNewOnly = () => {
+    router.replace('/')
   }
 
   const filteredDDCs = ddcs.filter((ddc) => {
@@ -493,12 +765,148 @@ export default function DDCPage() {
     draft: ddcs.filter((d) => d.status === 'draft').length,
     sent: ddcs.filter((d) => d.status === 'sent').length,
     accepted: ddcs.filter((d) => d.status === 'accepted').length,
+    current: ddcs.filter((d) => d.status === 'current').length,
+  }
+
+  if (isNewOnlyMode) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-6">
+        <Card className="max-w-4xl mx-auto">
+          <CardHeader className="border-b bg-[#B8860B] text-white rounded-t-lg">
+            <CardTitle className="text-xl flex items-center gap-2">
+              <FileText className="h-5 w-5" />
+              Nouvelle Demande de Devis Client
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-6">
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Client *</Label>
+                  <select
+                    value={formData.client_id}
+                    onChange={(e) => setFormData({ ...formData, client_id: e.target.value })}
+                    className="w-full h-9 px-3 py-2 border border-input rounded-md bg-transparent text-sm"
+                  >
+                    <option value="">Sélectionner un client</option>
+                    {clients.map((client) => (
+                      <option key={client.id} value={client.id}>
+                        {client.code} - {client.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Date de demande *</Label>
+                  <Input
+                    type="date"
+                    value={formData.request_date}
+                    onChange={(e) => setFormData({ ...formData, request_date: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Date de validité</Label>
+                  <Input
+                    type="date"
+                    value={formData.validity_date}
+                    onChange={(e) => setFormData({ ...formData, validity_date: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Notes</Label>
+                  <Textarea
+                    value={formData.notes}
+                    onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                    placeholder="Notes ou remarques..."
+                  />
+                </div>
+              </div>
+
+              {/* Items */}
+              <div className="border-t pt-4">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-semibold">Articles</h3>
+                  <Button type="button" variant="outline" size="sm" onClick={handleAddItem}>
+                    <Plus className="h-4 w-4 mr-1" />
+                    Ajouter article
+                  </Button>
+                </div>
+
+                {formItems.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500 bg-gray-50 rounded-lg">
+                    Aucun article ajouté
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Article</TableHead>
+                        <TableHead className="w-32">Prix Unit.</TableHead>
+                        <TableHead className="w-16"></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {formItems.map((item, index) => (
+                        <TableRow key={index}>
+                          <TableCell>
+                            <select
+                              value={item.article_id}
+                              onChange={(e) => handleItemChange(index, 'article_id', e.target.value)}
+                              className="w-full h-9 px-3 py-2 border border-input rounded-md bg-transparent text-sm"
+                            >
+                              <option value="">Sélectionner</option>
+                              {articles.map((article) => (
+                                <option key={article.id} value={article.id}>
+                                  {article.code} - {article.description || article.name}
+                                </option>
+                              ))}
+                            </select>
+                          </TableCell>
+                          <TableCell>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              value={item.unit_price}
+                              onChange={(e) => handleItemChange(index, 'unit_price', parseFloat(e.target.value) || 0)}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleRemoveItem(index)}
+                            >
+                              <Trash2 className="h-4 w-4 text-red-500" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
+
+              <div className="flex justify-end gap-2 pt-4 border-t">
+                <Button type="button" variant="outline" onClick={handleCloseNewOnly}>
+                  Annuler
+                </Button>
+                <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
+                  Créer
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
+    )
   }
 
   return (
     <div className="space-y-6">
       {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <Card className="border-2 border-[#B8860B]">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-gray-600">Total DDC</CardTitle>
@@ -534,6 +942,17 @@ export default function DDCPage() {
             <span className="text-2xl font-bold text-green-600">{stats.accepted}</span>
           </CardContent>
         </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-gray-600">En cours</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center gap-2">
+              <Star className="h-5 w-5 text-yellow-500" />
+              <span className="text-2xl font-bold text-yellow-600">{stats.current}</span>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Search and Actions */}
@@ -559,6 +978,7 @@ export default function DDCPage() {
                   <SelectItem value="draft">Brouillon</SelectItem>
                   <SelectItem value="sent">Envoyé</SelectItem>
                   <SelectItem value="accepted">Validé</SelectItem>
+                  <SelectItem value="current">En cours</SelectItem>
                   <SelectItem value="rejected">Non validé</SelectItem>
                   <SelectItem value="expired">Expiré</SelectItem>
                 </SelectContent>
@@ -579,13 +999,14 @@ export default function DDCPage() {
                     Nouvelle DDC
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="max-w-4xl overflow-visible">
-                  <DialogHeader>
+                <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col p-0">
+                  <DialogHeader className="px-6 py-4 border-b sticky top-0 bg-white z-10">
                     <DialogTitle>
                       {editingDDC ? 'Modifier la DDC' : 'Nouvelle Demande de Devis Client'}
                     </DialogTitle>
                   </DialogHeader>
-                  <form onSubmit={handleSubmit} className="space-y-4">
+                  <form onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden">
+                    <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <Label>Client *</Label>
@@ -664,7 +1085,7 @@ export default function DDCPage() {
                                     <option value="">Sélectionner</option>
                                     {articles.map((article) => (
                                       <option key={article.id} value={article.id}>
-                                        {article.code} - {article.name}
+                                        {article.code} - {article.description || article.name}
                                       </option>
                                     ))}
                                   </select>
@@ -694,7 +1115,78 @@ export default function DDCPage() {
                       )}
                     </div>
 
-                    <div className="flex justify-end gap-2 pt-4">
+                    {/* Emballages */}
+                    <div className="border-t pt-4">
+                      <div className="flex justify-between items-center mb-4">
+                        <h3 className="font-semibold">Emballages</h3>
+                        <Button type="button" variant="outline" size="sm" onClick={handleAddEmballage}>
+                          <Plus className="h-4 w-4 mr-1" />
+                          Ajouter emballage
+                        </Button>
+                      </div>
+
+                      {formEmballages.length === 0 ? (
+                        <div className="text-center py-4 text-gray-500 bg-gray-50 rounded-lg text-sm">
+                          Aucun emballage ajouté
+                        </div>
+                      ) : (
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Emballage</TableHead>
+                              <TableHead className="w-32">Prix Unit.</TableHead>
+                              <TableHead className="w-16"></TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {formEmballages.map((emb, index) => (
+                              <TableRow key={index}>
+                                <TableCell>
+                                  <select
+                                    value={emb.id}
+                                    onChange={(e) => handleEmballageChange(index, e.target.value)}
+                                    className="w-full h-9 px-3 py-2 border border-input rounded-md bg-transparent text-sm"
+                                  >
+                                    <option value="">Sélectionner</option>
+                                    {emballages.map((emballage) => (
+                                      <option key={emballage.id} value={emballage.id}>
+                                        {emballage.code} - {emballage.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </TableCell>
+                                <TableCell>
+                                  <Input
+                                    type="number"
+                                    step="0.01"
+                                    value={emb.unit_price}
+                                    onChange={(e) => {
+                                      const newEmballages = [...formEmballages]
+                                      newEmballages[index] = { ...newEmballages[index], unit_price: parseFloat(e.target.value) || 0 }
+                                      setFormEmballages(newEmballages)
+                                    }}
+                                    className="w-24"
+                                  />
+                                </TableCell>
+                                <TableCell>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => handleRemoveEmballage(index)}
+                                  >
+                                    <Trash2 className="h-4 w-4 text-red-500" />
+                                  </Button>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      )}
+                    </div>
+                    </div>
+
+                    <div className="flex justify-end gap-2 px-6 py-4 border-t bg-gray-50 sticky bottom-0">
                       <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                         Annuler
                       </Button>
@@ -782,10 +1274,16 @@ export default function DDCPage() {
                                   Envoyé
                                 </DropdownMenuItem>
                               )}
-                              {ddc.status !== 'accepted' && (
+                              {ddc.status !== 'accepted' && ddc.status !== 'current' && (
                                 <DropdownMenuItem onClick={() => handleUpdateStatus(ddc.id, 'accepted')}>
                                   <CheckCircle2 className="h-4 w-4 mr-2 text-green-500" />
                                   Validé
+                                </DropdownMenuItem>
+                              )}
+                              {ddc.status !== 'current' && (
+                                <DropdownMenuItem onClick={() => handleUpdateStatus(ddc.id, 'current')}>
+                                  <Star className="h-4 w-4 mr-2 text-yellow-500" />
+                                  En cours
                                 </DropdownMenuItem>
                               )}
                               {ddc.status !== 'rejected' && (
@@ -820,6 +1318,35 @@ export default function DDCPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Draft Restore Dialog */}
+      <AlertDialog open={showDraftDialog} onOpenChange={setShowDraftDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <RotateCcw className="h-5 w-5 text-[#B8860B]" />
+              Brouillon disponible
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Un brouillon de devis non termine a ete trouve. Voulez-vous le restaurer ?
+              {savedDraft?.timestamp && (
+                <span className="block mt-2 text-sm text-gray-500">
+                  Sauvegarde du {format(new Date(savedDraft.timestamp), 'dd/MM/yyyy a HH:mm', { locale: fr })}
+                </span>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={discardDraft}>
+              Supprimer le brouillon
+            </AlertDialogCancel>
+            <AlertDialogAction onClick={restoreDraft} className="bg-[#B8860B] hover:bg-[#9A7209]">
+              <RotateCcw className="h-4 w-4 mr-2" />
+              Restaurer
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* View Dialog */}
       <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
@@ -873,6 +1400,34 @@ export default function DDCPage() {
                   </TableBody>
                 </Table>
               </div>
+
+              {/* Emballages */}
+              {(viewingDDC as any).emballages?.length > 0 && (
+                <div className="border rounded-lg">
+                  <div className="bg-gray-50 px-4 py-2 border-b">
+                    <span className="font-semibold text-sm">Emballages</span>
+                  </div>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Emballage</TableHead>
+                        <TableHead className="text-right">Prix Unit.</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(viewingDDC as any).emballages?.map((emb: any, index: number) => (
+                        <TableRow key={index}>
+                          <TableCell>
+                            <span className="font-medium">{emb.code}</span>
+                            <span className="text-gray-500 ml-2">{emb.name}</span>
+                          </TableCell>
+                          <TableCell className="text-right">{formatPrice(emb.unit_price)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
 
               {viewingDDC.notes && (
                 <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">

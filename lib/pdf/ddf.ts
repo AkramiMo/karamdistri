@@ -255,9 +255,6 @@ function formatDate(dateString: string): string {
 
 function formatPrice(price: number | null): string {
   if (price === null || price === 0) return '-'
-  return new Intl.NumberFormat('fr-MA', {
-    style: 'currency',
-    currency: 'MAD',
-    minimumFractionDigits: 2,
-  }).format(price)
+  const formatted = price.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+  return `${formatted} MAD`
 }

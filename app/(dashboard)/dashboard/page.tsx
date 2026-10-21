@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useSupabase } from '@/hooks/useSupabase'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import {
   Users,
   Package,
@@ -17,6 +18,14 @@ import {
   ArrowDownRight,
   Loader2,
   Warehouse,
+  FileDown,
+  BarChart3,
+  ChevronLeft,
+  ChevronRight,
+  PackageCheck,
+  CreditCard,
+  Receipt,
+  Banknote,
 } from 'lucide-react'
 import {
   BarChart,
@@ -28,14 +37,13 @@ import {
   ResponsiveContainer,
   LineChart,
   Line,
-  PieChart,
-  Pie,
-  Cell,
   LabelList,
 } from 'recharts'
 import { format, subMonths, startOfMonth, endOfMonth, startOfWeek, endOfWeek, subWeeks } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { useAuth } from '@/hooks/useAuth'
+import { generateBilanMensuelPDF } from '@/lib/pdf/bilanMensuel'
+import { useCompanySettings } from '@/hooks/useCompanySettings'
 
 interface DashboardStats {
   clients: number
@@ -50,6 +58,7 @@ interface DashboardStats {
   mbLastMonth: number
   cashBalance: number
   lowStockItems: number
+  suppliers: number
 }
 
 interface RecentOrder {
@@ -86,6 +95,12 @@ interface ArticleSales {
   quantity: number
 }
 
+interface DailyMB {
+  day: number
+  dayLabel: string
+  mb: number
+}
+
 interface MonthlyTracking {
   month: string
   monthLabel: string
@@ -97,21 +112,68 @@ interface MonthlyTracking {
   pourcentage: number
 }
 
+interface DiffAchatVente {
+  code: string
+  qteAchetee: number
+  qteVendue: number
+  diff: number
+  isEmballage: boolean // true = unités, false = kg
+}
+
+interface BilanMensuel {
+  receptionsKg: number
+  livraisonsKg: number
+  commandesCount: number
+  livraisonsCount: number
+  ventesCount: number
+  caVentes: number
+  marge: number
+  paiementsRecus: number
+  paiementsEffectues: number
+  restePaiements: number
+  valBRRecue: number
+  valBRReglee: number
+  diffBR: number
+}
+
 // Fonction pour extraire le code fourniture du code article
 const extractFournitureCode = (articleCode: string): string => {
+  let code = articleCode.trim()
+
+  // D'abord, retirer le suffixe "-Vrac" si présent (insensible à la casse)
+  const vracMatch = code.match(/[-\s]?vrac$/i)
+  if (vracMatch) {
+    code = code.slice(0, -vracMatch[0].length).trim()
+    const vracCode = code.toUpperCase()
+    // Vérifier si c'est une variante de Harissa
+    if (/^HR[\d.]*$/i.test(vracCode) || vracCode === 'HAR') {
+      return 'HR'
+    }
+    return vracCode
+  }
+
   const emballagePatterns = [
     /^Se\d+L/i, /^Bo\d+/i, /^Bi\d+L?/i, /^Bt\d+L?/i,
     /^Sc\d+/i, /^Bq\d+/i, /^Ca\d+x?/i, /^Fl\d+/i, /^Pt\d+/i,
   ]
-  let fournitureCode = articleCode
+  let fournitureCode = code
   for (const pattern of emballagePatterns) {
-    const match = articleCode.match(pattern)
+    const match = code.match(pattern)
     if (match) {
-      fournitureCode = articleCode.substring(match[0].length)
+      fournitureCode = code.substring(match[0].length)
       break
     }
   }
-  return fournitureCode || articleCode
+
+  // Normaliser en majuscules
+  fournitureCode = (fournitureCode || code).toUpperCase()
+
+  // Regrouper toutes les variantes de harissa sous "HR"
+  if (/^HR[\d.]*$/i.test(fournitureCode) || fournitureCode === 'HAR') {
+    return 'HR'
+  }
+
+  return fournitureCode
 }
 
 const isOlive = (code: string): boolean => {
@@ -123,6 +185,20 @@ const isHarissa = (code: string): boolean => {
   const upperCode = code.toUpperCase()
   // HR = harissa, HR5 = harissa 5kg, HR7 = harissa 7kg, HAR = harissa générique
   return upperCode === 'HAR' || upperCode === 'HR' || upperCode === 'HR5' || upperCode === 'HR7' || upperCode.includes('HARISSA')
+}
+
+// Fonction pour vérifier si un article est en vrac
+const isVracArticle = (articleCode: string): boolean => {
+  return /[-\s]?vrac$/i.test(articleCode.trim())
+}
+
+// Fonction pour obtenir le poids net effectif d'un article
+// Pour les articles vrac, le poids net = 1 kg (quantité = kg)
+const getEffectiveWeightNet = (articleCode: string, weightNet: number | null): number => {
+  if (isVracArticle(articleCode)) {
+    return 1 // 1 kg par unité pour les articles vrac
+  }
+  return weightNet || 0
 }
 
 const monthNames = [
@@ -162,8 +238,6 @@ const statusLabels: Record<string, string> = {
   in_progress: 'En cours',
 }
 
-const CHART_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899']
-
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats>({
     clients: 0,
@@ -178,6 +252,7 @@ export default function DashboardPage() {
     mbLastMonth: 0,
     cashBalance: 0,
     lowStockItems: 0,
+    suppliers: 0,
   })
   const [recentOrders, setRecentOrders] = useState<RecentOrder[]>([])
   const [recentDeliveries, setRecentDeliveries] = useState<RecentDelivery[]>([])
@@ -185,10 +260,46 @@ export default function DashboardPage() {
   const [ordersByStatus, setOrdersByStatus] = useState<OrdersByStatus[]>([])
   const [articleSales, setArticleSales] = useState<ArticleSales[]>([])
   const [monthlyTracking, setMonthlyTracking] = useState<MonthlyTracking[]>([])
+  const [isLoadingTracking, setIsLoadingTracking] = useState(false)
+  const [trackingLastUpdate, setTrackingLastUpdate] = useState<string | null>(null)
+  const [dailyMB, setDailyMB] = useState<DailyMB[]>([])
+  const [selectedMBMonth, setSelectedMBMonth] = useState<string>(() => {
+    const now = new Date()
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  })
   const [isLoading, setIsLoading] = useState(true)
   const [salesViewMode, setSalesViewMode] = useState<'month' | 'week'>('month')
+  const [showDiffAchatVente, setShowDiffAchatVente] = useState(false)
+  const [diffAchatVente, setDiffAchatVente] = useState<DiffAchatVente[]>([])
+  const [isLoadingDiff, setIsLoadingDiff] = useState(false)
+  const [selectedDiffMonth, setSelectedDiffMonth] = useState<string>(() => {
+    const now = new Date()
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  })
+  // Bilan Mensuel
+  const [bilanMonth, setBilanMonth] = useState<string>(() => {
+    const now = new Date()
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  })
+  const [bilanMensuel, setBilanMensuel] = useState<BilanMensuel>({
+    receptionsKg: 0,
+    livraisonsKg: 0,
+    commandesCount: 0,
+    livraisonsCount: 0,
+    ventesCount: 0,
+    caVentes: 0,
+    marge: 0,
+    paiementsRecus: 0,
+    paiementsEffectues: 0,
+    restePaiements: 0,
+    valBRRecue: 0,
+    valBRReglee: 0,
+    diffBR: 0,
+  })
+  const [isLoadingBilan, setIsLoadingBilan] = useState(false)
   const supabase = useSupabase()
   const { profile } = useAuth()
+  const { companySettings } = useCompanySettings()
   const isLivreur = profile?.role?.name === 'livreur'
   const isCommercial = profile?.role?.name === 'commercial'
 
@@ -222,6 +333,7 @@ export default function DashboardPage() {
         recentOrdersRes,
         recentDeliveriesRes,
         orderStatusRes,
+        suppliersRes,
       ] = await Promise.all([
         // Total clients
         supabase.from('clients').select('id', { count: 'exact', head: true }).eq('is_active', true),
@@ -270,6 +382,8 @@ export default function DashboardPage() {
           .limit(5),
         // Orders by status for pie chart
         supabase.from('orders').select('status'),
+        // Total suppliers
+        supabase.from('suppliers').select('id', { count: 'exact', head: true }).eq('is_active', true),
       ])
 
       // Calculate stats
@@ -316,6 +430,7 @@ export default function DashboardPage() {
         mbLastMonth: mbLastMonthTotal,
         cashBalance,
         lowStockItems: lowStockCount,
+        suppliers: suppliersRes.count || 0,
       })
 
       // Format recent orders
@@ -353,14 +468,13 @@ export default function DashboardPage() {
         }))
       )
 
-      // Fetch monthly sales for the last 6 months
-      await fetchMonthlySales()
-
-      // Fetch article sales
-      await fetchArticleSales()
-
-      // Fetch monthly tracking (suivi annuel)
-      await fetchMonthlyTracking()
+      // Fetch additional data in parallel (instead of sequentially)
+      // Note: fetchMonthlyTracking is now on-demand (cached + refresh button)
+      await Promise.all([
+        fetchMonthlySales(),
+        fetchArticleSales(),
+        fetchDailyMB(),
+      ])
     } catch (error) {
       console.error('Error fetching dashboard data:', error)
     } finally {
@@ -369,59 +483,71 @@ export default function DashboardPage() {
   }
 
   const fetchMonthlySales = async () => {
-    const months: MonthlySales[] = []
     const now = new Date()
-    const currentYear = now.getFullYear()
-    const currentMonth = now.getMonth() // 0-indexed (0 = January)
 
-    // Parcourir les 6 derniers mois Y COMPRIS le mois en cours
+    // Calculer les dates pour les 6 derniers mois
+    const monthsData = []
     for (let i = 5; i >= 0; i--) {
       const monthDate = subMonths(now, i)
-      const monthStart = startOfMonth(monthDate).toISOString().split('T')[0]
-      const monthEnd = endOfMonth(monthDate).toISOString().split('T')[0]
-
-      const { data } = await supabase
-        .from('sales')
-        .select('total_ttc')
-        .gte('sale_date', monthStart)
-        .lte('sale_date', monthEnd)
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const total = ((data || []) as any[]).reduce((sum: number, s: any) => sum + (s.total_ttc || 0), 0)
-
-      months.push({
-        month: format(monthDate, 'MMM yyyy', { locale: fr }),
-        total,
+      monthsData.push({
+        date: monthDate,
+        start: startOfMonth(monthDate).toISOString().split('T')[0],
+        end: endOfMonth(monthDate).toISOString().split('T')[0],
+        label: format(monthDate, 'MMM yyyy', { locale: fr }),
       })
     }
+
+    // Fetch all months in parallel
+    const results = await Promise.all(
+      monthsData.map(m =>
+        supabase
+          .from('sales')
+          .select('total_ttc')
+          .gte('sale_date', m.start)
+          .lte('sale_date', m.end)
+      )
+    )
+
+    const months: MonthlySales[] = results.map((res, i) => ({
+      month: monthsData[i].label,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      total: ((res.data || []) as any[]).reduce((sum: number, s: any) => sum + (s.total_ttc || 0), 0),
+    }))
 
     setMonthlySales(months)
   }
 
   const fetchWeeklySales = async () => {
-    const weeks: MonthlySales[] = []
     const now = new Date()
 
-    // Parcourir les 6 dernières semaines Y COMPRIS la semaine en cours
+    // Calculer les dates pour les 6 dernières semaines
+    const weeksData = []
     for (let i = 5; i >= 0; i--) {
       const weekDate = subWeeks(now, i)
-      const weekStart = startOfWeek(weekDate, { weekStartsOn: 1 }).toISOString().split('T')[0]
-      const weekEnd = endOfWeek(weekDate, { weekStartsOn: 1 }).toISOString().split('T')[0]
-
-      const { data } = await supabase
-        .from('sales')
-        .select('total_ttc')
-        .gte('sale_date', weekStart)
-        .lte('sale_date', weekEnd)
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const total = ((data || []) as any[]).reduce((sum: number, s: any) => sum + (s.total_ttc || 0), 0)
-
-      weeks.push({
-        month: `Sem. ${format(weekDate, 'w', { locale: fr })}`,
-        total,
+      weeksData.push({
+        date: weekDate,
+        start: startOfWeek(weekDate, { weekStartsOn: 1 }).toISOString().split('T')[0],
+        end: endOfWeek(weekDate, { weekStartsOn: 1 }).toISOString().split('T')[0],
+        label: `Sem. ${format(weekDate, 'w', { locale: fr })}`,
       })
     }
+
+    // Fetch all weeks in parallel
+    const results = await Promise.all(
+      weeksData.map(w =>
+        supabase
+          .from('sales')
+          .select('total_ttc')
+          .gte('sale_date', w.start)
+          .lte('sale_date', w.end)
+      )
+    )
+
+    const weeks: MonthlySales[] = results.map((res, i) => ({
+      month: weeksData[i].label,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      total: ((res.data || []) as any[]).reduce((sum: number, s: any) => sum + (s.total_ttc || 0), 0),
+    }))
 
     setMonthlySales(weeks)
   }
@@ -451,75 +577,659 @@ export default function DashboardPage() {
     }
   }
 
-  const fetchMonthlyTracking = async () => {
+  // Load cached tracking data on mount
+  useEffect(() => {
     const currentYear = new Date().getFullYear()
-    const tracking: MonthlyTracking[] = []
+    const cacheKey = `monthlyTracking_${currentYear}`
+    const cached = localStorage.getItem(cacheKey)
+    const cachedTime = localStorage.getItem(`${cacheKey}_time`)
 
-    for (const { key, label } of monthNames) {
-      const monthStart = `${currentYear}-${key}-01`
-      // Utiliser le dernier jour correct du mois
-      const lastDay = new Date(currentYear, parseInt(key), 0).getDate()
-      const monthEnd = `${currentYear}-${key}-${lastDay.toString().padStart(2, '0')}`
-
-      // Fetch sales for this month
-      const { data: salesData } = await supabase
-        .from('sales')
-        .select('total_ht, mb')
-        .gte('sale_date', monthStart)
-        .lte('sale_date', monthEnd)
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const valRecette = ((salesData || []) as any[]).reduce((sum, s) => sum + (s.total_ht || 0), 0)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const benefice = ((salesData || []) as any[]).reduce((sum, s) => sum + (s.mb || 0), 0)
-
-      // Fetch articles vendus for this month
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: articlesData } = await (supabase.from('articles_vendus') as any)
-        .select('article_code, quantity_sold, article:articles(weight_net)')
-        .gte('sale_date', monthStart)
-        .lte('sale_date', monthEnd)
-
-      let quantiteTotale = 0
-      let quantiteHarissa = 0
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(articlesData || []).forEach((a: any) => {
-        const fournitureCode = extractFournitureCode(a.article_code)
-        const weightNet = a.article?.weight_net || 0
-        const kg = a.quantity_sold * weightNet
-
-        quantiteTotale += kg
-        if (isHarissa(fournitureCode)) quantiteHarissa += kg
-      })
-
-      // Quantité olive = total - harissa
-      const quantiteOlive = quantiteTotale - quantiteHarissa
-
-      const pourcentage = valRecette > 0 ? (benefice / valRecette) * 100 : 0
-
-      tracking.push({
-        month: key,
-        monthLabel: label,
-        valRecette,
-        quantiteTotale,
-        quantiteOlive,
-        quantiteHarissa,
-        benefice,
-        pourcentage,
-      })
+    if (cached) {
+      try {
+        setMonthlyTracking(JSON.parse(cached))
+        if (cachedTime) {
+          setTrackingLastUpdate(cachedTime)
+        }
+      } catch (e) {
+        console.error('Error loading cached tracking:', e)
+      }
     }
+  }, [])
 
-    setMonthlyTracking(tracking)
+  const fetchMonthlyTracking = async () => {
+    setIsLoadingTracking(true)
+    try {
+      const currentYear = new Date().getFullYear()
+      const yearStart = `${currentYear}-01-01`
+      const yearEnd = `${currentYear}-12-31`
+
+      // Fetch all data for the year in 2 parallel queries instead of 24 sequential
+      const [salesRes, articlesRes] = await Promise.all([
+        supabase
+          .from('sales')
+          .select('sale_date, total_ht, mb')
+          .gte('sale_date', yearStart)
+          .lte('sale_date', yearEnd),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (supabase.from('articles_vendus') as any)
+          .select('sale_date, article_code, quantity_sold, article:articles(weight_net)')
+          .gte('sale_date', yearStart)
+          .lte('sale_date', yearEnd),
+      ])
+
+      const salesData = salesRes.data || []
+      const articlesData = articlesRes.data || []
+
+      // Group by month in JavaScript
+      const tracking: MonthlyTracking[] = monthNames.map(({ key, label }) => {
+        const monthPrefix = `${currentYear}-${key}`
+
+        // Filter sales for this month
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const monthSales = salesData.filter((s: any) => s.sale_date?.startsWith(monthPrefix))
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const valRecette = monthSales.reduce((sum: number, s: any) => sum + (s.total_ht || 0), 0)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const benefice = monthSales.reduce((sum: number, s: any) => sum + (s.mb || 0), 0)
+
+        // Filter articles for this month
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const monthArticles = articlesData.filter((a: any) => a.sale_date?.startsWith(monthPrefix))
+
+        let quantiteTotale = 0
+        let quantiteHarissa = 0
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        monthArticles.forEach((a: any) => {
+          const fournitureCode = extractFournitureCode(a.article_code)
+          const weightNet = getEffectiveWeightNet(a.article_code, a.article?.weight_net ?? null)
+          const kg = a.quantity_sold * weightNet
+
+          quantiteTotale += kg
+          if (isHarissa(fournitureCode)) quantiteHarissa += kg
+        })
+
+        const quantiteOlive = quantiteTotale - quantiteHarissa
+        const pourcentage = valRecette > 0 ? (benefice / valRecette) * 100 : 0
+
+        return {
+          month: key,
+          monthLabel: label,
+          valRecette,
+          quantiteTotale,
+          quantiteOlive,
+          quantiteHarissa,
+          benefice,
+          pourcentage,
+        }
+      })
+
+      setMonthlyTracking(tracking)
+
+      // Save to cache
+      const cacheKey = `monthlyTracking_${currentYear}`
+      const now = format(new Date(), 'dd/MM/yyyy HH:mm', { locale: fr })
+      localStorage.setItem(cacheKey, JSON.stringify(tracking))
+      localStorage.setItem(`${cacheKey}_time`, now)
+      setTrackingLastUpdate(now)
+    } catch (error) {
+      console.error('Error fetching monthly tracking:', error)
+    } finally {
+      setIsLoadingTracking(false)
+    }
   }
 
+  const fetchDailyMB = async (yearMonth?: string) => {
+    const month = yearMonth || selectedMBMonth
+    const [year, monthNum] = month.split('-').map(Number)
+    const daysInMonth = new Date(year, monthNum, 0).getDate()
+
+    const monthStart = `${month}-01`
+    const monthEnd = `${month}-${String(daysInMonth).padStart(2, '0')}`
+
+    // Fetch all sales for the month
+    const { data: salesData } = await supabase
+      .from('sales')
+      .select('sale_date, mb')
+      .gte('sale_date', monthStart)
+      .lte('sale_date', monthEnd)
+
+    // Group MB by day
+    const mbByDay: Record<number, number> = {}
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(salesData || []).forEach((sale: any) => {
+      const day = new Date(sale.sale_date).getDate()
+      mbByDay[day] = (mbByDay[day] || 0) + (sale.mb || 0)
+    })
+
+    // Convert to array, filtering out days with 0 MB
+    const dailyData: DailyMB[] = Object.entries(mbByDay)
+      .filter(([_, mb]) => mb > 0)
+      .map(([day, mb]) => ({
+        day: parseInt(day),
+        dayLabel: String(day),
+        mb,
+      }))
+      .sort((a, b) => a.day - b.day)
+
+    setDailyMB(dailyData)
+  }
+
+  // Fetch Diff Achat-Vente (à la demande)
+  const fetchDiffAchatVente = async () => {
+    setIsLoadingDiff(true)
+    try {
+      // Calculer les dates du mois sélectionné
+      const [year, month] = selectedDiffMonth.split('-').map(Number)
+      const lastDay = new Date(year, month, 0).getDate()
+      const monthStart = `${selectedDiffMonth}-01`
+      const monthEnd = `${selectedDiffMonth}-${String(lastDay).padStart(2, '0')}`
+
+      // Catégories qui comptent pour les kg
+      const CATEGORIES_KG_DIFF = ['légumes', 'olive', 'sauce', 'legumes']
+
+      // Fonction pour vérifier si c'est un emballage (compté en unités)
+      const isEmballageCode = (code: string): boolean => {
+        const upperCode = code.toUpperCase().trim()
+        const emballagePatterns = [
+          /^SE\d+L?$/i, /^BO\d+$/i, /^BI\d+L?$/i, /^BT\d+L?$/i,
+          /^SC\d+$/i, /^BQ\d+$/i, /^CA\d+X?$/i, /^FL\d+$/i, /^PT\d+$/i,
+        ]
+        return emballagePatterns.some(pattern => pattern.test(upperCode))
+      }
+
+      // Fonction pour extraire le code emballage d'un article (Se9LOVE -> Se9L)
+      const extractEmballageCode = (articleCode: string): string | null => {
+        if (isVracArticle(articleCode)) return null
+        const code = articleCode.trim()
+        const emballagePatterns = [
+          /^(Se\d+L)/i, /^(Bo\d+)/i, /^(Bi\d+L?)/i, /^(Bt\d+L?)/i,
+          /^(Sc\d+)/i, /^(Bq\d+)/i, /^(Ca\d+x?)/i, /^(Fl\d+)/i, /^(Pt\d+)/i,
+        ]
+        for (const pattern of emballagePatterns) {
+          const match = code.match(pattern)
+          if (match) return match[1].toUpperCase()
+        }
+        return null
+      }
+
+      // Fonction pour normaliser le code fourniture (HR-vrac, HR5, HR7 -> HR)
+      const normalizeFournitureCode = (code: string): string => {
+        const upperCode = code.toUpperCase().trim()
+        if (upperCode === 'HR-VRAC' || upperCode === 'HR' || upperCode === 'HAR' ||
+            /^HR[\d.]*$/i.test(upperCode) || /^HR-/i.test(upperCode)) {
+          return 'HR'
+        }
+        return upperCode
+      }
+
+      // Récupérer les données en parallèle
+      const [receptionsRes, articlesRes, categoriesRes] = await Promise.all([
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (supabase.from('reception_items') as any).select(`
+          quantity_received,
+          reception:receptions!inner(reception_date),
+          supply:supplies(code, category_id)
+        `),
+        supabase.from('articles').select('code, weight_net'),
+        supabase.from('supply_categories').select('id, name'),
+      ])
+
+      const receptionsData = receptionsRes.data || []
+      const categoriesDiff = categoriesRes.data || []
+
+      // Map code article -> poids net
+      const articleWeightMap = new Map<string, number>()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(articlesRes.data || []).forEach((a: any) => {
+        if (a.code && a.weight_net) {
+          articleWeightMap.set(a.code.toUpperCase(), a.weight_net)
+        }
+      })
+
+      // Vérifier si une catégorie compte pour les kg
+      const isCategoryKgDiff = (categoryId: string | null): boolean => {
+        if (!categoryId) return false
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const category = categoriesDiff.find((c: any) => c.id === categoryId)
+        if (!category) return false
+        return CATEGORIES_KG_DIFF.some(cat =>
+          category.name.toLowerCase().includes(cat.toLowerCase())
+        )
+      }
+
+      // Maps pour les achats
+      const achatsEmballagesMap = new Map<string, number>() // unités
+      const achatsFournituresMap = new Map<string, number>() // kg
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(receptionsData || []).forEach((item: any) => {
+        const receptionDate = item.reception?.reception_date
+        if (!receptionDate || receptionDate < monthStart || receptionDate > monthEnd) return
+
+        const categoryId = item.supply?.category_id || null
+        const rawCode = (item.supply?.code || '').trim()
+        if (!rawCode) return
+
+        const qty = item.quantity_received || 0
+        if (qty <= 0) return
+
+        // Extraire l'emballage pour le comptage en unités (toutes catégories)
+        const emballageCode = extractEmballageCode(rawCode)
+        if (emballageCode) {
+          achatsEmballagesMap.set(emballageCode, (achatsEmballagesMap.get(emballageCode) || 0) + qty)
+        }
+
+        // Pour les kg, filtrer par catégorie (légumes, olive, sauce)
+        if (!isCategoryKgDiff(categoryId)) return
+
+        // Traiter les articles vrac comme des fournitures en kg
+        if (isVracArticle(rawCode)) {
+          let fournitureCode = rawCode.replace(/[-\s]?vrac$/i, '').trim().toUpperCase()
+          fournitureCode = normalizeFournitureCode(fournitureCode)
+          if (fournitureCode) {
+            achatsFournituresMap.set(fournitureCode, (achatsFournituresMap.get(fournitureCode) || 0) + qty)
+          }
+          return
+        }
+
+        // Extraire la fourniture du code (Bi5LHr -> HR, ou OVE -> OVE)
+        let fournitureCode = extractFournitureCode(rawCode)
+        fournitureCode = normalizeFournitureCode(fournitureCode)
+
+        // Vérifier que ce n'est pas un emballage pur
+        if (fournitureCode && !isEmballageCode(fournitureCode)) {
+          let kgToAdd = qty
+          if (emballageCode) {
+            const weightNet = articleWeightMap.get(rawCode.toUpperCase()) || 0
+            kgToAdd = qty * weightNet
+          }
+          if (kgToAdd > 0) {
+            achatsFournituresMap.set(fournitureCode, (achatsFournituresMap.get(fournitureCode) || 0) + kgToAdd)
+          }
+        }
+      })
+
+      // Récupérer les ventes (articles vendus)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: ventesData } = await (supabase.from('articles_vendus') as any)
+        .select('article_code, quantity_sold, sale_date, article:articles(weight_net)')
+        .gte('sale_date', monthStart)
+        .lte('sale_date', monthEnd)
+
+      // Maps pour les ventes
+      const ventesEmballagesMap = new Map<string, number>() // unités
+      const ventesFournituresMap = new Map<string, number>() // kg
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(ventesData || []).forEach((item: any) => {
+        const articleCode = item.article_code || ''
+        if (articleCode.toUpperCase().startsWith('ETQ')) return
+
+        const qtySold = item.quantity_sold || 0
+
+        // Extraire le code emballage (null si vrac)
+        const emballageCode = extractEmballageCode(articleCode)
+        if (emballageCode) {
+          // Compter l'emballage en unités
+          ventesEmballagesMap.set(emballageCode, (ventesEmballagesMap.get(emballageCode) || 0) + qtySold)
+        }
+
+        // Extraire et compter la fourniture en kg
+        let fournitureCode = extractFournitureCode(articleCode)
+        fournitureCode = normalizeFournitureCode(fournitureCode)
+        if (fournitureCode) {
+          const weightNet = getEffectiveWeightNet(articleCode, item.article?.weight_net ?? null)
+          const kg = qtySold * weightNet
+          ventesFournituresMap.set(fournitureCode, (ventesFournituresMap.get(fournitureCode) || 0) + kg)
+        }
+      })
+
+      // Combiner les données
+      const diffData: DiffAchatVente[] = []
+
+      // Emballages (unités)
+      const allEmballages = new Set([...achatsEmballagesMap.keys(), ...ventesEmballagesMap.keys()])
+      allEmballages.forEach(code => {
+        const qteAchetee = achatsEmballagesMap.get(code) || 0
+        const qteVendue = ventesEmballagesMap.get(code) || 0
+        if (qteAchetee > 0 || qteVendue > 0) {
+          diffData.push({
+            code,
+            qteAchetee,
+            qteVendue,
+            diff: qteAchetee - qteVendue,
+            isEmballage: true,
+          })
+        }
+      })
+
+      // Fournitures (kg)
+      const allFournitures = new Set([...achatsFournituresMap.keys(), ...ventesFournituresMap.keys()])
+      allFournitures.forEach(code => {
+        const qteAchetee = achatsFournituresMap.get(code) || 0
+        const qteVendue = ventesFournituresMap.get(code) || 0
+        if (qteAchetee > 0 || qteVendue > 0) {
+          diffData.push({
+            code,
+            qteAchetee,
+            qteVendue,
+            diff: qteAchetee - qteVendue,
+            isEmballage: false,
+          })
+        }
+      })
+
+      // Exclure PAL et BI5L du tableau
+      const excludedCodes = ['PAL', 'BI5L']
+      const filteredData = diffData.filter(item =>
+        !excludedCodes.includes(item.code.toUpperCase())
+      )
+
+      // Trier : emballages d'abord, puis fournitures, alphabétiquement
+      filteredData.sort((a, b) => {
+        if (a.isEmballage !== b.isEmballage) return a.isEmballage ? -1 : 1
+        return a.code.localeCompare(b.code)
+      })
+
+      setDiffAchatVente(filteredData)
+      setShowDiffAchatVente(true)
+    } catch (error) {
+      console.error('Error fetching diff achat-vente:', error)
+    } finally {
+      setIsLoadingDiff(false)
+    }
+  }
+
+  // Export Excel Diff Achat-Vente
+  const exportDiffToExcel = () => {
+    if (diffAchatVente.length === 0) return
+
+    // Créer le contenu CSV (compatible Excel)
+    const headers = ['Code', 'Type', 'Qté Achetée', 'Qté Vendue', 'Différence']
+    const rows = diffAchatVente.map(row => {
+      const unite = row.isEmballage ? 'unités' : 'kg'
+      return [
+        row.code,
+        row.isEmballage ? 'Emballage' : 'Fourniture',
+        `${row.qteAchetee.toFixed(row.isEmballage ? 0 : 2)} ${unite}`,
+        `${row.qteVendue.toFixed(row.isEmballage ? 0 : 2)} ${unite}`,
+        `${row.diff.toFixed(row.isEmballage ? 0 : 2)} ${unite}`,
+      ]
+    })
+
+    // Ajouter les totaux séparés (emballages et fournitures)
+    const emballages = diffAchatVente.filter(r => r.isEmballage)
+    const fournitures = diffAchatVente.filter(r => !r.isEmballage)
+
+    if (emballages.length > 0) {
+      const totalEmb = emballages.reduce((sum, r) => sum + r.diff, 0)
+      rows.push(['TOTAL EMBALLAGES', '', '', '', `${totalEmb.toFixed(0)} unités`])
+    }
+    if (fournitures.length > 0) {
+      const totalFour = fournitures.reduce((sum, r) => sum + r.diff, 0)
+      rows.push(['TOTAL FOURNITURES', '', '', '', `${totalFour.toFixed(2)} kg`])
+    }
+
+    const csvContent = [
+      headers.join(';'),
+      ...rows.map(row => row.join(';'))
+    ].join('\n')
+
+    // Créer et télécharger le fichier
+    const BOM = '\uFEFF'
+    const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `diff-achat-vente-${selectedDiffMonth}.csv`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  }
+
+  // Fetch Bilan Mensuel
+  const fetchBilanMensuel = async (yearMonth?: string) => {
+    const month = yearMonth || bilanMonth
+    setIsLoadingBilan(true)
+    try {
+      const [year, monthNum] = month.split('-').map(Number)
+      const lastDay = new Date(year, monthNum, 0).getDate()
+      const monthStart = `${month}-01`
+      const monthEnd = `${month}-${String(lastDay).padStart(2, '0')}`
+
+      // Catégories qui comptent pour les kg
+      const CATEGORIES_KG = ['légumes', 'olive', 'sauce', 'legumes']
+
+      // Fetch all data in parallel
+      const [
+        receptionsRes,
+        articlesForWeightRes,
+        categoriesRes,
+        commandesRes,
+        livraisonsRes,
+        ventesRes,
+        paiementsRecusRes,
+        articlesVendusRes,
+      ] = await Promise.all([
+        // Réceptions du mois avec détails paiement, code fourniture et catégorie
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (supabase.from('receptions') as any)
+          .select('id, total_ht, payment_status, reception_items(quantity_received, supply:supplies(code, category_id))')
+          .gte('reception_date', monthStart)
+          .lte('reception_date', monthEnd),
+        // Articles pour récupérer le poids net
+        supabase.from('articles').select('code, weight_net'),
+        // Catégories de fournitures
+        supabase.from('supply_categories').select('id, name'),
+        // Commandes du mois
+        supabase.from('orders')
+          .select('id', { count: 'exact', head: true })
+          .gte('order_date', monthStart)
+          .lte('order_date', monthEnd),
+        // Livraisons du mois
+        supabase.from('deliveries')
+          .select('id', { count: 'exact', head: true })
+          .gte('delivery_date', monthStart)
+          .lte('delivery_date', monthEnd),
+        // Ventes du mois (CA et marge)
+        supabase.from('sales')
+          .select('id, total_ht, mb')
+          .gte('sale_date', monthStart)
+          .lte('sale_date', monthEnd),
+        // Paiements reçus - comptés par date de livraison (BL)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (supabase.from('payments') as any)
+          .select('amount, delivery:deliveries!inner(delivery_date)')
+          .gte('delivery.delivery_date', monthStart)
+          .lte('delivery.delivery_date', monthEnd),
+        // Articles vendus du mois (pour calculer kg livrés)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (supabase.from('articles_vendus') as any)
+          .select('quantity_sold, article:articles(weight_net), article_code')
+          .gte('sale_date', monthStart)
+          .lte('sale_date', monthEnd),
+      ])
+
+      // Calculer les KPI
+      const receptions = receptionsRes.data || []
+      const categories = categoriesRes.data || []
+      let receptionsKg = 0
+      let valBRRecue = 0
+      let valBRReglee = 0
+
+      // Construire le map code article -> poids net
+      const articleWeightMap = new Map<string, number>()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(articlesForWeightRes.data || []).forEach((a: any) => {
+        if (a.code && a.weight_net) {
+          articleWeightMap.set(a.code.toUpperCase(), a.weight_net)
+        }
+      })
+
+      // Vérifier si une catégorie compte pour les kg
+      const isCategoryKgBilan = (categoryId: string | null): boolean => {
+        if (!categoryId) return false
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const category = categories.find((c: any) => c.id === categoryId)
+        if (!category) return false
+        return CATEGORIES_KG.some(cat =>
+          category.name.toLowerCase().includes(cat.toLowerCase())
+        )
+      }
+
+      // Fonction pour vérifier si un article est en vrac
+      const isVracArticleBilan = (articleCode: string): boolean => {
+        return /[-\s]?vrac$/i.test(articleCode.trim())
+      }
+
+      // Fonction pour extraire le code emballage
+      const extractEmballageCodeBilan = (articleCode: string): string | null => {
+        if (isVracArticleBilan(articleCode)) return null
+        const code = articleCode.trim()
+        const emballagePatterns = [
+          /^(Se\d+L)/i, /^(Bo\d+)/i, /^(Bi\d+L?)/i, /^(Bt\d+L?)/i,
+          /^(Sc\d+)/i, /^(Bq\d+)/i, /^(Ca\d+x?)/i, /^(Fl\d+)/i, /^(Pt\d+)/i,
+        ]
+        for (const pattern of emballagePatterns) {
+          const match = code.match(pattern)
+          if (match) return match[1].toUpperCase()
+        }
+        return null
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      receptions.forEach((r: any) => {
+        // Calculer le total kg des réceptions (filtré par catégorie)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (r.reception_items || []).forEach((item: any) => {
+          const categoryId = item.supply?.category_id || null
+
+          // Filtrer par catégorie (légumes, olive, sauce uniquement)
+          if (!isCategoryKgBilan(categoryId)) return
+
+          const rawCode = (item.supply?.code || '').trim()
+          if (!rawCode) return
+
+          const qty = item.quantity_received || 0
+          if (qty <= 0) return
+
+          // Articles vrac : quantité directement en kg
+          if (isVracArticleBilan(rawCode)) {
+            receptionsKg += qty
+            return
+          }
+
+          // Articles composés (avec emballage) : utiliser le poids net
+          const emballageCode = extractEmballageCodeBilan(rawCode)
+          if (emballageCode) {
+            const weightNet = articleWeightMap.get(rawCode.toUpperCase()) || 0
+            receptionsKg += qty * weightNet
+          } else {
+            // Fourniture pure : quantité en kg
+            receptionsKg += qty
+          }
+        })
+        // Val BR reçue (total HT de toutes les réceptions)
+        valBRRecue += r.total_ht || 0
+        // Val BR réglée (réceptions payées)
+        if (r.payment_status === 'paye') {
+          valBRReglee += r.total_ht || 0
+        }
+      })
+
+      // Calculer kg livrés (à partir des articles vendus)
+      let livraisonsKg = 0
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(articlesVendusRes.data || []).forEach((a: any) => {
+        const weightNet = getEffectiveWeightNet(a.article_code || '', a.article?.weight_net ?? null)
+        livraisonsKg += (a.quantity_sold || 0) * weightNet
+      })
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const caVentes = (ventesRes.data || []).reduce((sum: number, v: any) => sum + (v.total_ht || 0), 0)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const marge = (ventesRes.data || []).reduce((sum: number, v: any) => sum + (v.mb || 0), 0)
+      const ventesCount = (ventesRes.data || []).length
+
+      // Paiements reçus (comptés par date de BL, pas date du paiement)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const paiementsRecus = (paiementsRecusRes.data || []).reduce((sum: number, p: any) => sum + (p.amount || 0), 0)
+      // Paiements effectués = réceptions payées du mois (comptés par date de BR)
+      const paiementsEffectues = valBRReglee
+
+      setBilanMensuel({
+        receptionsKg,
+        livraisonsKg,
+        commandesCount: commandesRes.count || 0,
+        livraisonsCount: livraisonsRes.count || 0,
+        ventesCount,
+        caVentes,
+        marge,
+        paiementsRecus,
+        paiementsEffectues,
+        restePaiements: paiementsRecus - paiementsEffectues,
+        valBRRecue,
+        valBRReglee,
+        diffBR: valBRRecue - valBRReglee,
+      })
+    } catch (error) {
+      console.error('Error fetching bilan mensuel:', error)
+    } finally {
+      setIsLoadingBilan(false)
+    }
+  }
+
+  // Navigation du bilan mensuel
+  const navigateBilanMonth = (direction: 'prev' | 'next') => {
+    const [year, month] = bilanMonth.split('-').map(Number)
+    let newYear = year
+    let newMonth = month
+
+    if (direction === 'prev') {
+      newMonth--
+      if (newMonth < 1) {
+        newMonth = 12
+        newYear--
+      }
+    } else {
+      newMonth++
+      if (newMonth > 12) {
+        newMonth = 1
+        newYear++
+      }
+    }
+
+    const newBilanMonth = `${newYear}-${String(newMonth).padStart(2, '0')}`
+    setBilanMonth(newBilanMonth)
+  }
+
+  // Télécharger le bilan en PDF
+  const handleDownloadBilanPDF = async () => {
+    await generateBilanMensuelPDF({
+      month: bilanMonth,
+      ...bilanMensuel,
+    }, companySettings)
+  }
+
+  // Fetch bilan when month changes
+  useEffect(() => {
+    if (!isLoading) {
+      fetchBilanMensuel(bilanMonth)
+    }
+  }, [bilanMonth, isLoading])
+
+  // Fetch daily MB when month changes
+  useEffect(() => {
+    if (!isLoading) {
+      fetchDailyMB(selectedMBMonth)
+    }
+  }, [selectedMBMonth, isLoading])
+
   const formatPrice = (price: number) => {
-    return new Intl.NumberFormat('fr-MA', {
-      style: 'currency',
-      currency: 'MAD',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(price)
+    const formatted = Math.round(price).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+    return `${formatted} MAD`
   }
 
   const salesGrowth = stats.salesLastMonth > 0
@@ -528,9 +1238,10 @@ export default function DashboardPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-96">
-        <Loader2 className="h-8 w-8 animate-spin text-[#B8860B]" />
-        <span className="ml-2 text-gray-600">Chargement du tableau de bord...</span>
+      <div className="flex flex-col items-center justify-center h-96 gap-4">
+        <div className="w-64 h-2 bg-gray-200 rounded-full overflow-hidden">
+          <div className="h-full bg-gradient-to-r from-[#B8860B] to-[#DAA520] rounded-full animate-progress" />
+        </div>
       </div>
     )
   }
@@ -542,196 +1253,138 @@ export default function DashboardPage() {
         <p className="text-gray-500">Vue d&apos;ensemble de votre activité</p>
       </div>
 
-      {/* Stats Grid - Ligne 1: Commandes, Livraisons, Ventes */}
-      {!isCommercial && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Card className="overflow-hidden border-2 border-[#B8860B]">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">Commandes</CardTitle>
-              <div className="p-2 rounded-lg bg-orange-500 flex-shrink-0">
-                <ShoppingCart className="h-4 w-4 text-white" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold truncate">{stats.ordersThisMonth}</div>
-              <p className="text-xs text-gray-500 truncate">ce mois ({stats.orders} total)</p>
-            </CardContent>
-          </Card>
-
-          <Card className="overflow-hidden border-2 border-[#B8860B]">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">Livraisons</CardTitle>
-              <div className="p-2 rounded-lg bg-purple-500 flex-shrink-0">
-                <Truck className="h-4 w-4 text-white" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold truncate">{stats.deliveriesPending}</div>
-              <p className="text-xs text-gray-500 truncate">en attente ({stats.deliveries} total)</p>
-            </CardContent>
-          </Card>
-
-          {!isLivreur && (
-            <Card className="overflow-hidden border-2 border-[#B8860B]">
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium text-gray-600 truncate">Ventes (mois)</CardTitle>
-                <div className="p-2 rounded-lg bg-teal-500 flex-shrink-0">
-                  <TrendingUp className="h-4 w-4 text-white" />
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="text-xl font-bold truncate">{formatPrice(stats.salesThisMonth)}</div>
-                <div className="flex items-center text-xs flex-wrap">
-                  {salesGrowth >= 0 ? (
-                    <ArrowUpRight className="h-3 w-3 text-[#DAA520] mr-1 flex-shrink-0" />
-                  ) : (
-                    <ArrowDownRight className="h-3 w-3 text-red-500 mr-1 flex-shrink-0" />
-                  )}
-                  <span className={salesGrowth >= 0 ? 'text-[#DAA520]' : 'text-red-500'}>
-                    {Math.abs(salesGrowth).toFixed(1)}%
-                  </span>
-                  <span className="text-gray-500 ml-1 truncate">vs mois dernier</span>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-        </div>
-      )}
-
-      {/* Stats Grid - Ligne 2: Caisse, MB */}
+      {/* BILAN MENSUEL */}
       {!isLivreur && !isCommercial && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Card className="overflow-hidden border-2 border-[#B8860B]">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">Caisse</CardTitle>
-              <div className="p-2 rounded-lg bg-yellow-500 flex-shrink-0">
-                <DollarSign className="h-4 w-4 text-white" />
+        <Card className="border-2 border-[#B8860B] overflow-hidden">
+          <CardHeader className="bg-gradient-to-r from-[#B8860B] to-[#DAA520] text-white pb-4">
+            <div className="flex items-center justify-between">
+              <div className="w-24"></div>
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={() => navigateBilanMonth('prev')}
+                  className="p-2 rounded-full hover:bg-white/20 transition-colors"
+                >
+                  <ChevronLeft className="h-6 w-6" />
+                </button>
+                <CardTitle className="text-xl font-bold">
+                  BILAN MENSUEL - {format(new Date(bilanMonth + '-01'), 'MMMM yyyy', { locale: fr }).toUpperCase()}
+                </CardTitle>
+                <button
+                  onClick={() => navigateBilanMonth('next')}
+                  className="p-2 rounded-full hover:bg-white/20 transition-colors"
+                >
+                  <ChevronRight className="h-6 w-6" />
+                </button>
               </div>
-            </CardHeader>
-            <CardContent>
-              <div className={`text-xl font-bold truncate ${stats.cashBalance >= 0 ? 'text-[#B8860B]' : 'text-red-600'}`}>
-                {formatPrice(stats.cashBalance)}
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={handleDownloadBilanPDF}
+                disabled={isLoadingBilan}
+                className="bg-white/20 hover:bg-white/30 text-white border-white/30"
+              >
+                <FileDown className="h-4 w-4 mr-2" />
+                PDF
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-6">
+            {isLoadingBilan ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-6 w-6 animate-spin text-[#B8860B]" />
+                <span className="ml-2 text-gray-500">Chargement du bilan...</span>
               </div>
-              <p className="text-xs text-gray-500">solde actuel</p>
-            </CardContent>
-          </Card>
-
-          <Card className="overflow-hidden border-2 border-[#B8860B]">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">MB (mois)</CardTitle>
-              <div className="p-2 rounded-lg bg-green-500 flex-shrink-0">
-                <TrendingUp className="h-4 w-4 text-white" />
+            ) : (
+              <div className="flex justify-center">
+                <table className="border border-gray-200 rounded-lg overflow-hidden">
+                  <tbody className="divide-y divide-gray-200">
+                    <tr className="hover:bg-gray-50">
+                      <td className="py-2 px-4 text-sm font-medium text-gray-700 whitespace-nowrap">Qté totale reçue</td>
+                      <td className="py-2 px-4 text-sm font-bold text-right text-blue-600 whitespace-nowrap">
+                        {bilanMensuel.receptionsKg.toLocaleString('fr-FR', { maximumFractionDigits: 2 })} kg
+                      </td>
+                    </tr>
+                    <tr className="hover:bg-gray-50">
+                      <td className="py-2 px-4 text-sm font-medium text-gray-700 whitespace-nowrap">Qté totale livrée</td>
+                      <td className="py-2 px-4 text-sm font-bold text-right text-purple-600 whitespace-nowrap">
+                        {bilanMensuel.livraisonsKg.toLocaleString('fr-FR', { maximumFractionDigits: 2 })} kg
+                      </td>
+                    </tr>
+                    <tr className="hover:bg-gray-50">
+                      <td className="py-2 px-4 text-sm font-medium text-gray-700 whitespace-nowrap">Nbre commandes</td>
+                      <td className="py-2 px-4 text-sm font-bold text-right text-orange-600 whitespace-nowrap">
+                        {bilanMensuel.commandesCount}
+                      </td>
+                    </tr>
+                    <tr className="hover:bg-gray-50">
+                      <td className="py-2 px-4 text-sm font-medium text-gray-700 whitespace-nowrap">Nbre livraisons</td>
+                      <td className="py-2 px-4 text-sm font-bold text-right text-purple-600 whitespace-nowrap">
+                        {bilanMensuel.livraisonsCount}
+                      </td>
+                    </tr>
+                    <tr className="hover:bg-gray-50">
+                      <td className="py-2 px-4 text-sm font-medium text-gray-700 whitespace-nowrap">Nbre ventes</td>
+                      <td className="py-2 px-4 text-sm font-bold text-right text-teal-600 whitespace-nowrap">
+                        {bilanMensuel.ventesCount}
+                      </td>
+                    </tr>
+                    <tr className="hover:bg-gray-50">
+                      <td className="py-2 px-4 text-sm font-medium text-gray-700 whitespace-nowrap">CA</td>
+                      <td className="py-2 px-4 text-sm font-bold text-right text-teal-600 whitespace-nowrap">
+                        {bilanMensuel.caVentes.toLocaleString('fr-FR', { maximumFractionDigits: 0 })} DH
+                      </td>
+                    </tr>
+                    <tr className="hover:bg-gray-50">
+                      <td className="py-2 px-4 text-sm font-medium text-gray-700 whitespace-nowrap">MB</td>
+                      <td className="py-2 px-4 text-sm font-bold text-right text-green-600 whitespace-nowrap">
+                        {bilanMensuel.marge.toLocaleString('fr-FR', { maximumFractionDigits: 0 })} DH
+                      </td>
+                    </tr>
+                    <tr className="hover:bg-gray-50">
+                      <td className="py-2 px-4 text-sm font-medium text-gray-700 whitespace-nowrap">Encaissement</td>
+                      <td className="py-2 px-4 text-sm font-bold text-right text-emerald-600 whitespace-nowrap">
+                        {bilanMensuel.paiementsRecus.toLocaleString('fr-FR', { maximumFractionDigits: 0 })} DH
+                      </td>
+                    </tr>
+                    <tr className="hover:bg-gray-50">
+                      <td className="py-2 px-4 text-sm font-medium text-gray-700 whitespace-nowrap">Décaissement</td>
+                      <td className="py-2 px-4 text-sm font-bold text-right text-red-600 whitespace-nowrap">
+                        {bilanMensuel.paiementsEffectues.toLocaleString('fr-FR', { maximumFractionDigits: 0 })} DH
+                      </td>
+                    </tr>
+                    <tr className="bg-gray-100 hover:bg-gray-200">
+                      <td className="py-2 px-4 text-sm font-bold text-gray-800 whitespace-nowrap">Reste</td>
+                      <td className={`py-2 px-4 text-sm font-bold text-right whitespace-nowrap ${bilanMensuel.restePaiements >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                        {bilanMensuel.restePaiements.toLocaleString('fr-FR', { maximumFractionDigits: 0 })} DH
+                      </td>
+                    </tr>
+                    <tr className="hover:bg-gray-50">
+                      <td className="py-2 px-4 text-sm font-medium text-gray-700 whitespace-nowrap">Val BR reçue</td>
+                      <td className="py-2 px-4 text-sm font-bold text-right text-blue-600 whitespace-nowrap">
+                        {bilanMensuel.valBRRecue.toLocaleString('fr-FR', { maximumFractionDigits: 0 })} DH
+                      </td>
+                    </tr>
+                    <tr className="hover:bg-gray-50">
+                      <td className="py-2 px-4 text-sm font-medium text-gray-700 whitespace-nowrap">Val BR réglée</td>
+                      <td className="py-2 px-4 text-sm font-bold text-right text-green-600 whitespace-nowrap">
+                        {bilanMensuel.valBRReglee.toLocaleString('fr-FR', { maximumFractionDigits: 0 })} DH
+                      </td>
+                    </tr>
+                    <tr className="bg-gray-100 hover:bg-gray-200">
+                      <td className="py-2 px-4 text-sm font-bold text-gray-800 whitespace-nowrap">Diff</td>
+                      <td className={`py-2 px-4 text-sm font-bold text-right whitespace-nowrap ${bilanMensuel.diffBR <= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                        {bilanMensuel.diffBR.toLocaleString('fr-FR', { maximumFractionDigits: 0 })} DH
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
-            </CardHeader>
-            <CardContent>
-              <div className={`text-xl font-bold truncate ${stats.mbThisMonth >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {formatPrice(stats.mbThisMonth)}
-              </div>
-              <div className="flex items-center text-xs flex-wrap">
-                {(() => {
-                  const mbGrowth = stats.mbLastMonth > 0
-                    ? ((stats.mbThisMonth - stats.mbLastMonth) / stats.mbLastMonth) * 100
-                    : 0
-                  return (
-                    <>
-                      {mbGrowth >= 0 ? (
-                        <ArrowUpRight className="h-3 w-3 text-green-600 mr-1 flex-shrink-0" />
-                      ) : (
-                        <ArrowDownRight className="h-3 w-3 text-red-500 mr-1 flex-shrink-0" />
-                      )}
-                      <span className={mbGrowth >= 0 ? 'text-green-600' : 'text-red-500'}>
-                        {Math.abs(mbGrowth).toFixed(1)}%
-                      </span>
-                      <span className="text-gray-500 ml-1 truncate">vs mois dernier</span>
-                    </>
-                  )
-                })()}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {/* Stats Grid - Ligne 3: Fournisseurs, Articles, Clients, Stock */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Link href="/fournisseurs">
-          <Card className="cursor-pointer hover:shadow-md transition-shadow overflow-hidden border-2 border-[#B8860B]">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600 truncate">Fournisseurs</CardTitle>
-              <div className="p-2 rounded-lg bg-indigo-500 flex-shrink-0">
-                <Users className="h-4 w-4 text-white" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold truncate">-</div>
-              <p className="text-xs text-gray-500 truncate">fournisseurs actifs</p>
-            </CardContent>
-          </Card>
-        </Link>
-
-        <Link href="/articles">
-          <Card className="cursor-pointer hover:shadow-md transition-shadow overflow-hidden border-2 border-[#B8860B]">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">Articles</CardTitle>
-              <div className="p-2 rounded-lg bg-amber-500 flex-shrink-0">
-                <Package className="h-4 w-4 text-white" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold truncate">{stats.articles}</div>
-              <p className="text-xs text-gray-500 truncate">produits actifs</p>
-            </CardContent>
-          </Card>
-        </Link>
-
-        <Link href="/clients">
-          <Card className="cursor-pointer hover:shadow-md transition-shadow overflow-hidden border-2 border-[#B8860B]">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">Clients</CardTitle>
-              <div className="p-2 rounded-lg bg-blue-500 flex-shrink-0">
-                <Users className="h-4 w-4 text-white" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold truncate">{stats.clients}</div>
-              <p className="text-xs text-gray-500 truncate">clients actifs</p>
-            </CardContent>
-          </Card>
-        </Link>
-
-        <Link href="/stocks/articles">
-          <Card className="cursor-pointer hover:shadow-md transition-shadow overflow-hidden border-2 border-[#B8860B]">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">Stock</CardTitle>
-              <div className="p-2 rounded-lg bg-green-500 flex-shrink-0">
-                <Warehouse className="h-4 w-4 text-white" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold truncate">{stats.lowStockItems > 0 ? (
-                <span className="text-orange-500">{stats.lowStockItems}</span>
-              ) : (
-                <span className="text-green-600">OK</span>
-              )}</div>
-              <p className="text-xs text-gray-500 truncate">
-                {stats.lowStockItems > 0 ? 'articles en alerte' : 'stock normal'}
-              </p>
-            </CardContent>
-          </Card>
-        </Link>
-      </div>
-
-      {/* Low Stock Alert */}
-      {stats.lowStockItems > 0 && !isCommercial && (
-        <Card className="border-orange-200 bg-orange-50">
-          <CardContent className="flex items-center gap-3 py-4">
-            <AlertTriangle className="h-5 w-5 text-orange-500" />
-            <span className="text-orange-700">
-              <strong>{stats.lowStockItems}</strong> article(s) avec stock faible ou épuisé
-            </span>
+            )}
           </CardContent>
         </Card>
       )}
+
+
 
       {/* Charts Row */}
       {!isLivreur && !isCommercial && (
@@ -799,51 +1452,52 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
 
-            {/* Orders by Status Pie Chart */}
+            {/* MB par jour Chart */}
             <Card className="border-2 border-[#B8860B]">
-              <CardHeader>
-                <CardTitle>Répartition des commandes</CardTitle>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle className="flex items-center gap-2">
+                  <TrendingUp className="h-5 w-5 text-green-600" />
+                  MB par jour
+                </CardTitle>
+                <input
+                  type="month"
+                  value={selectedMBMonth}
+                  onChange={(e) => setSelectedMBMonth(e.target.value)}
+                  className="px-3 py-1 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-[#B8860B]"
+                />
               </CardHeader>
               <CardContent>
-                {ordersByStatus.length > 0 ? (
-                  <div className="flex items-center">
-                    <ResponsiveContainer width="60%" height={250}>
-                      <PieChart>
-                        <Pie
-                          data={ordersByStatus}
-                          cx="50%"
-                          cy="50%"
-                          innerRadius={60}
-                          outerRadius={90}
-                          paddingAngle={2}
-                          dataKey="count"
-                        >
-                          {ordersByStatus.map((entry, index) => (
-                            <Cell
-                              key={`cell-${index}`}
-                              fill={statusColors[entry.status] || CHART_COLORS[index % CHART_COLORS.length]}
-                            />
-                          ))}
-                        </Pie>
-                        <Tooltip formatter={(value, name) => [value, statusLabels[String(name)] || name]} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                    <div className="w-[40%] space-y-2">
-                      {ordersByStatus.map((entry, index) => (
-                        <div key={entry.status} className="flex items-center gap-2 text-sm">
-                          <div
-                            className="w-3 h-3 rounded-full"
-                            style={{ backgroundColor: statusColors[entry.status] || CHART_COLORS[index % CHART_COLORS.length] }}
-                          />
-                          <span className="text-gray-600">{entry.label}</span>
-                          <span className="font-medium ml-auto">{entry.count}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                {dailyMB.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={250}>
+                    <BarChart data={dailyMB} margin={{ left: 10, right: 10, bottom: 5, top: 20 }}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis
+                        dataKey="dayLabel"
+                        tick={{ fontSize: 11 }}
+                        label={{ value: 'Jour', position: 'insideBottom', offset: -5, fontSize: 12 }}
+                      />
+                      <YAxis
+                        tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`}
+                        tick={{ fontSize: 11 }}
+                      />
+                      <Tooltip
+                        formatter={(value) => [formatPrice(Number(value) || 0), 'Marge']}
+                        labelFormatter={(label) => `Jour ${label}`}
+                        labelStyle={{ color: '#374151' }}
+                      />
+                      <Bar dataKey="mb" name="MB" fill="#16A34A" radius={[4, 4, 0, 0]} minPointSize={8}>
+                        <LabelList
+                          dataKey="mb"
+                          position="top"
+                          formatter={(value: number) => value >= 1000 ? `${(value / 1000).toFixed(1)}k` : Math.round(value)}
+                          style={{ fontSize: 9, fill: '#16A34A', fontWeight: 'bold' }}
+                        />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
                 ) : (
                   <div className="flex items-center justify-center h-[250px] text-gray-500">
-                    Aucune commande
+                    Aucune marge pour ce mois
                   </div>
                 )}
               </CardContent>
@@ -932,8 +1586,29 @@ export default function DashboardPage() {
 
           {/* Tableau Suivi Annuel */}
           <Card className="border-2 border-[#B8860B]">
-            <CardHeader className="bg-[#B8860B] text-white">
-              <CardTitle className="text-center">Suivi annuel ({new Date().getFullYear()})</CardTitle>
+            <CardHeader className="bg-[#B8860B] text-white flex flex-row items-center justify-between">
+              <div className="flex items-center gap-3">
+                <CardTitle>Suivi annuel ({new Date().getFullYear()})</CardTitle>
+                {trackingLastUpdate && (
+                  <span className="text-xs text-white/70">
+                    Màj: {trackingLastUpdate}
+                  </span>
+                )}
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={fetchMonthlyTracking}
+                disabled={isLoadingTracking}
+                className="bg-white/20 hover:bg-white/30 text-white border-white/30"
+              >
+                {isLoadingTracking ? (
+                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                ) : (
+                  <TrendingUp className="h-4 w-4 mr-2" />
+                )}
+                Rafraîchir
+              </Button>
             </CardHeader>
             <CardContent className="p-0">
               <div className="overflow-x-auto">
@@ -950,182 +1625,270 @@ export default function DashboardPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {monthlyTracking.map((row, index) => (
-                      <tr key={row.month} className={`border-b hover:bg-gray-50 ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}>
-                        <td className="px-3 py-2 font-medium italic text-gray-800 border-r">{row.monthLabel}</td>
-                        <td className="px-3 py-2 text-center font-bold text-[#B8860B] border-r">
-                          {row.valRecette > 0 ? `${Math.round(row.valRecette).toLocaleString('fr-FR')} dh` : ''}
-                        </td>
-                        <td className="px-3 py-2 text-center text-gray-600 border-r">
-                          {row.quantiteTotale > 0 ? `${Math.round(row.quantiteTotale).toLocaleString('fr-FR')} kg` : ''}
-                        </td>
-                        <td className="px-3 py-2 text-center text-green-700 border-r">
-                          {row.quantiteOlive > 0 ? `${Math.round(row.quantiteOlive).toLocaleString('fr-FR')} kg` : ''}
-                        </td>
-                        <td className="px-3 py-2 text-center text-red-600 border-r">
-                          {row.quantiteHarissa > 0 ? `${Math.round(row.quantiteHarissa).toLocaleString('fr-FR')} kg` : ''}
-                        </td>
-                        <td className="px-3 py-2 text-center font-bold text-green-600 border-r">
-                          {row.benefice > 0 ? `${Math.round(row.benefice).toLocaleString('fr-FR')} dh` : ''}
-                        </td>
-                        <td className="px-3 py-2 text-center text-gray-700">
-                          {row.pourcentage > 0 ? `${row.pourcentage.toFixed(2)} %` : ''}
+                    {monthlyTracking.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="text-center py-8 text-gray-500">
+                          {isLoadingTracking ? (
+                            <div className="flex items-center justify-center gap-2">
+                              <Loader2 className="h-5 w-5 animate-spin" />
+                              Calcul en cours...
+                            </div>
+                          ) : (
+                            <div>
+                              <p>Aucune donnée en cache</p>
+                              <p className="text-sm mt-1">Cliquez sur "Rafraîchir" pour calculer</p>
+                            </div>
+                          )}
                         </td>
                       </tr>
-                    ))}
-                    {/* Total */}
-                    <tr className="bg-yellow-100 border-t-2 border-[#B8860B] font-bold">
-                      <td className="px-3 py-2 text-gray-900 border-r">Total Annuel</td>
-                      <td className="px-3 py-2 text-center text-[#B8860B] border-r">
-                        {Math.round(monthlyTracking.reduce((s, m) => s + m.valRecette, 0)).toLocaleString('fr-FR')} dh
-                      </td>
-                      <td className="px-3 py-2 text-center text-gray-700 border-r">
-                        {Math.round(monthlyTracking.reduce((s, m) => s + m.quantiteTotale, 0)).toLocaleString('fr-FR')} kg
-                      </td>
-                      <td className="px-3 py-2 text-center text-green-700 border-r">
-                        {Math.round(monthlyTracking.reduce((s, m) => s + m.quantiteOlive, 0)).toLocaleString('fr-FR')} kg
-                      </td>
-                      <td className="px-3 py-2 text-center text-red-600 border-r">
-                        {Math.round(monthlyTracking.reduce((s, m) => s + m.quantiteHarissa, 0)).toLocaleString('fr-FR')} kg
-                      </td>
-                      <td className="px-3 py-2 text-center text-green-600 border-r">
-                        {Math.round(monthlyTracking.reduce((s, m) => s + m.benefice, 0)).toLocaleString('fr-FR')} dh
-                      </td>
-                      <td className="px-3 py-2 text-center text-gray-700">
-                        {(() => {
-                          const totalRecette = monthlyTracking.reduce((s, m) => s + m.valRecette, 0)
-                          const totalBenef = monthlyTracking.reduce((s, m) => s + m.benefice, 0)
-                          return totalRecette > 0 ? `${((totalBenef / totalRecette) * 100).toFixed(2)} %` : ''
-                        })()}
-                      </td>
-                    </tr>
-                    {/* Moyenne */}
-                    <tr className="bg-yellow-50 font-bold">
-                      <td className="px-3 py-2 text-gray-900 border-r">Moyenne</td>
-                      <td className="px-3 py-2 text-center text-[#B8860B] border-r">
-                        {(() => {
-                          const months = monthlyTracking.filter(m => m.valRecette > 0).length || 1
-                          return Math.round(monthlyTracking.reduce((s, m) => s + m.valRecette, 0) / months).toLocaleString('fr-FR')
-                        })()} dh
-                      </td>
-                      <td className="px-3 py-2 text-center text-gray-700 border-r">
-                        {(() => {
-                          const months = monthlyTracking.filter(m => m.quantiteTotale > 0).length || 1
-                          return Math.round(monthlyTracking.reduce((s, m) => s + m.quantiteTotale, 0) / months).toLocaleString('fr-FR')
-                        })()} kg
-                      </td>
-                      <td className="px-3 py-2 text-center text-green-700 border-r">
-                        {(() => {
-                          const months = monthlyTracking.filter(m => m.quantiteOlive > 0).length || 1
-                          return Math.round(monthlyTracking.reduce((s, m) => s + m.quantiteOlive, 0) / months).toLocaleString('fr-FR')
-                        })()} kg
-                      </td>
-                      <td className="px-3 py-2 text-center text-red-600 border-r">
-                        {(() => {
-                          const months = monthlyTracking.filter(m => m.quantiteHarissa > 0).length || 1
-                          return Math.round(monthlyTracking.reduce((s, m) => s + m.quantiteHarissa, 0) / months).toLocaleString('fr-FR')
-                        })()} kg
-                      </td>
-                      <td className="px-3 py-2 text-center text-green-600 border-r">
-                        {(() => {
-                          const months = monthlyTracking.filter(m => m.benefice > 0).length || 1
-                          return Math.round(monthlyTracking.reduce((s, m) => s + m.benefice, 0) / months).toLocaleString('fr-FR')
-                        })()} dh
-                      </td>
-                      <td className="px-3 py-2 text-center text-gray-700">
-                        {(() => {
-                          const totalRecette = monthlyTracking.reduce((s, m) => s + m.valRecette, 0)
-                          const totalBenef = monthlyTracking.reduce((s, m) => s + m.benefice, 0)
-                          return totalRecette > 0 ? `${((totalBenef / totalRecette) * 100).toFixed(2)} %` : ''
-                        })()}
-                      </td>
-                    </tr>
+                    ) : (
+                      monthlyTracking.map((row, index) => (
+                        <tr key={row.month} className={`border-b hover:bg-gray-50 ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}>
+                          <td className="px-3 py-2 font-medium italic text-gray-800 border-r">{row.monthLabel}</td>
+                          <td className="px-3 py-2 text-center font-bold text-[#B8860B] border-r">
+                            {row.valRecette > 0 ? `${Math.round(row.valRecette).toLocaleString('fr-FR')} dh` : ''}
+                          </td>
+                          <td className="px-3 py-2 text-center text-gray-600 border-r">
+                            {row.quantiteTotale > 0 ? `${Math.round(row.quantiteTotale).toLocaleString('fr-FR')} kg` : ''}
+                          </td>
+                          <td className="px-3 py-2 text-center text-green-700 border-r">
+                            {row.quantiteOlive > 0 ? `${Math.round(row.quantiteOlive).toLocaleString('fr-FR')} kg` : ''}
+                          </td>
+                          <td className="px-3 py-2 text-center text-red-600 border-r">
+                            {row.quantiteHarissa > 0 ? `${Math.round(row.quantiteHarissa).toLocaleString('fr-FR')} kg` : ''}
+                          </td>
+                          <td className="px-3 py-2 text-center font-bold text-green-600 border-r">
+                            {row.benefice > 0 ? `${Math.round(row.benefice).toLocaleString('fr-FR')} dh` : ''}
+                          </td>
+                          <td className="px-3 py-2 text-center text-gray-700">
+                            {row.pourcentage > 0 ? `${row.pourcentage.toFixed(2)} %` : ''}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                    {/* Total & Moyenne - only show when data exists */}
+                    {monthlyTracking.length > 0 && (
+                      <>
+                        {/* Total */}
+                        <tr className="bg-yellow-100 border-t-2 border-[#B8860B] font-bold">
+                          <td className="px-3 py-2 text-gray-900 border-r">Total Annuel</td>
+                          <td className="px-3 py-2 text-center text-[#B8860B] border-r">
+                            {Math.round(monthlyTracking.reduce((s, m) => s + m.valRecette, 0)).toLocaleString('fr-FR')} dh
+                          </td>
+                          <td className="px-3 py-2 text-center text-gray-700 border-r">
+                            {Math.round(monthlyTracking.reduce((s, m) => s + m.quantiteTotale, 0)).toLocaleString('fr-FR')} kg
+                          </td>
+                          <td className="px-3 py-2 text-center text-green-700 border-r">
+                            {Math.round(monthlyTracking.reduce((s, m) => s + m.quantiteOlive, 0)).toLocaleString('fr-FR')} kg
+                          </td>
+                          <td className="px-3 py-2 text-center text-red-600 border-r">
+                            {Math.round(monthlyTracking.reduce((s, m) => s + m.quantiteHarissa, 0)).toLocaleString('fr-FR')} kg
+                          </td>
+                          <td className="px-3 py-2 text-center text-green-600 border-r">
+                            {Math.round(monthlyTracking.reduce((s, m) => s + m.benefice, 0)).toLocaleString('fr-FR')} dh
+                          </td>
+                          <td className="px-3 py-2 text-center text-gray-700">
+                            {(() => {
+                              const totalRecette = monthlyTracking.reduce((s, m) => s + m.valRecette, 0)
+                              const totalBenef = monthlyTracking.reduce((s, m) => s + m.benefice, 0)
+                              return totalRecette > 0 ? `${((totalBenef / totalRecette) * 100).toFixed(2)} %` : ''
+                            })()}
+                          </td>
+                        </tr>
+                        {/* Moyenne */}
+                        <tr className="bg-yellow-50 font-bold">
+                          <td className="px-3 py-2 text-gray-900 border-r">Moyenne</td>
+                          <td className="px-3 py-2 text-center text-[#B8860B] border-r">
+                            {(() => {
+                              const months = monthlyTracking.filter(m => m.valRecette > 0).length || 1
+                              return Math.round(monthlyTracking.reduce((s, m) => s + m.valRecette, 0) / months).toLocaleString('fr-FR')
+                            })()} dh
+                          </td>
+                          <td className="px-3 py-2 text-center text-gray-700 border-r">
+                            {(() => {
+                              const months = monthlyTracking.filter(m => m.quantiteTotale > 0).length || 1
+                              return Math.round(monthlyTracking.reduce((s, m) => s + m.quantiteTotale, 0) / months).toLocaleString('fr-FR')
+                            })()} kg
+                          </td>
+                          <td className="px-3 py-2 text-center text-green-700 border-r">
+                            {(() => {
+                              const months = monthlyTracking.filter(m => m.quantiteOlive > 0).length || 1
+                              return Math.round(monthlyTracking.reduce((s, m) => s + m.quantiteOlive, 0) / months).toLocaleString('fr-FR')
+                            })()} kg
+                          </td>
+                          <td className="px-3 py-2 text-center text-red-600 border-r">
+                            {(() => {
+                              const months = monthlyTracking.filter(m => m.quantiteHarissa > 0).length || 1
+                              return Math.round(monthlyTracking.reduce((s, m) => s + m.quantiteHarissa, 0) / months).toLocaleString('fr-FR')
+                            })()} kg
+                          </td>
+                          <td className="px-3 py-2 text-center text-green-600 border-r">
+                            {(() => {
+                              const months = monthlyTracking.filter(m => m.benefice > 0).length || 1
+                              return Math.round(monthlyTracking.reduce((s, m) => s + m.benefice, 0) / months).toLocaleString('fr-FR')
+                            })()} dh
+                          </td>
+                          <td className="px-3 py-2 text-center text-gray-700">
+                            {(() => {
+                              const totalRecette = monthlyTracking.reduce((s, m) => s + m.valRecette, 0)
+                              const totalBenef = monthlyTracking.reduce((s, m) => s + m.benefice, 0)
+                              return totalRecette > 0 ? `${((totalBenef / totalRecette) * 100).toFixed(2)} %` : ''
+                            })()}
+                          </td>
+                        </tr>
+                      </>
+                    )}
                   </tbody>
                 </table>
               </div>
             </CardContent>
           </Card>
+          {/* Diff Achat-Vente */}
+          <Card className="border-2 border-[#B8860B]">
+            <CardHeader className="bg-gradient-to-r from-[#B8860B] to-[#DAA520] text-white flex flex-row items-center justify-between">
+              <CardTitle className="flex items-center gap-2">
+                <BarChart3 className="h-5 w-5" />
+                Diff Achat-Vente
+              </CardTitle>
+              <div className="flex items-center gap-2">
+                <input
+                  type="month"
+                  value={selectedDiffMonth}
+                  onChange={(e) => {
+                    setSelectedDiffMonth(e.target.value)
+                    setShowDiffAchatVente(false)
+                  }}
+                  className="px-2 py-1 text-sm border rounded-md text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#B8860B]"
+                />
+                {!showDiffAchatVente ? (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={fetchDiffAchatVente}
+                    disabled={isLoadingDiff}
+                  >
+                    {isLoadingDiff ? (
+                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                    ) : (
+                      <BarChart3 className="h-4 w-4 mr-2" />
+                    )}
+                    Calculer
+                  </Button>
+                ) : (
+                  <>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={exportDiffToExcel}
+                    >
+                      <FileDown className="h-4 w-4 mr-2" />
+                      Excel
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowDiffAchatVente(false)}
+                      className="bg-white/20 hover:bg-white/30 text-white border-white/30"
+                    >
+                      Masquer
+                    </Button>
+                  </>
+                )}
+              </div>
+            </CardHeader>
+            {showDiffAchatVente && (
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <table className="w-full border-collapse text-sm">
+                    <thead>
+                      <tr className="bg-amber-50 border-b border-[#B8860B]">
+                        <th colSpan={5} className="px-3 py-2 text-center font-bold text-[#9A7209]">
+                          {format(new Date(selectedDiffMonth + '-01'), 'MMMM yyyy', { locale: fr })}
+                        </th>
+                      </tr>
+                      <tr className="bg-gray-100 border-b-2 border-[#B8860B]">
+                        <th className="px-3 py-2 text-left font-bold text-gray-700 border-r">Code</th>
+                        <th className="px-3 py-2 text-center font-bold text-gray-500 border-r">Type</th>
+                        <th className="px-3 py-2 text-right font-bold text-green-700 border-r">Achetée</th>
+                        <th className="px-3 py-2 text-right font-bold text-red-600 border-r">Vendue</th>
+                        <th className="px-3 py-2 text-right font-bold text-[#B8860B]">Diff</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {diffAchatVente.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="text-center py-8 text-gray-500">
+                            Aucune donnée disponible
+                          </td>
+                        </tr>
+                      ) : (
+                        <>
+                          {diffAchatVente.map((row, index) => {
+                            const unite = row.isEmballage ? '' : ' kg'
+                            const decimals = row.isEmballage ? 0 : 2
+                            return (
+                              <tr key={row.code} className={`border-b hover:bg-gray-50 ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}>
+                                <td className="px-3 py-2 font-medium text-gray-800 border-r">
+                                  <Badge className={row.isEmballage ? "bg-blue-100 text-blue-800 font-mono" : "bg-amber-100 text-[#9A7209] font-mono"}>
+                                    {row.code}
+                                  </Badge>
+                                </td>
+                                <td className="px-3 py-2 text-center text-xs text-gray-500 border-r">
+                                  {row.isEmballage ? 'Emb.' : 'Four.'}
+                                </td>
+                                <td className="px-3 py-2 text-right text-green-700 border-r">
+                                  {row.qteAchetee > 0 ? `${row.qteAchetee.toLocaleString('fr-FR', { maximumFractionDigits: decimals })}${unite}` : '-'}
+                                </td>
+                                <td className="px-3 py-2 text-right text-red-600 border-r">
+                                  {row.qteVendue > 0 ? `${row.qteVendue.toLocaleString('fr-FR', { maximumFractionDigits: decimals })}${unite}` : '-'}
+                                </td>
+                                <td className={`px-3 py-2 text-right font-bold ${row.diff >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                  {row.diff.toLocaleString('fr-FR', { maximumFractionDigits: decimals })}{unite}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                          {/* Total Emballages */}
+                          {diffAchatVente.some(r => r.isEmballage) && (
+                            <tr className="bg-blue-50 border-t border-blue-300 font-bold">
+                              <td className="px-3 py-2 text-blue-800 border-r" colSpan={2}>TOTAL EMBALLAGES</td>
+                              <td className="px-3 py-2 text-right text-green-700 border-r">
+                                {diffAchatVente.filter(r => r.isEmballage).reduce((sum, r) => sum + r.qteAchetee, 0).toLocaleString('fr-FR', { maximumFractionDigits: 0 })}
+                              </td>
+                              <td className="px-3 py-2 text-right text-red-600 border-r">
+                                {diffAchatVente.filter(r => r.isEmballage).reduce((sum, r) => sum + r.qteVendue, 0).toLocaleString('fr-FR', { maximumFractionDigits: 0 })}
+                              </td>
+                              <td className={`px-3 py-2 text-right ${diffAchatVente.filter(r => r.isEmballage).reduce((sum, r) => sum + r.diff, 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {diffAchatVente.filter(r => r.isEmballage).reduce((sum, r) => sum + r.diff, 0).toLocaleString('fr-FR', { maximumFractionDigits: 0 })}
+                              </td>
+                            </tr>
+                          )}
+                          {/* Total Fournitures */}
+                          {diffAchatVente.some(r => !r.isEmballage) && (
+                            <tr className="bg-amber-100 border-t-2 border-[#B8860B] font-bold">
+                              <td className="px-3 py-2 text-[#9A7209] border-r" colSpan={2}>TOTAL FOURNITURES (kg)</td>
+                              <td className="px-3 py-2 text-right text-green-700 border-r">
+                                {diffAchatVente.filter(r => !r.isEmballage).reduce((sum, r) => sum + r.qteAchetee, 0).toLocaleString('fr-FR', { maximumFractionDigits: 2 })}
+                              </td>
+                              <td className="px-3 py-2 text-right text-red-600 border-r">
+                                {diffAchatVente.filter(r => !r.isEmballage).reduce((sum, r) => sum + r.qteVendue, 0).toLocaleString('fr-FR', { maximumFractionDigits: 2 })}
+                              </td>
+                              <td className={`px-3 py-2 text-right ${diffAchatVente.filter(r => !r.isEmballage).reduce((sum, r) => sum + r.diff, 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {diffAchatVente.filter(r => !r.isEmballage).reduce((sum, r) => sum + r.diff, 0).toLocaleString('fr-FR', { maximumFractionDigits: 2 })}
+                              </td>
+                            </tr>
+                          )}
+                        </>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            )}
+          </Card>
         </>
       )}
 
-      {/* Recent Activity */}
-      {!isLivreur && !isCommercial && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Recent Orders */}
-          <Card className="border-2 border-[#B8860B]">
-            <CardHeader>
-              <CardTitle>Dernières commandes</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {recentOrders.length > 0 ? (
-                <div className="space-y-4">
-                  {recentOrders.map((order) => (
-                    <div key={order.id} className="flex items-center justify-between py-2 border-b last:border-0">
-                      <div>
-                        <p className="font-medium">{order.order_number}</p>
-                        <p className="text-sm text-gray-500">{order.client_name}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="font-medium">{formatPrice(order.total_ttc)}</p>
-                        <Badge
-                          variant="secondary"
-                          className="text-xs"
-                          style={{ backgroundColor: `${statusColors[order.status]}20`, color: statusColors[order.status] }}
-                        >
-                          {statusLabels[order.status] || order.status}
-                        </Badge>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-gray-500 text-center py-8">
-                  Aucune commande pour le moment
-                </p>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Recent Deliveries */}
-          <Card className="border-2 border-[#B8860B]">
-            <CardHeader>
-              <CardTitle>Livraisons récentes</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {recentDeliveries.length > 0 ? (
-                <div className="space-y-4">
-                  {recentDeliveries.map((delivery) => (
-                    <div key={delivery.id} className="flex items-center justify-between py-2 border-b last:border-0">
-                      <div>
-                        <p className="font-medium">{delivery.delivery_number}</p>
-                        <p className="text-sm text-gray-500">{delivery.client_name}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-sm text-gray-500">
-                          {delivery.delivery_date
-                            ? format(new Date(delivery.delivery_date), 'dd/MM/yyyy', { locale: fr })
-                            : 'N/A'}
-                        </p>
-                        <Badge
-                          variant="secondary"
-                          className="text-xs"
-                          style={{ backgroundColor: `${statusColors[delivery.status]}20`, color: statusColors[delivery.status] }}
-                        >
-                          {statusLabels[delivery.status] || delivery.status}
-                        </Badge>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-gray-500 text-center py-8">
-                  Aucune livraison récente
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      )}
     </div>
   )
 }

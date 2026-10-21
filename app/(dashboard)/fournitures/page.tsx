@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -11,7 +12,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog'
 import {
   Select,
@@ -29,7 +29,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import { Package, Plus, Edit, Trash2, Search, Tag, Box, Leaf, Droplets, Carrot } from 'lucide-react'
+import { Package, Edit, Trash2, Search, Tag, Box, Leaf, Droplets, Carrot } from 'lucide-react'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
 
 interface SupplyCategory {
@@ -71,14 +71,25 @@ const categoryColors: Record<string, string> = {
 }
 
 export default function FournituresPage() {
+  const searchParams = useSearchParams()
+  const router = useRouter()
   const [supplies, setSupplies] = useState<Supply[]>([])
   const [categories, setCategories] = useState<SupplyCategory[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isNewOnlyMode, setIsNewOnlyMode] = useState(false)
   const [editingSupply, setEditingSupply] = useState<Supply | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
   const supabase = createClient()
+
+  // Ouvrir le dialog si ?action=new (mode formulaire uniquement)
+  useEffect(() => {
+    if (searchParams.get('action') === 'new') {
+      setIsDialogOpen(true)
+      setIsNewOnlyMode(true)
+    }
+  }, [searchParams])
 
   const [formData, setFormData] = useState({
     code: '',
@@ -220,6 +231,82 @@ export default function FournituresPage() {
     count: supplies.filter(s => s.category_id === cat.id).length
   }))
 
+  // Fonction pour fermer le formulaire en mode plein écran
+  const handleCloseNewOnly = () => {
+    router.replace('/')
+  }
+
+  // Formulaire réutilisable
+  const renderForm = (onCancel: () => void) => (
+    <form onSubmit={async (e) => { await handleSubmit(e); if (isNewOnlyMode) handleCloseNewOnly(); }} className="space-y-4">
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label htmlFor="code">Code *</Label>
+          <Input id="code" value={formData.code} onChange={(e) => setFormData({ ...formData, code: e.target.value })} placeholder="Ex: ETQ001" required />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="name">Nom *</Label>
+          <Input id="name" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="Nom de la fourniture" required />
+        </div>
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="description">Description</Label>
+        <Input id="description" value={formData.description} onChange={(e) => setFormData({ ...formData, description: e.target.value })} placeholder="Description optionnelle" />
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label>Catégorie</Label>
+          <Select value={formData.category_id} onValueChange={(value) => setFormData({ ...formData, category_id: value })}>
+            <SelectTrigger><SelectValue placeholder="Sélectionner" /></SelectTrigger>
+            <SelectContent>{categories.map(cat => (<SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>))}</SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="unit">Unité</Label>
+          <Select value={formData.unit} onValueChange={(value) => setFormData({ ...formData, unit: value })}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="kg">Kilogramme (kg)</SelectItem>
+              <SelectItem value="unité">Unité</SelectItem>
+              <SelectItem value="litre">Litre (L)</SelectItem>
+              <SelectItem value="mètre">Mètre (m)</SelectItem>
+              <SelectItem value="rouleau">Rouleau</SelectItem>
+              <SelectItem value="carton">Carton</SelectItem>
+              <SelectItem value="palette">Palette</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="price_ht">Prix unitaire HT (MAD)</Label>
+        <Input id="price_ht" type="number" step="0.01" value={formData.price_ht} onChange={(e) => setFormData({ ...formData, price_ht: e.target.value })} placeholder="0.00" />
+      </div>
+      <div className="flex justify-end gap-2 pt-4">
+        <Button type="button" variant="outline" onClick={onCancel}>Annuler</Button>
+        <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">{editingSupply ? 'Mettre à jour' : 'Créer'}</Button>
+      </div>
+    </form>
+  )
+
+  // Mode plein écran : afficher seulement le formulaire
+  if (isNewOnlyMode) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-6">
+        <Card className="max-w-2xl mx-auto">
+          <CardHeader className="border-b bg-[#B8860B] text-white rounded-t-lg">
+            <CardTitle className="text-xl flex items-center gap-2">
+              <Package className="h-5 w-5" />
+              Nouvelle fourniture
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-6">
+            {renderForm(handleCloseNewOnly)}
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -227,122 +314,19 @@ export default function FournituresPage() {
           <h1 className="text-2xl font-bold text-gray-900">Fournitures d'Achat</h1>
           <p className="text-gray-500">Gestion des matières premières et fournitures</p>
         </div>
-        <ProtectedModule module="achats" action="create">
-          <Dialog open={isDialogOpen} onOpenChange={(open) => {
-            setIsDialogOpen(open)
-            if (!open) resetForm()
-          }}>
-            <DialogTrigger asChild>
-              <Button className="bg-[#B8860B] hover:bg-[#9A7209]">
-                <Plus className="mr-2 h-4 w-4" />
-                Nouvelle Fourniture
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
+        <Dialog open={isDialogOpen} onOpenChange={(open) => {
+          setIsDialogOpen(open)
+          if (!open) resetForm()
+        }}>
+          <DialogContent>
               <DialogHeader>
                 <DialogTitle>
                   {editingSupply ? 'Modifier la fourniture' : 'Nouvelle fourniture'}
                 </DialogTitle>
               </DialogHeader>
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="code">Code *</Label>
-                    <Input
-                      id="code"
-                      value={formData.code}
-                      onChange={(e) => setFormData({ ...formData, code: e.target.value })}
-                      placeholder="Ex: ETQ001"
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="name">Nom *</Label>
-                    <Input
-                      id="name"
-                      value={formData.name}
-                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                      placeholder="Nom de la fourniture"
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="description">Description</Label>
-                  <Input
-                    id="description"
-                    value={formData.description}
-                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                    placeholder="Description optionnelle"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Catégorie</Label>
-                    <Select
-                      value={formData.category_id}
-                      onValueChange={(value) => setFormData({ ...formData, category_id: value })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Sélectionner" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {categories.map(cat => (
-                          <SelectItem key={cat.id} value={cat.id}>
-                            {cat.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="unit">Unité</Label>
-                    <Select
-                      value={formData.unit}
-                      onValueChange={(value) => setFormData({ ...formData, unit: value })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="kg">Kilogramme (kg)</SelectItem>
-                        <SelectItem value="unité">Unité</SelectItem>
-                        <SelectItem value="litre">Litre (L)</SelectItem>
-                        <SelectItem value="mètre">Mètre (m)</SelectItem>
-                        <SelectItem value="rouleau">Rouleau</SelectItem>
-                        <SelectItem value="carton">Carton</SelectItem>
-                        <SelectItem value="palette">Palette</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="price_ht">Prix unitaire HT (MAD)</Label>
-                  <Input
-                    id="price_ht"
-                    type="number"
-                    step="0.01"
-                    value={formData.price_ht}
-                    onChange={(e) => setFormData({ ...formData, price_ht: e.target.value })}
-                    placeholder="0.00"
-                  />
-                </div>
-
-                <div className="flex justify-end gap-2 pt-4">
-                  <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                    Annuler
-                  </Button>
-                  <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
-                    {editingSupply ? 'Mettre à jour' : 'Créer'}
-                  </Button>
-                </div>
-              </form>
+              {renderForm(() => setIsDialogOpen(false))}
             </DialogContent>
           </Dialog>
-        </ProtectedModule>
       </div>
 
       {/* Stats Cards */}

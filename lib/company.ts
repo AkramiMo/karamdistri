@@ -6,6 +6,7 @@ export interface CompanySettings {
   city: string | null
   postal_code: string | null
   phone: string | null
+  whatsapp: string | null
   fax: string | null
   email: string | null
   website: string | null
@@ -19,6 +20,7 @@ export interface CompanySettings {
   bank_account: string | null
   bank_rib: string | null
   logo_url: string | null
+  signature_url: string | null
   invoice_footer: string | null
   depot_lat: number | null
   depot_lng: number | null
@@ -32,6 +34,7 @@ export const defaultCompanySettings: CompanySettings = {
   city: 'Marrakech',
   postal_code: null,
   phone: '+212 5XX XX XX XX',
+  whatsapp: null,
   fax: null,
   email: 'contact@karam-olives.ma',
   website: null,
@@ -45,6 +48,7 @@ export const defaultCompanySettings: CompanySettings = {
   bank_account: null,
   bank_rib: null,
   logo_url: null,
+  signature_url: null,
   invoice_footer: 'Merci pour votre confiance!',
   depot_lat: 34.001605,
   depot_lng: -5.060824,

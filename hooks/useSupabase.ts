@@ -25,7 +25,7 @@ export function useSupabase() {
 // Helper function for queries with timeout
 export async function queryWithTimeout<T>(
   queryFn: () => PromiseLike<{ data: T | null; error: Error | null }>,
-  timeoutMs: number = 30000 // Increased to 30 seconds
+  timeoutMs: number = 60000 // Increased to 60 seconds
 ): Promise<{ data: T | null; error: Error | null }> {
   const timeoutPromise = new Promise<{ data: null; error: Error }>((resolve) => {
     setTimeout(() => {

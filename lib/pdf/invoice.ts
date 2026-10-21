@@ -1,6 +1,7 @@
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { CompanySettings, defaultCompanySettings, formatCompanyAddress, formatCompanyIdentifiers } from '../company'
+import { saveBLPDF } from './saveWithPicker'
 
 interface OrderItem {
   article: {
@@ -392,8 +393,8 @@ export async function generateDeliveryNotePDF(order: Order, company?: CompanySet
     { align: 'center' }
   )
 
-  // Save the PDF
-  doc.save(`BL_${order.order_number}.pdf`)
+  // Save the PDF (dans le dossier sélectionné ou téléchargement standard)
+  await saveBLPDF(doc, `${order.order_number}.pdf`)
 }
 
 function formatDate(dateString: string): string {
@@ -406,11 +407,8 @@ function formatDate(dateString: string): string {
 }
 
 function formatPrice(price: number): string {
-  return new Intl.NumberFormat('fr-MA', {
-    style: 'currency',
-    currency: 'MAD',
-    minimumFractionDigits: 2,
-  }).format(price)
+  const formatted = price.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+  return `${formatted} MAD`
 }
 
 function getStatusLabel(status: string): string {

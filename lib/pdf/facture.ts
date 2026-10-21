@@ -1,5 +1,6 @@
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
+import { saveFacturePDF } from './saveWithPicker'
 
 interface ArticleItem {
   article_code: string
@@ -36,6 +37,7 @@ interface Facture {
   facture_number: string
   facture_date: string
   total_ht: number
+  transport_fees?: number
   total_tva: number
   total_ttc: number
   tva_rate?: number
@@ -134,70 +136,134 @@ export async function generateFacturePDF(
     doc.text(facture.client.city, clientX, clientY)
   }
 
+  // Check if single or multiple BL
+  const isSingleBL = deliveries.length === 1
+
   // Build table data with BL details
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const tableData: any[] = []
 
-  deliveries.forEach((del) => {
-    const blRef = del.delivery_number
-    const blDate = del.delivery_date ? formatDate(del.delivery_date) : '-'
-    const itemCount = del.items?.length || 1
+  let tableStartY = 75
 
-    // Add article rows with BL reference and date
-    if (del.items && del.items.length > 0) {
-      del.items.forEach((item, index) => {
-        if (index === 0) {
-          // First row with rowSpan for Réf BL and Date
-          tableData.push([
-            { content: blRef, rowSpan: itemCount, styles: { valign: 'middle', halign: 'center' } },
-            { content: blDate, rowSpan: itemCount, styles: { valign: 'middle', halign: 'center' } },
-            item.article_code,
-            item.article_name,
-            item.quantity.toString(),
-            formatPrice(item.unit_price),
-            formatPrice(item.total)
-          ])
-        } else {
-          // Subsequent rows without Réf BL and Date columns
-          tableData.push([
-            item.article_code,
-            item.article_name,
-            item.quantity.toString(),
-            formatPrice(item.unit_price),
-            formatPrice(item.total)
-          ])
-        }
+  if (isSingleBL) {
+    // Single BL: Show BL info above the table
+    const singleDelivery = deliveries[0]
+    const blRef = singleDelivery.delivery_number
+    const blDate = singleDelivery.delivery_date ? formatDate(singleDelivery.delivery_date) : '-'
+
+    doc.setFontSize(10)
+    doc.setFont('helvetica', 'normal')
+    doc.setTextColor(0, 0, 0)
+    doc.text(`Réf BL: ${blRef}`, 10, 72)
+    doc.text(`Date: ${blDate}`, 70, 72)
+
+    tableStartY = 78
+
+    // Add article rows without BL columns
+    if (singleDelivery.items && singleDelivery.items.length > 0) {
+      singleDelivery.items.forEach((item) => {
+        tableData.push([
+          item.article_code,
+          item.article_name,
+          item.quantity.toString(),
+          formatPrice(item.unit_price),
+          formatPrice(item.total)
+        ])
       })
     }
-  })
+  } else {
+    // Multiple BL: Keep current format with BL columns
+    deliveries.forEach((del) => {
+      const blRef = extractBLNumber(del.delivery_number)
+      const blDate = del.delivery_date ? formatDate(del.delivery_date) : '-'
+      const itemCount = del.items?.length || 1
 
-  autoTable(doc, {
-    startY: 75,
-    head: [['Réf BL', 'Date', 'Code', 'Article', 'Qté', 'P.U.', 'Total HT']],
-    body: tableData,
-    theme: 'grid',
-    headStyles: {
-      fillColor: [184, 134, 11],
-      textColor: [255, 255, 255],
-      fontStyle: 'bold',
-      halign: 'center',
-      fontSize: 8,
-    },
-    columnStyles: {
-      0: { halign: 'center', cellWidth: 28 },  // Réf BL
-      1: { halign: 'center', cellWidth: 22 },  // Date
-      2: { halign: 'center', cellWidth: 18 },  // Code
-      3: { halign: 'left', cellWidth: 50 },    // Article
-      4: { halign: 'center', cellWidth: 15 },  // Qté
-      5: { halign: 'right', cellWidth: 25 },   // P.U.
-      6: { halign: 'right', cellWidth: 25 },   // Total HT
-    },
-    styles: {
-      fontSize: 7,
-      cellPadding: 2,
-    },
-    margin: { left: 10, right: 10 },
-  })
+      // Add article rows with BL reference and date
+      if (del.items && del.items.length > 0) {
+        del.items.forEach((item, index) => {
+          if (index === 0) {
+            // First row with rowSpan for Réf BL and Date
+            tableData.push([
+              { content: blRef, rowSpan: itemCount, styles: { valign: 'middle', halign: 'center' } },
+              { content: blDate, rowSpan: itemCount, styles: { valign: 'middle', halign: 'center' } },
+              item.article_code,
+              item.article_name,
+              item.quantity.toString(),
+              formatPrice(item.unit_price),
+              formatPrice(item.total)
+            ])
+          } else {
+            // Subsequent rows without Réf BL and Date columns
+            tableData.push([
+              item.article_code,
+              item.article_name,
+              item.quantity.toString(),
+              formatPrice(item.unit_price),
+              formatPrice(item.total)
+            ])
+          }
+        })
+      }
+    })
+  }
+
+  if (isSingleBL) {
+    // Table without BL columns - more space for Code
+    autoTable(doc, {
+      startY: tableStartY,
+      head: [['Code', 'Article', 'Qté', 'P.U.', 'Total HT']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: {
+        fillColor: [184, 134, 11],
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+        halign: 'center',
+        fontSize: 8,
+      },
+      columnStyles: {
+        0: { halign: 'center', cellWidth: 25 },  // Code
+        1: { halign: 'left', cellWidth: 'auto' }, // Article (flexible)
+        2: { halign: 'center', cellWidth: 15 },  // Qté
+        3: { halign: 'right', cellWidth: 25 },   // P.U.
+        4: { halign: 'right', cellWidth: 25 },   // Total HT
+      },
+      styles: {
+        fontSize: 7,
+        cellPadding: 2,
+      },
+      margin: { left: 10, right: 10 },
+    })
+  } else {
+    // Table with BL columns
+    autoTable(doc, {
+      startY: tableStartY,
+      head: [['Réf BL', 'Date', 'Code', 'Article', 'Qté', 'P.U.', 'Total HT']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: {
+        fillColor: [184, 134, 11],
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+        halign: 'center',
+        fontSize: 8,
+      },
+      columnStyles: {
+        0: { halign: 'center', cellWidth: 18 },  // Réf BL
+        1: { halign: 'center', cellWidth: 20 },  // Date
+        2: { halign: 'center', cellWidth: 22 },  // Code
+        3: { halign: 'left', cellWidth: 'auto' }, // Article (flexible)
+        4: { halign: 'center', cellWidth: 13 },  // Qté
+        5: { halign: 'right', cellWidth: 23 },   // P.U.
+        6: { halign: 'right', cellWidth: 23 },   // Total HT
+      },
+      styles: {
+        fontSize: 7,
+        cellPadding: 2,
+      },
+      margin: { left: 10, right: 10 },
+    })
+  }
 
   // Get the Y position after the table
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -211,29 +277,53 @@ export async function generateFacturePDF(
   doc.setFont('helvetica', 'normal')
   doc.setTextColor(0, 0, 0)
 
+  let currentY = finalY
+
   // Total HT
-  doc.text('Total HT:', totalsX, finalY)
-  doc.text(formatPrice(facture.total_ht), totalsValueX, finalY, { align: 'right' })
+  doc.text('Total HT:', totalsX, currentY)
+  doc.text(formatPrice(facture.total_ht), totalsValueX, currentY, { align: 'right' })
+  currentY += 7
+
+  // Frais de transport (si > 0)
+  const transportFees = facture.transport_fees ?? 0
+  if (transportFees > 0) {
+    doc.text('Frais de transport:', totalsX, currentY)
+    doc.text(formatPrice(transportFees), totalsValueX, currentY, { align: 'right' })
+    currentY += 7
+  }
 
   // Total TVA
-  const tvaRate = facture.tva_rate ?? 20
-  doc.text(`Total TVA (${tvaRate}%):`, totalsX, finalY + 7)
-  doc.text(formatPrice(facture.total_tva), totalsValueX, finalY + 7, { align: 'right' })
+  const tvaRate = facture.tva_rate ?? 0
+  doc.text(`Total TVA (${tvaRate}%):`, totalsX, currentY)
+  doc.text(formatPrice(facture.total_tva), totalsValueX, currentY, { align: 'right' })
+  currentY += 4
 
   // Separator line
   doc.setDrawColor(184, 134, 11)
   doc.setLineWidth(0.5)
-  doc.line(totalsX, finalY + 11, totalsValueX, finalY + 11)
+  doc.line(totalsX, currentY, totalsValueX, currentY)
+  currentY += 7
 
   // Total TTC
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(11)
   doc.setTextColor(184, 134, 11)
-  doc.text('Total TTC:', totalsX, finalY + 18)
-  doc.text(formatPrice(facture.total_ttc), totalsValueX, finalY + 18, { align: 'right' })
+  doc.text('Total TTC:', totalsX, currentY)
+  doc.text(formatPrice(facture.total_ttc), totalsValueX, currentY, { align: 'right' })
 
-  // Save the PDF
-  doc.save(`Facture_${facture.facture_number}.pdf`)
+  const filename = `${facture.facture_number}.pdf`
+
+  // Télécharger le PDF avec le bon nom de fichier
+  const pdfBlob = doc.output('blob')
+  const pdfUrl = URL.createObjectURL(pdfBlob)
+  const link = document.createElement('a')
+  link.href = pdfUrl
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(pdfUrl)
+
+  // Aussi sauvegarder dans le dossier si configuré
+  await saveFacturePDF(doc, filename)
 }
 
 function formatDate(dateString: string): string {
@@ -246,9 +336,15 @@ function formatDate(dateString: string): string {
 }
 
 function formatPrice(price: number): string {
-  return new Intl.NumberFormat('fr-MA', {
-    style: 'currency',
-    currency: 'MAD',
-    minimumFractionDigits: 2,
-  }).format(price)
+  const formatted = price.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+  return `${formatted} MAD`
+}
+
+function extractBLNumber(deliveryNumber: string): string {
+  // Extract just the number part from "BL-202609-001" -> "001"
+  const parts = deliveryNumber.split('-')
+  if (parts.length >= 3) {
+    return parts.slice(2).join('-')  // Return everything after "BL-YYYYMM-"
+  }
+  return deliveryNumber  // Return as-is if format doesn't match
 }

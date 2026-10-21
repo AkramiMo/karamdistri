@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
-import { Users, Shield, Settings, Database, RefreshCw } from 'lucide-react'
+import { Users, Shield, Settings, Database, RefreshCw, Download } from 'lucide-react'
 
 export default function AdminPage() {
   const adminModules = [
@@ -41,6 +41,13 @@ export default function AdminPage() {
       icon: RefreshCw,
       href: '/admin/initialization',
       color: 'bg-red-500',
+    },
+    {
+      title: 'Exports',
+      description: 'Configurer les dossiers PDF et Excel',
+      icon: Download,
+      href: '/admin/exports',
+      color: 'bg-green-500',
     },
   ]
 

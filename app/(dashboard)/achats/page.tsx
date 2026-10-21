@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -18,7 +19,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog'
 import {
   Select,
@@ -111,18 +111,29 @@ const statusLabels: Record<string, string> = {
 }
 
 export default function AchatsPage() {
+  const searchParams = useSearchParams()
+  const router = useRouter()
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([])
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [supplies, setSupplies] = useState<Supply[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isNewOnlyMode, setIsNewOnlyMode] = useState(false)
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [viewingOrder, setViewingOrder] = useState<PurchaseOrder | null>(null)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [editingOrder, setEditingOrder] = useState<PurchaseOrder | null>(null)
   const supabase = createClient()
   const { companySettings } = useCompanySettings()
+
+  // Ouvrir le dialog si ?action=new (mode formulaire uniquement)
+  useEffect(() => {
+    if (searchParams.get('action') === 'new') {
+      setIsDialogOpen(true)
+      setIsNewOnlyMode(true)
+    }
+  }, [searchParams])
 
   const [formData, setFormData] = useState({
     supplier_id: '',
@@ -483,10 +494,102 @@ export default function AchatsPage() {
 
   const formatPrice = (price: number | null) => {
     if (price === null) return '-'
-    return new Intl.NumberFormat('fr-MA', {
-      style: 'currency',
-      currency: 'MAD',
-    }).format(price)
+    const formatted = price.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+    return `${formatted} MAD`
+  }
+
+  // Fonction pour fermer le formulaire en mode plein écran
+  const handleCloseNewOnly = () => {
+    router.replace('/')
+  }
+
+  // Formulaire de bon de commande (réutilisable)
+  const renderBCForm = (onCancel: () => void, onSubmitSuccess?: () => void) => (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label>Fournisseur *</Label>
+          <Select value={formData.supplier_id} onValueChange={(value) => setFormData({ ...formData, supplier_id: value })}>
+            <SelectTrigger><SelectValue placeholder="Sélectionner un fournisseur" /></SelectTrigger>
+            <SelectContent>{suppliers.map((supplier) => (<SelectItem key={supplier.id} value={supplier.id}>{supplier.code} - {supplier.name}</SelectItem>))}</SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="order_date">Date de commande</Label>
+          <Input id="order_date" type="date" value={formData.order_date} onChange={(e) => setFormData({ ...formData, order_date: e.target.value })} />
+        </div>
+      </div>
+      <div className="border-t pt-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-medium">Fournitures</h3>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center space-x-2">
+              <Checkbox id="customEntry" checked={isCustomEntry} onCheckedChange={(checked) => { setIsCustomEntry(checked === true); setSelectedSupply(''); setCustomDesignation(''); }} />
+              <Label htmlFor="customEntry" className="text-sm cursor-pointer flex items-center gap-1"><Edit3 className="h-3 w-3" />Saisie libre</Label>
+            </div>
+            <Link href="/fournitures" className="text-sm text-[#B8860B] hover:underline flex items-center gap-1"><Package className="h-4 w-4" />Gérer les fournitures</Link>
+          </div>
+        </div>
+        <div className="flex gap-2 mb-4">
+          {isCustomEntry ? (
+            <Input value={customDesignation} onChange={(e) => setCustomDesignation(e.target.value)} className="flex-1" placeholder="Saisir la désignation..." />
+          ) : (
+            <Select value={selectedSupply} onValueChange={handleSupplySelect}>
+              <SelectTrigger className="flex-1"><SelectValue placeholder="Sélectionner une fourniture" /></SelectTrigger>
+              <SelectContent>{supplies.map((supply) => (<SelectItem key={supply.id} value={supply.id}>{supply.code} - {supply.name}{supply.supply_categories?.name && ` (${supply.supply_categories.name})`}</SelectItem>))}</SelectContent>
+            </Select>
+          )}
+          <Input type="number" min="1" value={selectedQuantity} onChange={(e) => setSelectedQuantity(e.target.value)} className="w-24" placeholder="Qté" />
+          <Input type="number" step="0.01" value={selectedPrice} onChange={(e) => setSelectedPrice(e.target.value)} className="w-32" placeholder="Prix (opt.)" />
+          <Button type="button" onClick={addItem} variant="outline"><Plus className="h-4 w-4" /></Button>
+        </div>
+        {poItems.length > 0 && (
+          <Table>
+            <TableHeader><TableRow><TableHead>Code</TableHead><TableHead>Fourniture</TableHead><TableHead className="text-right">Qté</TableHead><TableHead className="text-right">Prix unit.</TableHead><TableHead className="text-right">Total HT</TableHead><TableHead></TableHead></TableRow></TableHeader>
+            <TableBody>
+              {poItems.map((item, index) => (
+                <TableRow key={index}>
+                  <TableCell className="font-mono">{item.is_custom ? <Badge variant="outline" className="text-xs">Libre</Badge> : item.supply_code}</TableCell>
+                  <TableCell>{item.supply_name}</TableCell>
+                  <TableCell className="text-right">{item.quantity}</TableCell>
+                  <TableCell className="text-right">{item.unit_price !== null ? formatPrice(item.unit_price) : '-'}</TableCell>
+                  <TableCell className="text-right">{item.total_ht !== null ? formatPrice(item.total_ht) : '-'}</TableCell>
+                  <TableCell><Button type="button" variant="ghost" size="icon" onClick={() => removeItem(index)}><Trash2 className="h-4 w-4 text-red-600" /></Button></TableCell>
+                </TableRow>
+              ))}
+              <TableRow>
+                <TableCell colSpan={4} className="text-right font-medium">Total HT:</TableCell>
+                <TableCell className="text-right font-bold">{poItems.some(item => item.total_ht !== null) ? formatPrice(poItems.reduce((sum, item) => sum + (item.total_ht || 0), 0)) : '-'}</TableCell>
+                <TableCell></TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        )}
+      </div>
+      <div className="flex justify-end gap-2 pt-4">
+        <Button variant="outline" onClick={onCancel}>Annuler</Button>
+        <Button className="bg-[#B8860B] hover:bg-[#9A7209]" onClick={async () => { await handleSubmit(); onSubmitSuccess?.(); }}>Créer le BC</Button>
+      </div>
+    </div>
+  )
+
+  // Mode plein écran : afficher seulement le formulaire
+  if (isNewOnlyMode) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-6">
+        <Card className="max-w-3xl mx-auto">
+          <CardHeader className="border-b bg-[#B8860B] text-white rounded-t-lg">
+            <CardTitle className="text-xl flex items-center gap-2">
+              <FileText className="h-5 w-5" />
+              Nouveau bon de commande fournisseur
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-6">
+            {renderBCForm(handleCloseNewOnly, handleCloseNewOnly)}
+          </CardContent>
+        </Card>
+      </div>
+    )
   }
 
   return (
@@ -497,19 +600,10 @@ export default function AchatsPage() {
           <p className="text-gray-500">Gérez vos bons de commande fournisseurs</p>
         </div>
 
-        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogTrigger asChild>
-            <Button
-              className="bg-[#B8860B] hover:bg-[#9A7209]"
-              onClick={() => {
-                resetForm()
-                setIsDialogOpen(true)
-              }}
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              Nouveau bon de commande
-            </Button>
-          </DialogTrigger>
+        <Dialog open={isDialogOpen} onOpenChange={(open) => {
+          if (open) resetForm()
+          setIsDialogOpen(open)
+        }}>
           <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Nouveau bon de commande fournisseur</DialogTitle>

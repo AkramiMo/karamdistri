@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { useSupabase } from '@/hooks/useSupabase'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -194,13 +195,13 @@ const returnReasons = [
 
 const formatPrice = (price: number | null) => {
   if (price === null) return '-'
-  return new Intl.NumberFormat('fr-MA', {
-    style: 'currency',
-    currency: 'MAD',
-  }).format(price)
+  const formatted = price.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+  return `${formatted} MAD`
 }
 
 export default function RBLTPage() {
+  const searchParams = useSearchParams()
+  const router = useRouter()
   const supabase = useSupabase()
 
   // Data state
@@ -210,7 +211,16 @@ export default function RBLTPage() {
   // RBLT state
   const [returns, setReturns] = useState<DeliveryReturn[]>([])
   const [isReturnDialogOpen, setIsReturnDialogOpen] = useState(false)
+  const [isNewOnlyMode, setIsNewOnlyMode] = useState(false)
   const [isViewReturnDialogOpen, setIsViewReturnDialogOpen] = useState(false)
+
+  // Ouvrir le dialog si ?action=new
+  useEffect(() => {
+    if (searchParams.get('action') === 'new') {
+      setIsReturnDialogOpen(true)
+      setIsNewOnlyMode(true)
+    }
+  }, [searchParams])
   const [viewingReturn, setViewingReturn] = useState<DeliveryReturn | null>(null)
   const [returnSearchTerm, setReturnSearchTerm] = useState('')
   const [returnStatusFilter, setReturnStatusFilter] = useState<string>('all')
@@ -441,8 +451,12 @@ export default function RBLTPage() {
 
     await fetchReturns()
     await fetchRounds()
-    setIsReturnDialogOpen(false)
-    resetReturnForm()
+    if (isNewOnlyMode) {
+      handleCloseNewOnly()
+    } else {
+      setIsReturnDialogOpen(false)
+      resetReturnForm()
+    }
   }
 
   const handleValidateReturn = async (returnId: string) => {
@@ -734,6 +748,10 @@ export default function RBLTPage() {
       notes: '',
     })
     setSelectedRoundForReturn('')
+  }
+
+  const handleCloseNewOnly = () => {
+    router.replace('/')
   }
 
   // Generate list of available months from RBLT returns data

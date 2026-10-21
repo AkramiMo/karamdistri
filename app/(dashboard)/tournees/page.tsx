@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, useRef, Fragment } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { createClient } from '@/lib/supabase/client'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
@@ -35,7 +36,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog'
 import {
   Select,
@@ -193,6 +193,8 @@ const deliveryStatusLabels: Record<string, string> = {
 }
 
 export default function TourneesPage() {
+  const searchParams = useSearchParams()
+  const router = useRouter()
   const [rounds, setRounds] = useState<DeliveryRound[]>([])
   const [drivers, setDrivers] = useState<Driver[]>([])
   const [availableDeliveries, setAvailableDeliveries] = useState<Delivery[]>([])
@@ -200,6 +202,7 @@ export default function TourneesPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isNewOnlyMode, setIsNewOnlyMode] = useState(false)
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [viewingRound, setViewingRound] = useState<DeliveryRound | null>(null)
   const [editingRound, setEditingRound] = useState<DeliveryRound | null>(null)
@@ -224,6 +227,14 @@ export default function TourneesPage() {
 
   const supabase = createClient()
   const { companySettings } = useCompanySettings()
+
+  // Ouvrir le dialog si ?action=new
+  useEffect(() => {
+    if (searchParams.get('action') === 'new') {
+      setIsDialogOpen(true)
+      setIsNewOnlyMode(true)
+    }
+  }, [searchParams])
 
   const [formData, setFormData] = useState({
     driver_id: '',
@@ -434,8 +445,12 @@ export default function TourneesPage() {
     }
 
     fetchRounds()
-    setIsDialogOpen(false)
-    resetForm()
+    if (isNewOnlyMode) {
+      handleCloseNewOnly()
+    } else {
+      setIsDialogOpen(false)
+      resetForm()
+    }
   }
 
   const handleStartRound = async (roundId: string) => {
@@ -1076,6 +1091,10 @@ export default function TourneesPage() {
     setEditingRound(null)
   }
 
+  const handleCloseNewOnly = () => {
+    router.replace('/')
+  }
+
   const toggleDeliverySelection = (deliveryId: string) => {
     setSelectedDeliveries(prev =>
       prev.includes(deliveryId)
@@ -1103,10 +1122,8 @@ export default function TourneesPage() {
   })
 
   const formatPrice = (price: number | null) => {
-    return new Intl.NumberFormat('fr-MA', {
-      style: 'currency',
-      currency: 'MAD',
-    }).format(price || 0)
+    const formatted = (price || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+    return `${formatted} MAD`
   }
 
   // Stats
@@ -1115,6 +1132,154 @@ export default function TourneesPage() {
     pending: rounds.filter(r => r.status === 'pending').length,
     inProgress: rounds.filter(r => r.status === 'in_progress').length,
     completed: rounds.filter(r => r.status === 'completed').length,
+  }
+
+  // Mode plein écran pour nouvelle tournée via Actions
+  if (isNewOnlyMode) {
+    return (
+      <ProtectedModule module="tournees">
+        <div className="min-h-screen bg-gray-50 p-6">
+          <Card className="max-w-4xl mx-auto">
+            <CardHeader className="border-b bg-[#B8860B] text-white rounded-t-lg">
+              <CardTitle className="text-xl flex items-center gap-2">
+                <Route className="h-5 w-5" />
+                Créer une nouvelle tournée
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-6">
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Livreur</Label>
+                    <Select
+                      value={formData.driver_id}
+                      onValueChange={(value) => setFormData({ ...formData, driver_id: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Sélectionner un livreur" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Non assigné</SelectItem>
+                        {drivers.map((driver) => (
+                          <SelectItem key={driver.id} value={driver.id}>
+                            {driver.full_name || driver.email}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="round_date">Date de tournée</Label>
+                    <Input
+                      id="round_date"
+                      type="date"
+                      value={formData.round_date}
+                      onChange={(e) => setFormData({ ...formData, round_date: e.target.value })}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="notes">Notes</Label>
+                  <Input
+                    id="notes"
+                    value={formData.notes}
+                    onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                    placeholder="Notes sur la tournée"
+                  />
+                </div>
+
+                <div className="border-t pt-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="font-medium">Livraisons à inclure</h3>
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        checked={selectedDeliveries.length === availableDeliveries.length && availableDeliveries.length > 0}
+                        onCheckedChange={selectAllDeliveries}
+                      />
+                      <span className="text-sm text-gray-600">Tout sélectionner</span>
+                      <Badge variant="outline" className="ml-2">
+                        {selectedDeliveries.length} sélectionnée(s)
+                      </Badge>
+                    </div>
+                  </div>
+
+                  {availableDeliveries.length === 0 ? (
+                    <div className="text-center py-8 text-gray-500">
+                      Aucune livraison disponible
+                    </div>
+                  ) : (
+                    <div className="max-h-80 overflow-y-auto border rounded-lg">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-12"></TableHead>
+                            <TableHead>N° BL</TableHead>
+                            <TableHead>Client</TableHead>
+                            <TableHead>Ville</TableHead>
+                            <TableHead>GPS</TableHead>
+                            <TableHead className="text-right">Total HT</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {availableDeliveries.map((delivery) => (
+                            <TableRow
+                              key={delivery.id}
+                              className={selectedDeliveries.includes(delivery.id) ? 'bg-amber-50' : ''}
+                            >
+                              <TableCell>
+                                <Checkbox
+                                  checked={selectedDeliveries.includes(delivery.id)}
+                                  onCheckedChange={() => toggleDeliverySelection(delivery.id)}
+                                />
+                              </TableCell>
+                              <TableCell className="font-mono font-medium">
+                                {delivery.delivery_number}
+                              </TableCell>
+                              <TableCell>
+                                <div>
+                                  <span className="font-medium">{delivery.client?.code}</span>
+                                  <span className="text-gray-500 ml-2">{delivery.client?.name}</span>
+                                </div>
+                              </TableCell>
+                              <TableCell>{delivery.client?.city || '-'}</TableCell>
+                              <TableCell>
+                                {delivery.client?.gps_lat && delivery.client?.gps_lng ? (
+                                  <Badge variant="outline" className="text-[#B8860B]">
+                                    <MapPin className="h-3 w-3 mr-1" />
+                                    OK
+                                  </Badge>
+                                ) : (
+                                  <Badge variant="outline" className="text-red-600">
+                                    Non
+                                  </Badge>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                {formatPrice(delivery.total_ht)}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex justify-end gap-2 pt-4 border-t mt-4">
+                  <Button type="button" variant="outline" onClick={handleCloseNewOnly}>
+                    Annuler
+                  </Button>
+                  <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
+                    Créer la tournée
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+      </ProtectedModule>
+    )
   }
 
   return (
@@ -1126,21 +1291,10 @@ export default function TourneesPage() {
             <p className="text-gray-500">Gérez vos bons de livraison tournée (BLT)</p>
           </div>
 
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <ProtectedModule module="tournees" action="create">
-                <Button
-                  className="bg-[#B8860B] hover:bg-[#9A7209]"
-                  onClick={() => {
-                    resetForm()
-                    setIsDialogOpen(true)
-                  }}
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Nouvelle Tournee
-                </Button>
-              </ProtectedModule>
-            </DialogTrigger>
+          <Dialog open={isDialogOpen} onOpenChange={(open) => {
+            if (open) resetForm()
+            setIsDialogOpen(open)
+          }}>
             <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Creer une nouvelle tournee</DialogTitle>

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -17,7 +18,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog'
 import {
   Select,
@@ -104,17 +104,28 @@ const CALIBERS = [
 const QUALITY_GRADES = ['A', 'B', 'C', 'D']
 
 export default function LotsPage() {
+  const searchParams = useSearchParams()
+  const router = useRouter()
   const [lots, setLots] = useState<Lot[]>([])
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [receptions, setReceptions] = useState<Reception[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isNewOnlyMode, setIsNewOnlyMode] = useState(false)
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [editingLot, setEditingLot] = useState<Lot | null>(null)
   const [viewingLot, setViewingLot] = useState<Lot | null>(null)
   const [stateFilter, setStateFilter] = useState<string>('all')
   const supabase = createClient()
+
+  // Ouvrir le dialog si ?action=new (mode formulaire uniquement)
+  useEffect(() => {
+    if (searchParams.get('action') === 'new') {
+      setIsDialogOpen(true)
+      setIsNewOnlyMode(true)
+    }
+  }, [searchParams])
 
   const [formData, setFormData] = useState({
     lot_number: '',
@@ -280,8 +291,12 @@ export default function LotsPage() {
         alert('Erreur lors de la modification du lot: ' + error.message)
       } else {
         fetchLots()
-        setIsDialogOpen(false)
-        resetForm()
+        if (isNewOnlyMode) {
+          handleCloseNewOnly()
+        } else {
+          setIsDialogOpen(false)
+          resetForm()
+        }
       }
     } else {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -292,8 +307,12 @@ export default function LotsPage() {
         alert('Erreur lors de la création du lot: ' + error.message)
       } else {
         fetchLots()
-        setIsDialogOpen(false)
-        resetForm()
+        if (isNewOnlyMode) {
+          handleCloseNewOnly()
+        } else {
+          setIsDialogOpen(false)
+          resetForm()
+        }
       }
     }
   }
@@ -357,6 +376,10 @@ export default function LotsPage() {
     })
   }
 
+  const handleCloseNewOnly = () => {
+    router.replace('/')
+  }
+
   const filteredLots = lots.filter((lot) => {
     const matchesSearch =
       lot.lot_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -372,6 +395,268 @@ export default function LotsPage() {
   const totalValue = lots.reduce((sum, lot) => sum + lot.total_amount, 0)
   const activeLots = lots.filter(lot => lot.state !== 'epuise').length
 
+  // Mode plein écran pour nouveau lot via Actions
+  if (isNewOnlyMode) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-6">
+        <Card className="max-w-3xl mx-auto">
+          <CardHeader className="border-b bg-[#B8860B] text-white rounded-t-lg">
+            <CardTitle className="text-xl flex items-center gap-2">
+              <Layers className="h-5 w-5" />
+              Nouveau lot
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-6">
+            <form onSubmit={handleSubmit} className="space-y-6">
+              {/* Section: Lien avec réception */}
+              <div className="space-y-4">
+                <h3 className="font-semibold text-gray-700 border-b pb-2">Lien avec réception (optionnel)</h3>
+                <div className="space-y-2">
+                  <Label htmlFor="reception_id">Bon de réception</Label>
+                  <Select
+                    value={formData.reception_id || 'none'}
+                    onValueChange={(value) => handleReceptionSelect(value === 'none' ? '' : value)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Sélectionner une réception (optionnel)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Aucune réception</SelectItem>
+                      {receptions.map((reception) => (
+                        <SelectItem key={reception.id} value={reception.id}>
+                          {reception.reception_number} - {format(new Date(reception.reception_date), 'dd/MM/yyyy')} - {reception.suppliers?.name || 'N/A'}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-gray-500">
+                    Sélectionner une réception pré-remplit le fournisseur et la date
+                  </p>
+                </div>
+              </div>
+
+              {/* Section: Informations principales */}
+              <div className="space-y-4">
+                <h3 className="font-semibold text-gray-700 border-b pb-2">Informations principales</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="supplier_id">Fournisseur *</Label>
+                    <Select
+                      value={formData.supplier_id}
+                      onValueChange={(value) => setFormData({ ...formData, supplier_id: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Sélectionner un fournisseur" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {suppliers.map((supplier) => (
+                          <SelectItem key={supplier.id} value={supplier.id}>
+                            {supplier.code} - {supplier.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="purchase_date">Date d'achat *</Label>
+                    <Input
+                      id="purchase_date"
+                      type="date"
+                      value={formData.purchase_date}
+                      onChange={(e) => setFormData({ ...formData, purchase_date: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="origin">Origine</Label>
+                    <Input
+                      id="origin"
+                      placeholder="MEK, FES, etc."
+                      value={formData.origin}
+                      onChange={(e) => setFormData({ ...formData, origin: e.target.value.toUpperCase() })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="olive_type">Type d'olive *</Label>
+                    <Select
+                      value={formData.olive_type}
+                      onValueChange={(value) => setFormData({ ...formData, olive_type: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Sélectionner le type" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {OLIVE_TYPES.map((type) => (
+                          <SelectItem key={type} value={type}>
+                            {type}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="caliber">Calibre</Label>
+                    <Select
+                      value={formData.caliber}
+                      onValueChange={(value) => setFormData({ ...formData, caliber: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Sélectionner le calibre" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {CALIBERS.map((caliber) => (
+                          <SelectItem key={caliber} value={caliber}>
+                            {caliber}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="lot_number">N° de lot (auto-généré si vide)</Label>
+                    <Input
+                      id="lot_number"
+                      value={formData.lot_number}
+                      onChange={(e) => setFormData({ ...formData, lot_number: e.target.value })}
+                      placeholder={generateLotNumber()}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Section: Quantité et prix */}
+              <div className="space-y-4">
+                <h3 className="font-semibold text-gray-700 border-b pb-2">Quantité et prix</h3>
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="quantity_kg">Quantité (kg) *</Label>
+                    <Input
+                      id="quantity_kg"
+                      type="number"
+                      step="0.01"
+                      value={formData.quantity_kg}
+                      onChange={(e) => setFormData({ ...formData, quantity_kg: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="purchase_price_kg">Prix d'achat (DH/kg) *</Label>
+                    <Input
+                      id="purchase_price_kg"
+                      type="number"
+                      step="0.01"
+                      value={formData.purchase_price_kg}
+                      onChange={(e) => setFormData({ ...formData, purchase_price_kg: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Total estimé</Label>
+                    <div className="h-10 px-3 py-2 bg-gray-100 rounded-md flex items-center font-semibold">
+                      {formData.quantity_kg && formData.purchase_price_kg
+                        ? (parseFloat(formData.quantity_kg) * parseFloat(formData.purchase_price_kg)).toFixed(2)
+                        : '0.00'} DH
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Section: État et caractéristiques */}
+              <div className="space-y-4">
+                <h3 className="font-semibold text-gray-700 border-b pb-2">État et caractéristiques</h3>
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="state">État du lot</Label>
+                    <Select
+                      value={formData.state}
+                      onValueChange={(value: 'brut' | 'fermente' | 'pret_a_conditionner' | 'conditionne' | 'epuise') =>
+                        setFormData({ ...formData, state: value })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {Object.entries(STATE_LABELS).map(([key, { label }]) => (
+                          <SelectItem key={key} value={key}>
+                            {label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="salt_rate">Taux de sel (%)</Label>
+                    <Input
+                      id="salt_rate"
+                      type="number"
+                      step="0.01"
+                      value={formData.salt_rate}
+                      onChange={(e) => setFormData({ ...formData, salt_rate: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="brine_density">Densité saumure</Label>
+                    <Input
+                      id="brine_density"
+                      type="number"
+                      step="0.01"
+                      value={formData.brine_density}
+                      onChange={(e) => setFormData({ ...formData, brine_density: e.target.value })}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Section: Qualité */}
+              <div className="space-y-4">
+                <h3 className="font-semibold text-gray-700 border-b pb-2">Qualité</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="quality_grade">Grade qualité</Label>
+                    <Select
+                      value={formData.quality_grade}
+                      onValueChange={(value) => setFormData({ ...formData, quality_grade: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Sélectionner un grade" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {QUALITY_GRADES.map((grade) => (
+                          <SelectItem key={grade} value={grade}>
+                            Grade {grade}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="quality_remarks">Remarques qualité</Label>
+                    <Textarea
+                      id="quality_remarks"
+                      value={formData.quality_remarks}
+                      onChange={(e) => setFormData({ ...formData, quality_remarks: e.target.value })}
+                      rows={2}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-4 border-t">
+                <Button type="button" variant="outline" onClick={handleCloseNewOnly}>
+                  Annuler
+                </Button>
+                <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
+                  Créer
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -380,19 +665,10 @@ export default function LotsPage() {
           <p className="text-gray-500">Gestion et traçabilité des lots d'olives</p>
         </div>
 
-        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogTrigger asChild>
-            <Button
-              className="bg-[#B8860B] hover:bg-[#9A7209]"
-              onClick={() => {
-                resetForm()
-                setIsDialogOpen(true)
-              }}
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              Nouveau lot
-            </Button>
-          </DialogTrigger>
+        <Dialog open={isDialogOpen} onOpenChange={(open) => {
+          if (open) resetForm()
+          setIsDialogOpen(open)
+        }}>
           <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>

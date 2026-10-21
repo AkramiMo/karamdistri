@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
 import { Button } from '@/components/ui/button'
@@ -18,7 +19,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog'
 import {
   Select,
@@ -85,6 +85,8 @@ const categoryColors: Record<string, string> = {
 }
 
 export default function ClientsPage() {
+  const searchParams = useSearchParams()
+  const router = useRouter()
   const [clients, setClients] = useState<Client[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isDeleting, setIsDeleting] = useState<string | null>(null)
@@ -93,6 +95,7 @@ export default function ClientsPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isNewOnlyMode, setIsNewOnlyMode] = useState(false)
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [viewingClient, setViewingClient] = useState<Client | null>(null)
   const [editingClient, setEditingClient] = useState<Client | null>(null)
@@ -100,6 +103,14 @@ export default function ClientsPage() {
   const { profile } = useAuth()
   const isLivreur = profile?.role?.name === 'livreur'
   const isCommercial = profile?.role?.name === 'commercial'
+
+  // Ouvrir le dialog si ?action=new
+  useEffect(() => {
+    if (searchParams.get('action') === 'new') {
+      setIsDialogOpen(true)
+      setIsNewOnlyMode(true)
+    }
+  }, [searchParams])
 
   const [formData, setFormData] = useState({
     code: '',
@@ -340,8 +351,12 @@ export default function ClientsPage() {
 
         if (!error) {
           fetchClients()
-          setIsDialogOpen(false)
-          resetForm()
+          if (isNewOnlyMode) {
+            handleCloseNewOnly()
+          } else {
+            setIsDialogOpen(false)
+            resetForm()
+          }
         }
       } else {
         // Create client first to get ID
@@ -385,8 +400,12 @@ export default function ClientsPage() {
         }
 
         fetchClients()
-        setIsDialogOpen(false)
-        resetForm()
+        if (isNewOnlyMode) {
+          handleCloseNewOnly()
+        } else {
+          setIsDialogOpen(false)
+          resetForm()
+        }
       }
     } finally {
       setIsUploading(false)
@@ -519,6 +538,10 @@ export default function ClientsPage() {
     setLocalImagePreview(null)
   }
 
+  const handleCloseNewOnly = () => {
+    router.replace('/')
+  }
+
   const openGoogleMaps = (lat: number | null, lng: number | null) => {
     if (lat && lng) {
       window.open(`https://www.google.com/maps?q=${lat},${lng}`, '_blank')
@@ -552,6 +575,157 @@ export default function ClientsPage() {
     AUT: clients.filter(c => c.category === 'AUT').length,
   }
 
+  // Mode plein écran pour nouveau client via Actions
+  if (isNewOnlyMode) {
+    return (
+      <ProtectedModule module="clients">
+        <div className="min-h-screen bg-gray-50 p-6">
+          <Card className="max-w-2xl mx-auto">
+            <CardHeader className="border-b bg-[#B8860B] text-white rounded-t-lg">
+              <CardTitle className="text-xl flex items-center gap-2">
+                <Users className="h-5 w-5" />
+                Nouveau client
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-6">
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="code">Code *</Label>
+                    <Input
+                      id="code"
+                      value={formData.code}
+                      onChange={(e) => setFormData({ ...formData, code: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="name">Nom *</Label>
+                    <Input
+                      id="name"
+                      value={formData.name}
+                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="contact_name">Contact</Label>
+                    <Input
+                      id="contact_name"
+                      value={formData.contact_name}
+                      onChange={(e) => setFormData({ ...formData, contact_name: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="phone">Téléphone</Label>
+                    <Input
+                      id="phone"
+                      value={formData.phone}
+                      onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="email">Email</Label>
+                    <Input
+                      id="email"
+                      type="email"
+                      value={formData.email}
+                      onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="city">Ville</Label>
+                    <Input
+                      id="city"
+                      value={formData.city}
+                      onChange={(e) => setFormData({ ...formData, city: e.target.value })}
+                    />
+                  </div>
+                  <div className="col-span-2 space-y-2">
+                    <Label htmlFor="address">Adresse</Label>
+                    <Input
+                      id="address"
+                      value={formData.address}
+                      onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Catégorie</Label>
+                    <Select
+                      value={formData.category}
+                      onValueChange={(value) => setFormData({ ...formData, category: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Sélectionner" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="FOD">Restaurant (FOD)</SelectItem>
+                        <SelectItem value="EPC">Epicerie (EPC)</SelectItem>
+                        <SelectItem value="DEP">Dépôt (DEP)</SelectItem>
+                        <SelectItem value="MGZ">Magasin (MGZ)</SelectItem>
+                        <SelectItem value="AUT">Autre (AUT)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="ice">ICE</Label>
+                    <Input
+                      id="ice"
+                      value={formData.ice}
+                      onChange={(e) => setFormData({ ...formData, ice: e.target.value })}
+                      placeholder="15 chiffres"
+                      maxLength={15}
+                    />
+                  </div>
+                </div>
+
+                <div className="border-t pt-4">
+                  <h3 className="font-medium mb-3 flex items-center gap-2">
+                    <MapPin className="h-4 w-4" />
+                    Coordonnées GPS
+                  </h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="gps_lat">Latitude</Label>
+                      <Input
+                        id="gps_lat"
+                        type="number"
+                        step="any"
+                        value={formData.gps_lat}
+                        onChange={(e) => setFormData({ ...formData, gps_lat: e.target.value })}
+                        placeholder="ex: 34.016444"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="gps_lng">Longitude</Label>
+                      <Input
+                        id="gps_lng"
+                        type="number"
+                        step="any"
+                        value={formData.gps_lng}
+                        onChange={(e) => setFormData({ ...formData, gps_lng: e.target.value })}
+                        placeholder="ex: -5.03075"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-4">
+                  <Button type="button" variant="outline" onClick={handleCloseNewOnly} disabled={isUploading}>
+                    Annuler
+                  </Button>
+                  <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]" disabled={isUploading}>
+                    {isUploading ? 'Création...' : 'Créer'}
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+      </ProtectedModule>
+    )
+  }
+
   return (
     <ProtectedModule module="clients">
       <div className="space-y-6">
@@ -577,20 +751,10 @@ export default function ClientsPage() {
             )}
 
             {!isLivreur && (
-              <ProtectedModule module="clients" action="create" fallback={null}>
-                <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-                  <DialogTrigger asChild>
-                    <Button
-                      className="bg-[#B8860B] hover:bg-[#9A7209]"
-                      onClick={() => {
-                        resetForm()
-                        setIsDialogOpen(true)
-                      }}
-                    >
-                      <Plus className="mr-2 h-4 w-4" />
-                      Nouveau client
-                    </Button>
-                  </DialogTrigger>
+                <Dialog open={isDialogOpen} onOpenChange={(open) => {
+                  if (open) resetForm()
+                  setIsDialogOpen(open)
+                }}>
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>
@@ -836,7 +1000,6 @@ export default function ClientsPage() {
               </form>
             </DialogContent>
               </Dialog>
-            </ProtectedModule>
             )}
           </div>
         </div>

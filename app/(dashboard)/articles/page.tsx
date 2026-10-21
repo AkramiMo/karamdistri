@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { useSupabase, queryWithRetry } from '@/hooks/useSupabase'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
 import { Button } from '@/components/ui/button'
@@ -18,7 +19,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog'
 import {
   Select,
@@ -70,6 +70,8 @@ interface Article {
 }
 
 export default function ArticlesPage() {
+  const searchParams = useSearchParams()
+  const router = useRouter()
   const [articles, setArticles] = useState<Article[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [emballages, setEmballages] = useState<Emballage[]>([])
@@ -79,10 +81,19 @@ export default function ArticlesPage() {
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
   const [packagingFilter, setPackagingFilter] = useState<string>('all')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isNewOnlyMode, setIsNewOnlyMode] = useState(false)
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [viewingArticle, setViewingArticle] = useState<Article | null>(null)
   const [editingArticle, setEditingArticle] = useState<Article | null>(null)
   const supabase = useSupabase()
+
+  // Ouvrir le dialog si ?action=new
+  useEffect(() => {
+    if (searchParams.get('action') === 'new') {
+      setIsDialogOpen(true)
+      setIsNewOnlyMode(true)
+    }
+  }, [searchParams])
 
   const [formData, setFormData] = useState({
     code: '',
@@ -176,24 +187,41 @@ export default function ArticlesPage() {
         .update(articleData)
         .eq('id', editingArticle.id)
 
-      if (!error) {
+      if (error) {
+        console.error('Error updating article:', error)
+        toast.error(`Erreur lors de la modification: ${error.message}`)
+      } else {
+        toast.success('Article modifié avec succès')
         fetchData()
-        setIsDialogOpen(false)
-        resetForm()
+        if (isNewOnlyMode) {
+          handleCloseNewOnly()
+        } else {
+          setIsDialogOpen(false)
+          resetForm()
+        }
       }
     } else {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { error } = await (supabase.from('articles') as any).insert([articleData])
 
-      if (!error) {
+      if (error) {
+        console.error('Error creating article:', error)
+        toast.error(`Erreur lors de la création: ${error.message}`)
+      } else {
+        toast.success('Article créé avec succès')
         fetchData()
-        setIsDialogOpen(false)
-        resetForm()
+        if (isNewOnlyMode) {
+          handleCloseNewOnly()
+        } else {
+          setIsDialogOpen(false)
+          resetForm()
+        }
       }
     }
   }
 
   const handleEdit = (article: Article) => {
+    console.log('handleEdit appelé', article)
     setEditingArticle(article)
     setFormData({
       code: article.code,
@@ -255,6 +283,10 @@ export default function ArticlesPage() {
     })
   }
 
+  const handleCloseNewOnly = () => {
+    router.replace('/')
+  }
+
   const filteredArticles = articles.filter((article) => {
     const matchesSearch =
       article.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -271,10 +303,8 @@ export default function ArticlesPage() {
   })
 
   const formatPrice = (price: number) => {
-    return new Intl.NumberFormat('fr-MA', {
-      style: 'currency',
-      currency: 'MAD',
-    }).format(price)
+    const formatted = price.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+    return `${formatted} MAD`
   }
 
   // Stats by main category (simplified - no subcategories)
@@ -313,6 +343,187 @@ export default function ArticlesPage() {
     return 'bg-gray-100 text-gray-600'
   }
 
+  // Mode plein écran pour nouvel article via Actions
+  if (isNewOnlyMode) {
+    return (
+      <ProtectedModule module="articles">
+        <div className="min-h-screen bg-gray-50 p-6">
+          <Card className="max-w-2xl mx-auto">
+            <CardHeader className="border-b bg-[#B8860B] text-white rounded-t-lg">
+              <CardTitle className="text-xl flex items-center gap-2">
+                <Package className="h-5 w-5" />
+                Nouvel article
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-6">
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="code">Code *</Label>
+                    <Input
+                      id="code"
+                      value={formData.code}
+                      onChange={(e) => setFormData({ ...formData, code: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="barcode">Code-barres</Label>
+                    <Input
+                      id="barcode"
+                      value={formData.barcode}
+                      onChange={(e) => setFormData({ ...formData, barcode: e.target.value })}
+                    />
+                  </div>
+                  <div className="col-span-2 space-y-2">
+                    <Label htmlFor="name">Désignation *</Label>
+                    <Input
+                      id="name"
+                      value={formData.name}
+                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="col-span-2 space-y-2">
+                    <Label htmlFor="description">Description BL</Label>
+                    <Input
+                      id="description"
+                      value={formData.description}
+                      onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                      placeholder="Description affichée sur le bon de livraison"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="category_id">Catégorie</Label>
+                    <Select
+                      value={formData.category_id}
+                      onValueChange={(value) => setFormData({ ...formData, category_id: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Sélectionner..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {categories.filter(c => c.parent_id === null).map((category) => (
+                          <SelectItem key={category.id} value={category.id}>
+                            {category.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="packaging_id">Type Emballage</Label>
+                    <Select
+                      value={formData.packaging_id}
+                      onValueChange={(value) => setFormData({ ...formData, packaging_id: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Sélectionner..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {emballages.map((emballage) => (
+                          <SelectItem key={emballage.id} value={emballage.id}>
+                            {emballage.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="price_ht">Prix HT (DH) *</Label>
+                    <Input
+                      id="price_ht"
+                      type="number"
+                      step="0.01"
+                      value={formData.price_ht}
+                      onChange={(e) => setFormData({ ...formData, price_ht: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="tva_rate">TVA (%)</Label>
+                    <Input
+                      id="tva_rate"
+                      type="number"
+                      step="0.01"
+                      value={formData.tva_rate}
+                      onChange={(e) => setFormData({ ...formData, tva_rate: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="cr">CR (DH)</Label>
+                    <Input
+                      id="cr"
+                      type="number"
+                      step="0.01"
+                      value={formData.cr}
+                      onChange={(e) => setFormData({ ...formData, cr: e.target.value })}
+                      placeholder="Coût de revient"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="unit">Unité</Label>
+                    <Select
+                      value={formData.unit}
+                      onValueChange={(value) => setFormData({ ...formData, unit: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="unité">Unité</SelectItem>
+                        <SelectItem value="kg">Kilogramme (kg)</SelectItem>
+                        <SelectItem value="L">Litre (L)</SelectItem>
+                        <SelectItem value="carton">Carton</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="min_stock">Stock minimum</Label>
+                    <Input
+                      id="min_stock"
+                      type="number"
+                      value={formData.min_stock}
+                      onChange={(e) => setFormData({ ...formData, min_stock: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="weight_net">Poids net (kg)</Label>
+                    <Input
+                      id="weight_net"
+                      type="number"
+                      step="0.001"
+                      value={formData.weight_net}
+                      onChange={(e) => setFormData({ ...formData, weight_net: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="weight_gross">Poids brut (kg)</Label>
+                    <Input
+                      id="weight_gross"
+                      type="number"
+                      step="0.001"
+                      value={formData.weight_gross}
+                      onChange={(e) => setFormData({ ...formData, weight_gross: e.target.value })}
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end gap-2 pt-4">
+                  <Button type="button" variant="outline" onClick={handleCloseNewOnly}>
+                    Annuler
+                  </Button>
+                  <Button type="submit" className="bg-[#B8860B] hover:bg-[#9A7209]">
+                    Créer
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+      </ProtectedModule>
+    )
+  }
+
   return (
     <ProtectedModule module="articles">
       <div className="space-y-6">
@@ -323,19 +534,19 @@ export default function ArticlesPage() {
           </div>
 
           <ProtectedModule module="articles" action="create">
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-              <DialogTrigger asChild>
-                <Button
-                  className="bg-[#B8860B] hover:bg-[#9A7209]"
-                  onClick={() => {
-                    resetForm()
-                    setIsDialogOpen(true)
-                  }}
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Nouvel article
-                </Button>
-              </DialogTrigger>
+            <Button
+              className="bg-[#B8860B] hover:bg-[#9A7209]"
+              onClick={() => {
+                resetForm()
+                setIsDialogOpen(true)
+              }}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Nouvel article
+            </Button>
+          </ProtectedModule>
+
+          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>
@@ -534,8 +745,7 @@ export default function ArticlesPage() {
                 </div>
               </form>
             </DialogContent>
-            </Dialog>
-          </ProtectedModule>
+          </Dialog>
         </div>
 
         {/* Stats */}
@@ -742,15 +952,13 @@ export default function ArticlesPage() {
                             >
                               <Eye className="h-4 w-4" />
                             </Button>
-                            <ProtectedModule module="articles" action="edit">
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => handleEdit(article)}
-                              >
-                                <Edit className="h-4 w-4" />
-                              </Button>
-                            </ProtectedModule>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleEdit(article)}
+                            >
+                              <Edit className="h-4 w-4" />
+                            </Button>
                             <ProtectedModule module="articles" action="delete">
                               <Button
                                 variant="ghost"
