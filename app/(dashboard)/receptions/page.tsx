@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useState, useMemo } from 'react'
+import React, { useEffect, useState, useMemo, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
@@ -130,7 +130,7 @@ interface ReceptionDocument {
   file?: File
 }
 
-export default function ReceptionsPage() {
+function ReceptionsPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const [receptions, setReceptions] = useState<Reception[]>([])
@@ -3226,5 +3226,13 @@ export default function ReceptionsPage() {
         </Dialog>
       </div>
     </ProtectedModule>
+  )
+}
+
+export default function ReceptionsPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Chargement...</div>}>
+      <ReceptionsPageContent />
+    </Suspense>
   )
 }

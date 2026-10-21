@@ -1,5 +1,6 @@
 'use client'
 
+import { Suspense } from 'react'
 import { usePathname, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
@@ -26,7 +27,7 @@ const tabs = [
   },
 ]
 
-export default function DevisLayout({
+function DevisLayoutContent({
   children,
 }: {
   children: React.ReactNode
@@ -82,5 +83,17 @@ export default function DevisLayout({
       {/* Page Content */}
       <div>{children}</div>
     </div>
+  )
+}
+
+export default function DevisLayout({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Chargement...</div>}>
+      <DevisLayoutContent>{children}</DevisLayoutContent>
+    </Suspense>
   )
 }

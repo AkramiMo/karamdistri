@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { useSupabase, queryWithRetry } from '@/hooks/useSupabase'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
@@ -69,7 +69,7 @@ interface Article {
   packaging?: Emballage
 }
 
-export default function ArticlesPage() {
+function ArticlesPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const [articles, setArticles] = useState<Article[]>([])
@@ -1093,5 +1093,13 @@ export default function ArticlesPage() {
         </Dialog>
       </div>
     </ProtectedModule>
+  )
+}
+
+export default function ArticlesPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Chargement...</div>}>
+      <ArticlesPageContent />
+    </Suspense>
   )
 }

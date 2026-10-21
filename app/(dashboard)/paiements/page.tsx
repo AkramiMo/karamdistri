@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
@@ -115,7 +115,7 @@ const paymentMethodColors: Record<string, string> = {
   other: 'bg-gray-100 text-gray-800',
 }
 
-export default function PaiementsPage() {
+function PaiementsPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const [payments, setPayments] = useState<PaymentRow[]>([])
@@ -2215,5 +2215,13 @@ export default function PaiementsPage() {
         </Dialog>
       </div>
     </ProtectedModule>
+  )
+}
+
+export default function PaiementsPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Chargement...</div>}>
+      <PaiementsPageContent />
+    </Suspense>
   )
 }

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
@@ -84,7 +84,7 @@ const categoryColors: Record<string, string> = {
   'MGZ': 'bg-amber-100 text-[#9A7209]',
 }
 
-export default function ClientsPage() {
+function ClientsPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const [clients, setClients] = useState<Client[]>([])
@@ -1413,5 +1413,13 @@ export default function ClientsPage() {
         </Dialog>
       </div>
     </ProtectedModule>
+  )
+}
+
+export default function ClientsPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Chargement...</div>}>
+      <ClientsPageContent />
+    </Suspense>
   )
 }

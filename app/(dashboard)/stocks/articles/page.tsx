@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Loader2 } from 'lucide-react'
@@ -75,7 +75,7 @@ interface Article {
   min_stock: number
 }
 
-export default function StockArticlesPage() {
+function StockArticlesPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const isNewOnlyMode = searchParams.get('action') === 'new'
@@ -668,5 +668,13 @@ export default function StockArticlesPage() {
         </Card>
       </div>
     </div>
+  )
+}
+
+export default function StockArticlesPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Chargement...</div>}>
+      <StockArticlesPageContent />
+    </Suspense>
   )
 }

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
@@ -120,7 +120,7 @@ const deliveryStatusLabels: Record<string, string> = {
   returned: 'Retournée',
 }
 
-export default function VentesPage() {
+function VentesPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const [sales, setSales] = useState<Sale[]>([])
@@ -1617,5 +1617,13 @@ export default function VentesPage() {
         </Dialog>
       </div>
     </ProtectedModule>
+  )
+}
+
+export default function VentesPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Chargement...</div>}>
+      <VentesPageContent />
+    </Suspense>
   )
 }

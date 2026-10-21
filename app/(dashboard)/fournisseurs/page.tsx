@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
@@ -35,7 +35,7 @@ interface Supplier {
   is_active: boolean
 }
 
-export default function FournisseursPage() {
+function FournisseursPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
@@ -317,5 +317,13 @@ export default function FournisseursPage() {
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+export default function FournisseursPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Chargement...</div>}>
+      <FournisseursPageContent />
+    </Suspense>
   )
 }

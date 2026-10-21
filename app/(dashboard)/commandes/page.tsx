@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
@@ -202,7 +202,7 @@ interface StockByLot {
   }
 }
 
-export default function CommandesPage() {
+function CommandesPageContent() {
   const searchParams = useSearchParams()
   const [orders, setOrders] = useState<Order[]>([])
   const [clients, setClients] = useState<Client[]>([])
@@ -2621,5 +2621,13 @@ export default function CommandesPage() {
         </Dialog>
       </div>
     </ProtectedModule>
+  )
+}
+
+export default function CommandesPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Chargement...</div>}>
+      <CommandesPageContent />
+    </Suspense>
   )
 }

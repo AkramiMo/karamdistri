@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -70,7 +70,7 @@ const categoryColors: Record<string, string> = {
   'Autre': 'bg-gray-100 text-gray-800',
 }
 
-export default function FournituresPage() {
+function FournituresPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const [supplies, setSupplies] = useState<Supply[]>([])
@@ -475,5 +475,13 @@ export default function FournituresPage() {
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+export default function FournituresPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Chargement...</div>}>
+      <FournituresPageContent />
+    </Suspense>
   )
 }

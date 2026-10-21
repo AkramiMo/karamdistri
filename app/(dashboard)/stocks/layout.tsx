@@ -1,5 +1,6 @@
 'use client'
 
+import { Suspense } from 'react'
 import Link from 'next/link'
 import { usePathname, useSearchParams } from 'next/navigation'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
@@ -7,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Package, Leaf } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-export default function StocksLayout({ children }: { children: React.ReactNode }) {
+function StocksLayoutContent({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
 
@@ -59,5 +60,13 @@ export default function StocksLayout({ children }: { children: React.ReactNode }
         {children}
       </div>
     </ProtectedModule>
+  )
+}
+
+export default function StocksLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Chargement...</div>}>
+      <StocksLayoutContent>{children}</StocksLayoutContent>
+    </Suspense>
   )
 }

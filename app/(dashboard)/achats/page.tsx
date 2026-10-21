@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
@@ -110,7 +110,7 @@ const statusLabels: Record<string, string> = {
   cancelled: 'Annulée',
 }
 
-export default function AchatsPage() {
+function AchatsContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([])
@@ -1120,5 +1120,13 @@ export default function AchatsPage() {
         </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+export default function AchatsPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Chargement...</div>}>
+      <AchatsContent />
+    </Suspense>
   )
 }

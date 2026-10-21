@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { useSupabase } from '@/hooks/useSupabase'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
@@ -38,7 +38,7 @@ interface Emballage {
   created_at?: string
 }
 
-export default function EmballagesPage() {
+function EmballagesPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const [emballages, setEmballages] = useState<Emballage[]>([])
@@ -554,5 +554,13 @@ export default function EmballagesPage() {
         </Card>
       </div>
     </ProtectedModule>
+  )
+}
+
+export default function EmballagesPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Chargement...</div>}>
+      <EmballagesPageContent />
+    </Suspense>
   )
 }

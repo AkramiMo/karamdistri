@@ -90,7 +90,7 @@ const statusLabels: Record<string, string> = {
   cancelled: 'Annulée',
 }
 
-export default function FacturesPage() {
+function FacturesPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const [factures, setFactures] = useState<Facture[]>([])
@@ -1778,5 +1778,13 @@ export default function FacturesPage() {
         </Dialog>
       </div>
     </ProtectedModule>
+  )
+}
+
+export default function FacturesPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Chargement...</div>}>
+      <FacturesPageContent />
+    </Suspense>
   )
 }

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { useSupabase } from '@/hooks/useSupabase'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
@@ -38,7 +38,7 @@ interface Pack {
   created_at?: string
 }
 
-export default function PacksPage() {
+function PacksPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const [packs, setPacks] = useState<Pack[]>([])
@@ -534,5 +534,13 @@ export default function PacksPage() {
         </Card>
       </div>
     </ProtectedModule>
+  )
+}
+
+export default function PacksPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Chargement...</div>}>
+      <PacksPageContent />
+    </Suspense>
   )
 }

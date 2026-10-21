@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { useSupabase } from '@/hooks/useSupabase'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
@@ -199,7 +199,7 @@ const formatPrice = (price: number | null) => {
   return `${formatted} MAD`
 }
 
-export default function RBLTPage() {
+function RBLTPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const supabase = useSupabase()
@@ -1411,5 +1411,13 @@ export default function RBLTPage() {
         </Dialog>
       </div>
     </ProtectedModule>
+  )
+}
+
+export default function RBLTPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Chargement...</div>}>
+      <RBLTPageContent />
+    </Suspense>
   )
 }

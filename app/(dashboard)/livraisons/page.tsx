@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { useSupabase, querySimple } from '@/hooks/useSupabase'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
@@ -334,7 +334,7 @@ const itemStatusLabels: Record<string, string> = {
 
 type TabType = 'bl' | 'blt' | 'stats'
 
-export default function LivraisonsPage() {
+function LivraisonsPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const [activeTab, setActiveTab] = useState<TabType>('bl')
@@ -4633,5 +4633,13 @@ export default function LivraisonsPage() {
         </Dialog>
       </div>
     </ProtectedModule>
+  )
+}
+
+export default function LivraisonsPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Chargement...</div>}>
+      <LivraisonsPageContent />
+    </Suspense>
   )
 }

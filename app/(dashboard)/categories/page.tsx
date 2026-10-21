@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { useSupabase, queryWithRetry } from '@/hooks/useSupabase'
 import { ProtectedModule } from '@/components/auth/ProtectedModule'
@@ -41,7 +41,7 @@ interface Category {
   created_at?: string
 }
 
-export default function CategoriesPage() {
+function CategoriesPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const [categories, setCategories] = useState<Category[]>([])
@@ -506,5 +506,13 @@ export default function CategoriesPage() {
         </Card>
       </div>
     </ProtectedModule>
+  )
+}
+
+export default function CategoriesPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Chargement...</div>}>
+      <CategoriesPageContent />
+    </Suspense>
   )
 }

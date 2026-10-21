@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef, Fragment } from 'react'
+import { useEffect, useState, useCallback, useRef, Fragment, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { createClient } from '@/lib/supabase/client'
@@ -192,7 +192,7 @@ const deliveryStatusLabels: Record<string, string> = {
   cancelled: 'Annulée',
 }
 
-export default function TourneesPage() {
+function TourneesPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const [rounds, setRounds] = useState<DeliveryRound[]>([])
@@ -2321,5 +2321,13 @@ export default function TourneesPage() {
         </Dialog>
       </div>
     </ProtectedModule>
+  )
+}
+
+export default function TourneesPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Chargement...</div>}>
+      <TourneesPageContent />
+    </Suspense>
   )
 }

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
@@ -103,7 +103,7 @@ const CALIBERS = [
 
 const QUALITY_GRADES = ['A', 'B', 'C', 'D']
 
-export default function LotsPage() {
+function LotsPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const [lots, setLots] = useState<Lot[]>([])
@@ -1173,5 +1173,13 @@ export default function LotsPage() {
         </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+export default function LotsPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Chargement...</div>}>
+      <LotsPageContent />
+    </Suspense>
   )
 }

@@ -1,7 +1,7 @@
 // @ts-nocheck
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { useSupabase } from '@/hooks/useSupabase'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -149,7 +149,7 @@ const formatPrice = (price: number) => {
   return `${formatted} MAD`
 }
 
-export default function DDCPage() {
+function DDCPageContent() {
   const supabase = useSupabase()
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -1470,5 +1470,13 @@ export default function DDCPage() {
         </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+export default function DDCPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Chargement...</div>}>
+      <DDCPageContent />
+    </Suspense>
   )
 }
